@@ -1,4 +1,5 @@
 package database
+
 import (
 	"encoding/json"
 	"fmt"
@@ -7,6 +8,7 @@ import (
 	"sync"
 	"time"
 )
+
 const (
 	DefaultDatabasePath = "/opt/irangate/database"
 	ClientsDir          = "clients"
@@ -14,38 +16,41 @@ const (
 	SettingsFile        = "settings.json"
 	CronFile            = "cron.json"
 )
+
 func GetDefaultDatabasePath() string {
 	if os.Getenv("OS") == "Windows_NT" || os.Getenv("GOOS") == "windows" {
 		return "./database"
 	}
 	return DefaultDatabasePath
 }
+
 type DB struct {
 	path  string
 	mutex sync.RWMutex
 }
 type Client struct {
-	Name             string     `json:"name"`
-	CreatedAt        time.Time  `json:"created_at"`
-	ExpiresAt        time.Time  `json:"expires_at"`
-	ExpiryDate       *time.Time `json:"expiry_date,omitempty"`
-	Active           bool       `json:"active"`
-	IP               string     `json:"ip"`
-	Cipher           string     `json:"cipher"`
-	DataUsedMB       int64      `json:"data_used_mb"`
-	LastConnection   *time.Time `json:"last_connection"`
-	Upload           int64      `json:"upload"`
-	Download         int64      `json:"download"`
-	LastUpdate       time.Time  `json:"last_update"`
-	BytesReceived    uint64     `json:"bytes_received"`
-	BytesSent        uint64     `json:"bytes_sent"`
-	Status           string     `json:"status"`
-	BandwidthQuotaGB int64      `json:"bandwidth_quota_gb,omitempty"`
-	QuotaResetDate   time.Time  `json:"quota_reset_date,omitempty"`
-	QuotaEnabled     bool       `json:"quota_enabled"`
-	TrafficLimitBytes int64     `json:"traffic_limit_bytes,omitempty"`
-	Config           *ClientConfig   `json:"config,omitempty"`
-	BandwidthUsage   *BandwidthUsage `json:"bandwidth_usage,omitempty"`
+	Name              string          `json:"name"`
+	CreatedAt         time.Time       `json:"created_at"`
+	ExpiresAt         time.Time       `json:"expires_at"`
+	ExpiryDate        *time.Time      `json:"expiry_date,omitempty"`
+	Active            bool            `json:"active"`
+	IP                string          `json:"ip"`
+	Cipher            string          `json:"cipher"`
+	DataUsedMB        int64           `json:"data_used_mb"`
+	LastConnection    *time.Time      `json:"last_connection"`
+	Upload            int64           `json:"upload"`
+	Download          int64           `json:"download"`
+	LastUpdate        time.Time       `json:"last_update"`
+	BytesReceived     uint64          `json:"bytes_received"`
+	BytesSent         uint64          `json:"bytes_sent"`
+	Status            string          `json:"status"`
+	BandwidthQuotaGB  int64           `json:"bandwidth_quota_gb,omitempty"`
+	QuotaResetDate    time.Time       `json:"quota_reset_date,omitempty"`
+	QuotaEnabled      bool            `json:"quota_enabled"`
+	TrafficLimitBytes int64           `json:"traffic_limit_bytes,omitempty"`
+	ConnectionLimit   int             `json:"connection_limit,omitempty"`
+	Config            *ClientConfig   `json:"config,omitempty"`
+	BandwidthUsage    *BandwidthUsage `json:"bandwidth_usage,omitempty"`
 }
 type ClientConfig struct {
 	BandwidthLimit *BandwidthLimit `json:"bandwidth_limit,omitempty"`
@@ -102,6 +107,7 @@ type CronJob struct {
 	LastRun  *time.Time             `json:"last_run"`
 	Enabled  bool                   `json:"enabled"`
 }
+
 func New(path string) (*DB, error) {
 	if path == "" {
 		path = GetDefaultDatabasePath()

@@ -16,6 +16,205 @@ EOF
     systemctl daemon-reload
 }
 
+
+# Install a lightweight OpenVPN connection guard.
+# It enforces per-client connection_limit from:
+# /opt/irangate/database/clients/<client>.json
+install_connection_guard() {
+    log_info "Installing IranGate connection limit guard..."
+
+    apt-get install -y python3 >/dev/null 2>&1 || true
+
+    cat > /usr/local/bin/irangate-connection-guard <<'PYGUARD'
+#!/usr/bin/env python3
+import csv
+import glob
+import json
+import logging
+import os
+import socket
+import time
+from collections import defaultdict
+
+DATA_DIR = os.environ.get("IRANGATE_DATA_DIR", "/opt/irangate")
+CLIENTS_DIR = os.path.join(DATA_DIR, "database", "clients")
+HOST = os.environ.get("OPENVPN_MANAGEMENT_HOST", "127.0.0.1")
+PORT = int(os.environ.get("OPENVPN_MANAGEMENT_PORT", "7505"))
+INTERVAL = float(os.environ.get("IRANGATE_GUARD_INTERVAL", "2"))
+DEFAULT_LIMIT = int(os.environ.get("IRANGATE_DEFAULT_CONNECTION_LIMIT", "1"))
+MAX_LIMIT = int(os.environ.get("IRANGATE_MAX_CONNECTION_LIMIT", "100"))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
+def recv_response(sock, expect_end=True):
+    data = ""
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            chunk = sock.recv(65535)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        data += chunk.decode("utf-8", errors="replace")
+        if expect_end:
+            if any(line.strip() == "END" for line in data.splitlines()):
+                break
+        elif data:
+            break
+    return data
+
+def mgmt_command(command, expect_end=True):
+    with socket.create_connection((HOST, PORT), timeout=3) as sock:
+        sock.settimeout(3)
+        try:
+            sock.recv(4096)  # banner
+        except Exception:
+            pass
+        sock.sendall((command.strip() + "\n").encode())
+        return recv_response(sock, expect_end=expect_end)
+
+def load_limit(common_name):
+    path = os.path.join(CLIENTS_DIR, common_name + ".json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return DEFAULT_LIMIT
+
+    raw = data.get("connection_limit", DEFAULT_LIMIT)
+    try:
+        limit = int(raw)
+    except Exception:
+        limit = DEFAULT_LIMIT
+
+    # 0 means unlimited, useful for manual/admin cases.
+    if limit == 0:
+        return 0
+    if limit < 0:
+        return DEFAULT_LIMIT
+    if limit > MAX_LIMIT:
+        return MAX_LIMIT
+    return limit
+
+def get_sessions():
+    text = mgmt_command("status 2", expect_end=True)
+    sessions = []
+
+    for row in csv.reader(text.splitlines()):
+        if not row or row[0] != "CLIENT_LIST":
+            continue
+        if len(row) > 1 and row[1] == "Common Name":
+            continue
+        if len(row) < 3:
+            continue
+
+        common_name = row[1].strip()
+        real_address = row[2].strip()
+        connected_ts = 0
+
+        # OpenVPN status 2 usually puts connected_since_time_t at index 8.
+        if len(row) > 8:
+            try:
+                connected_ts = int(row[8])
+            except Exception:
+                connected_ts = 0
+
+        if common_name and real_address:
+            sessions.append({
+                "common_name": common_name,
+                "real_address": real_address,
+                "connected_ts": connected_ts,
+            })
+
+    return sessions
+
+def kill_session(real_address):
+    try:
+        resp = mgmt_command("kill {}".format(real_address), expect_end=False)
+        logging.info("killed old session %s response=%s", real_address, resp.strip())
+    except Exception as exc:
+        logging.warning("failed to kill %s: %s", real_address, exc)
+
+def enforce_once():
+    sessions = get_sessions()
+    grouped = defaultdict(list)
+
+    for sess in sessions:
+        grouped[sess["common_name"]].append(sess)
+
+    for common_name, items in grouped.items():
+        limit = load_limit(common_name)
+        if limit <= 0:
+            continue
+        if len(items) <= limit:
+            continue
+
+        # Keep newest sessions, kill older ones.
+        items.sort(key=lambda x: x.get("connected_ts", 0), reverse=True)
+        to_kill = items[limit:]
+
+        logging.info(
+            "client=%s active=%d limit=%d killing=%d",
+            common_name, len(items), limit, len(to_kill)
+        )
+
+        for sess in to_kill:
+            kill_session(sess["real_address"])
+
+def main():
+    logging.info(
+        "IranGate connection guard started host=%s port=%s clients_dir=%s interval=%s",
+        HOST, PORT, CLIENTS_DIR, INTERVAL
+    )
+
+    while True:
+        try:
+            enforce_once()
+        except Exception as exc:
+            logging.warning("guard iteration failed: %s", exc)
+        time.sleep(INTERVAL)
+
+if __name__ == "__main__":
+    main()
+PYGUARD
+
+    chmod +x /usr/local/bin/irangate-connection-guard
+
+    cat > /etc/systemd/system/irangate-connection-guard.service <<'EOF'
+[Unit]
+Description=IranGate OpenVPN Connection Limit Guard
+After=network-online.target openvpn@server.service
+Wants=openvpn@server.service
+
+[Service]
+Type=simple
+Environment=IRANGATE_DATA_DIR=/opt/irangate
+Environment=OPENVPN_MANAGEMENT_HOST=127.0.0.1
+Environment=OPENVPN_MANAGEMENT_PORT=7505
+Environment=IRANGATE_GUARD_INTERVAL=2
+ExecStart=/usr/local/bin/irangate-connection-guard
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    mkdir -p /etc/systemd/system/openvpn@server.service.d
+    cat > /etc/systemd/system/openvpn@server.service.d/connection-guard.conf <<'EOF'
+[Service]
+ExecStartPost=-/bin/systemctl restart irangate-connection-guard.service
+EOF
+
+    systemctl daemon-reload
+    systemctl enable irangate-connection-guard >/dev/null 2>&1 || true
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -549,6 +748,8 @@ push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS $DNS1"
 push "dhcp-option DNS $DNS2"
 client-config-dir /etc/openvpn/ccd
+duplicate-cn
+management 127.0.0.1 7505
 keepalive 10 120
 cipher AES-256-GCM
 auth SHA256
@@ -577,6 +778,8 @@ push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS $DNS1"
 push "dhcp-option DNS $DNS2"
 client-config-dir /etc/openvpn/ccd
+duplicate-cn
+management 127.0.0.1 7505
 keepalive 10 120
 cipher AES-256-GCM
 auth SHA256
@@ -711,6 +914,7 @@ EOF
     
     systemctl stop openvpn@server 2>/dev/null || true
     ensure_openvpn_privileged_port_capability
+    install_connection_guard
     systemctl enable openvpn@server
     log_info "Starting OpenVPN service..."
     if ! systemctl start openvpn@server; then

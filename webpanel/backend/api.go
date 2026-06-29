@@ -395,9 +395,18 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		Email             string `json:"email,omitempty"`
 		ExpirationDays    int    `json:"expiration_days,omitempty"`
 		TrafficLimitBytes int64  `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit   int    `json:"connection_limit,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ConnectionLimit <= 0 {
+		req.ConnectionLimit = 1
+	}
+	if req.ConnectionLimit > 100 {
+		sendError(w, "Connection limit must be between 1 and 100", http.StatusBadRequest)
 		return
 	}
 
@@ -415,7 +424,7 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientPath := filepath.Join(dataDir, "database", "clients", req.Name+".json")
 
-	if req.ExpirationDays > 0 || req.TrafficLimitBytes > 0 {
+	if req.ExpirationDays > 0 || req.TrafficLimitBytes > 0 || req.ConnectionLimit > 0 || req.Email != "" {
 		data, err := os.ReadFile(clientPath)
 		if err == nil {
 			var clientData map[string]interface{}
@@ -427,6 +436,11 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 
 				if req.TrafficLimitBytes > 0 {
 					clientData["traffic_limit_bytes"] = req.TrafficLimitBytes
+				}
+
+				clientData["connection_limit"] = req.ConnectionLimit
+				if req.Email != "" {
+					clientData["email"] = req.Email
 				}
 
 				newData, err := json.MarshalIndent(clientData, "", "  ")
