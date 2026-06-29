@@ -28,7 +28,6 @@ install_connection_guard() {
     cat > /usr/local/bin/irangate-connection-guard <<'PYGUARD'
 #!/usr/bin/env python3
 import csv
-import glob
 import json
 import logging
 import os
@@ -38,16 +37,14 @@ from collections import defaultdict
 
 DATA_DIR = os.environ.get("IRANGATE_DATA_DIR", "/opt/irangate")
 CLIENTS_DIR = os.path.join(DATA_DIR, "database", "clients")
+TRAFFIC_DIR = os.path.join(DATA_DIR, "traffic")
 HOST = os.environ.get("OPENVPN_MANAGEMENT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENVPN_MANAGEMENT_PORT", "7505"))
 INTERVAL = float(os.environ.get("IRANGATE_GUARD_INTERVAL", "2"))
 DEFAULT_LIMIT = int(os.environ.get("IRANGATE_DEFAULT_CONNECTION_LIMIT", "1"))
 MAX_LIMIT = int(os.environ.get("IRANGATE_MAX_CONNECTION_LIMIT", "100"))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 def recv_response(sock, expect_end=True):
     data = ""
@@ -60,10 +57,9 @@ def recv_response(sock, expect_end=True):
         if not chunk:
             break
         data += chunk.decode("utf-8", errors="replace")
-        if expect_end:
-            if any(line.strip() == "END" for line in data.splitlines()):
-                break
-        elif data:
+        if expect_end and any(line.strip() == "END" for line in data.splitlines()):
+            break
+        if not expect_end and data:
             break
     return data
 
@@ -71,27 +67,38 @@ def mgmt_command(command, expect_end=True):
     with socket.create_connection((HOST, PORT), timeout=3) as sock:
         sock.settimeout(3)
         try:
-            sock.recv(4096)  # banner
+            sock.recv(4096)
         except Exception:
             pass
         sock.sendall((command.strip() + "\n").encode())
         return recv_response(sock, expect_end=expect_end)
 
-def load_limit(common_name):
-    path = os.path.join(CLIENTS_DIR, common_name + ".json")
+def read_json(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            return json.load(f)
     except Exception:
-        return DEFAULT_LIMIT
+        return None
 
+def write_json(path, data):
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+def client_path(common_name):
+    return os.path.join(CLIENTS_DIR, common_name + ".json")
+
+def load_client(common_name):
+    return read_json(client_path(common_name)) or {}
+
+def load_connection_limit(common_name):
+    data = load_client(common_name)
     raw = data.get("connection_limit", DEFAULT_LIMIT)
     try:
         limit = int(raw)
     except Exception:
         limit = DEFAULT_LIMIT
-
-    # 0 means unlimited, useful for manual/admin cases.
     if limit == 0:
         return 0
     if limit < 0:
@@ -99,6 +106,14 @@ def load_limit(common_name):
     if limit > MAX_LIMIT:
         return MAX_LIMIT
     return limit
+
+def load_traffic_limit(common_name):
+    data = load_client(common_name)
+    raw = data.get("traffic_limit_bytes", 0)
+    try:
+        return int(raw)
+    except Exception:
+        return 0
 
 def get_sessions():
     text = mgmt_command("status 2", expect_end=True)
@@ -109,35 +124,110 @@ def get_sessions():
             continue
         if len(row) > 1 and row[1] == "Common Name":
             continue
-        if len(row) < 3:
+        if len(row) < 8:
             continue
 
-        common_name = row[1].strip()
-        real_address = row[2].strip()
-        connected_ts = 0
+        try:
+            received = int(row[5])
+        except Exception:
+            received = 0
 
-        # OpenVPN status 2 usually puts connected_since_time_t at index 8.
-        if len(row) > 8:
-            try:
-                connected_ts = int(row[8])
-            except Exception:
-                connected_ts = 0
+        try:
+            sent = int(row[6])
+        except Exception:
+            sent = 0
 
-        if common_name and real_address:
-            sessions.append({
-                "common_name": common_name,
-                "real_address": real_address,
-                "connected_ts": connected_ts,
-            })
+        try:
+            connected_ts = int(row[8]) if len(row) > 8 else 0
+        except Exception:
+            connected_ts = 0
+
+        sessions.append({
+            "common_name": row[1].strip(),
+            "real_address": row[2].strip(),
+            "bytes_received": received,
+            "bytes_sent": sent,
+            "live_total": received + sent,
+            "connected_ts": connected_ts,
+        })
 
     return sessions
+
+def iter_records(obj):
+    if isinstance(obj, list):
+        for item in obj:
+            yield from iter_records(item)
+    elif isinstance(obj, dict):
+        if "client_name" in obj or "name" in obj:
+            yield obj
+        for value in obj.values():
+            if isinstance(value, (list, dict)):
+                yield from iter_records(value)
+
+def get_num(record, keys):
+    for key in keys:
+        if key in record:
+            try:
+                return int(float(record.get(key) or 0))
+            except Exception:
+                pass
+    return 0
+
+def traffic_total_from_files(common_name):
+    total = 0
+    paths = [
+        os.path.join(TRAFFIC_DIR, "cumulative_totals.json"),
+        os.path.join(TRAFFIC_DIR, "current_stats.json"),
+    ]
+
+    for path in paths:
+        obj = read_json(path)
+        if obj is None:
+            continue
+
+        for rec in iter_records(obj):
+            name = rec.get("client_name") or rec.get("name")
+            if name != common_name:
+                continue
+
+            rec_total = get_num(rec, [
+                "total_bytes", "total", "bytes_total", "total_traffic",
+                "traffic_total", "data_used_bytes"
+            ])
+
+            if rec_total == 0:
+                up = get_num(rec, ["upload", "uploaded", "bytes_sent", "sent", "tx", "upload_bytes"])
+                down = get_num(rec, ["download", "downloaded", "bytes_received", "received", "rx", "download_bytes"])
+                rec_total = up + down
+
+            if rec_total > total:
+                total = rec_total
+
+    return total
 
 def kill_session(real_address):
     try:
         resp = mgmt_command("kill {}".format(real_address), expect_end=False)
-        logging.info("killed old session %s response=%s", real_address, resp.strip())
+        logging.info("killed session %s response=%s", real_address, resp.strip())
     except Exception as exc:
         logging.warning("failed to kill %s: %s", real_address, exc)
+
+def mark_traffic_exceeded(common_name, used, limit):
+    path = client_path(common_name)
+    data = load_client(common_name)
+    if not data:
+        return
+
+    data["active"] = False
+    data["status"] = "traffic_limit_exceeded"
+    data["traffic_exceeded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    data["traffic_used_bytes"] = int(used)
+
+    try:
+        write_json(path, data)
+        logging.info("marked %s traffic exceeded used=%s limit=%s", common_name, used, limit)
+    except Exception as exc:
+        logging.warning("failed to mark %s exceeded: %s", common_name, exc)
 
 def enforce_once():
     sessions = get_sessions()
@@ -147,21 +237,32 @@ def enforce_once():
         grouped[sess["common_name"]].append(sess)
 
     for common_name, items in grouped.items():
-        limit = load_limit(common_name)
+        traffic_limit = load_traffic_limit(common_name)
+        if traffic_limit > 0:
+            live_total = max([x["live_total"] for x in items] or [0])
+            file_total = traffic_total_from_files(common_name)
+            used = max(live_total, file_total)
+
+            if used >= traffic_limit:
+                logging.info(
+                    "traffic limit exceeded client=%s used=%d limit=%d sessions=%d",
+                    common_name, used, traffic_limit, len(items)
+                )
+                for sess in items:
+                    kill_session(sess["real_address"])
+                mark_traffic_exceeded(common_name, used, traffic_limit)
+                continue
+
+        limit = load_connection_limit(common_name)
         if limit <= 0:
             continue
         if len(items) <= limit:
             continue
 
-        # Keep newest sessions, kill older ones.
         items.sort(key=lambda x: x.get("connected_ts", 0), reverse=True)
         to_kill = items[limit:]
 
-        logging.info(
-            "client=%s active=%d limit=%d killing=%d",
-            common_name, len(items), limit, len(to_kill)
-        )
-
+        logging.info("client=%s active=%d limit=%d killing=%d", common_name, len(items), limit, len(to_kill))
         for sess in to_kill:
             kill_session(sess["real_address"])
 
@@ -203,12 +304,6 @@ User=root
 
 [Install]
 WantedBy=multi-user.target
-EOF
-
-    mkdir -p /etc/systemd/system/openvpn@server.service.d
-    cat > /etc/systemd/system/openvpn@server.service.d/connection-guard.conf <<'EOF'
-[Service]
-ExecStartPost=-/bin/systemctl restart irangate-connection-guard.service
 EOF
 
     systemctl daemon-reload
