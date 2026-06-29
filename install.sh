@@ -27,458 +27,366 @@ install_connection_guard() {
 
     cat > /usr/local/bin/irangate-connection-guard <<'PYGUARD'
 #!/usr/bin/env python3
-import csv
+import argparse
 import json
-import logging
 import os
 import socket
 import time
-from collections import defaultdict
+from pathlib import Path
 
-DATA_DIR = os.environ.get("IRANGATE_DATA_DIR", "/opt/irangate")
-CLIENTS_DIR = os.path.join(DATA_DIR, "database", "clients")
-TRAFFIC_DIR = os.path.join(DATA_DIR, "traffic")
-HOST = os.environ.get("OPENVPN_MANAGEMENT_HOST", "127.0.0.1")
-PORT = int(os.environ.get("OPENVPN_MANAGEMENT_PORT", "7505"))
-INTERVAL = float(os.environ.get("IRANGATE_GUARD_INTERVAL", "5"))
-DEFAULT_LIMIT = int(os.environ.get("IRANGATE_DEFAULT_CONNECTION_LIMIT", "1"))
-MAX_LIMIT = int(os.environ.get("IRANGATE_MAX_CONNECTION_LIMIT", "100"))
+BASE = Path("/opt/irangate")
+CLIENTS_DIR = BASE / "database" / "clients"
+TRAFFIC_DIR = BASE / "traffic"
+LOG = Path("/var/log/irangate-connection-guard.log")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+MGMT_HOST = os.environ.get("IRANGATE_MGMT_HOST", "127.0.0.1")
+MGMT_PORT = int(os.environ.get("IRANGATE_MGMT_PORT", "7505"))
+INTERVAL = float(os.environ.get("IRANGATE_GUARD_INTERVAL", "20"))
 
-_client_cache = {}
-_traffic_cache = {"sig": None, "totals": {}}
+def log(msg):
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
 
-def recv_response(sock, expect_end=True):
-    data = ""
-    deadline = time.time() + 5
-    while time.time() < deadline:
+def read_json(path, default=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return default
+
+def write_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    os.replace(tmp, path)
+
+def mgmt_cmd(cmd, timeout=3):
+    sock = socket.create_connection((MGMT_HOST, MGMT_PORT), timeout=timeout)
+    try:
         try:
-            chunk = sock.recv(65535)
-        except socket.timeout:
-            break
-        if not chunk:
-            break
-        data += chunk.decode("utf-8", errors="replace")
-        if expect_end and any(line.strip() == "END" for line in data.splitlines()):
-            break
-        if not expect_end and data:
-            break
-    return data
-
-def mgmt_command(command, expect_end=True):
-    with socket.create_connection((HOST, PORT), timeout=3) as sock:
-        sock.settimeout(3)
-        try:
+            sock.settimeout(0.5)
             sock.recv(4096)
         except Exception:
             pass
-        sock.sendall((command.strip() + "\n").encode())
-        return recv_response(sock, expect_end=expect_end)
 
-def read_json(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
+        sock.settimeout(timeout)
+        sock.sendall((cmd.strip() + "\n").encode())
 
-def write_json(path, data):
-    tmp = str(path) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
+        chunks = []
+        while True:
+            try:
+                data = sock.recv(8192)
+            except socket.timeout:
+                break
+            if not data:
+                break
 
-def client_path(common_name):
-    return os.path.join(CLIENTS_DIR, common_name + ".json")
+            chunks.append(data.decode(errors="ignore"))
+            text = "".join(chunks)
 
-def load_client(common_name):
-    path = client_path(common_name)
+            if "\nEND" in text or "SUCCESS:" in text or "ERROR:" in text:
+                break
 
-    try:
-        st = os.stat(path)
-        sig = (st.st_mtime_ns, st.st_size)
-    except FileNotFoundError:
-        _client_cache.pop(common_name, None)
-        return {}
-    except Exception:
-        return _client_cache.get(common_name, {}).get("data", {})
-
-    cached = _client_cache.get(common_name)
-    if cached and cached.get("sig") == sig:
-        return cached.get("data", {})
-
-    data = read_json(path) or {}
-    _client_cache[common_name] = {"sig": sig, "data": data}
-    return data
-
-def load_connection_limit(data):
-    raw = data.get("connection_limit", DEFAULT_LIMIT)
-    try:
-        limit = int(raw)
-    except Exception:
-        limit = DEFAULT_LIMIT
-    if limit == 0:
-        return 0
-    if limit < 0:
-        return DEFAULT_LIMIT
-    if limit > MAX_LIMIT:
-        return MAX_LIMIT
-    return limit
-
-def load_traffic_limit(data):
-    raw = data.get("traffic_limit_bytes", 0)
-    try:
-        return int(raw)
-    except Exception:
-        return 0
+        return "".join(chunks)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 def get_sessions():
-    text = mgmt_command("status 2", expect_end=True)
-    sessions = []
+    out = mgmt_cmd("status 2")
+    sessions = {}
 
-    for row in csv.reader(text.splitlines()):
-        if not row or row[0] != "CLIENT_LIST":
+    for line in out.splitlines():
+        if not line.startswith("CLIENT_LIST,"):
             continue
-        if len(row) > 1 and row[1] == "Common Name":
+
+        parts = line.split(",")
+        if len(parts) < 9:
             continue
-        if len(row) < 8:
-            continue
+
+        cn = parts[1]
+        real = parts[2]
 
         try:
-            received = int(row[5])
+            received = int(parts[5] or 0)
+            sent = int(parts[6] or 0)
         except Exception:
             received = 0
-
-        try:
-            sent = int(row[6])
-        except Exception:
             sent = 0
 
         try:
-            connected_ts = int(row[8]) if len(row) > 8 else 0
+            connected_ts = int(parts[8] or 0)
         except Exception:
             connected_ts = 0
 
-        sessions.append({
-            "common_name": row[1].strip(),
-            "real_address": row[2].strip(),
-            "bytes_received": received,
-            "bytes_sent": sent,
-            "live_total": received + sent,
+        sessions.setdefault(cn, []).append({
+            "real": real,
+            "received": received,
+            "sent": sent,
+            "total": received + sent,
             "connected_ts": connected_ts,
         })
 
     return sessions
 
-def iter_records(obj):
-    if isinstance(obj, list):
-        for item in obj:
-            yield from iter_records(item)
-    elif isinstance(obj, dict):
-        if "client_name" in obj or "name" in obj:
-            yield obj
-        for value in obj.values():
-            if isinstance(value, (list, dict)):
-                yield from iter_records(value)
+def usage_maps():
+    current = {}
+    current_split = {}
 
-def get_num(record, keys):
-    for key in keys:
-        if key in record:
-            try:
-                return int(float(record.get(key) or 0))
-            except Exception:
-                pass
-    return 0
-
-def traffic_files_signature(paths):
-    sig = []
-    for path in paths:
-        try:
-            st = os.stat(path)
-            sig.append((path, st.st_mtime_ns, st.st_size))
-        except FileNotFoundError:
-            sig.append((path, 0, 0))
-        except Exception:
-            sig.append((path, -1, -1))
-    return tuple(sig)
-
-def build_traffic_totals():
-    paths = [
-        os.path.join(TRAFFIC_DIR, "cumulative_totals.json"),
-        os.path.join(TRAFFIC_DIR, "current_stats.json"),
-    ]
-
-    sig = traffic_files_signature(paths)
-    if _traffic_cache.get("sig") == sig:
-        return _traffic_cache.get("totals", {})
-
-    totals = defaultdict(int)
-
-    for path in paths:
-        obj = read_json(path)
-        if obj is None:
-            continue
-
-        for rec in iter_records(obj):
-            name = rec.get("client_name") or rec.get("name")
-            if not name:
+    cur = read_json(TRAFFIC_DIR / "current_stats.json", [])
+    if isinstance(cur, list):
+        for rec in cur:
+            if not isinstance(rec, dict):
                 continue
 
-            rec_total = get_num(rec, [
-                "total_bytes", "total", "bytes_total", "total_traffic",
-                "traffic_total", "data_used_bytes"
-            ])
+            cn = rec.get("client_name")
+            if not cn:
+                continue
 
-            if rec_total == 0:
-                up = get_num(rec, ["upload", "uploaded", "bytes_sent", "sent", "tx", "upload_bytes"])
-                down = get_num(rec, ["download", "downloaded", "bytes_received", "received", "rx", "download_bytes"])
-                rec_total = up + down
+            recv = int(rec.get("current_received") or 0)
+            sent = int(rec.get("current_sent") or 0)
+            total = int(rec.get("current_total") or 0)
+            if total <= 0:
+                total = recv + sent
 
-            if rec_total > totals[name]:
-                totals[name] = rec_total
+            if total > current.get(cn, 0):
+                current[cn] = total
+                current_split[cn] = (recv, sent)
 
-    result = dict(totals)
-    _traffic_cache["sig"] = sig
-    _traffic_cache["totals"] = result
-    return result
+    cumulative = {}
+    cumulative_split = {}
 
-def kill_session(real_address, reason=""):
-    try:
-        resp = mgmt_command("kill {}".format(real_address), expect_end=False)
-        logging.info("killed session %s reason=%s response=%s", real_address, reason, resp.strip())
-    except Exception as exc:
-        logging.warning("failed to kill %s reason=%s error=%s", real_address, reason, exc)
+    cum = read_json(TRAFFIC_DIR / "cumulative_totals.json", [])
+    if isinstance(cum, list):
+        for rec in cum:
+            if not isinstance(rec, dict):
+                continue
 
-def split_usage_for_display(data, used):
-    try:
-        down = int(data.get("bytes_received") or data.get("download") or 0)
-    except Exception:
-        down = 0
+            cn = rec.get("client_name")
+            if not cn:
+                continue
 
-    try:
-        up = int(data.get("bytes_sent") or data.get("upload") or 0)
-    except Exception:
-        up = 0
+            recv = int(rec.get("total_received") or 0)
+            sent = int(rec.get("total_sent") or 0)
+            total = recv + sent
 
-    total = down + up
-    if used <= 0:
-        used = total
+            if total > cumulative.get(cn, 0):
+                cumulative[cn] = total
+                cumulative_split[cn] = (recv, sent)
 
-    if used <= 0:
-        return 0, 0, 0
+    return current, current_split, cumulative, cumulative_split
 
-    if total <= 0:
-        up = int(used * 0.8)
-        down = used - up
-    elif total != used:
-        up = int(used * up / total)
-        down = used - up
+def client_path(cn):
+    return CLIENTS_DIR / f"{cn}.json"
 
-    return down, up, used
+def load_client(cn):
+    data = read_json(client_path(cn), {})
+    if isinstance(data, dict):
+        return data
+    return {}
 
-def update_traffic_display_files(common_name, data, used, limit):
-    down, up, used = split_usage_for_display(data, int(used or 0))
-    if used <= 0:
-        return
-
+def sync_traffic_files(cn, used, recv, sent, limit, connected=False):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    quota_percent = 0
-    if limit and limit > 0:
-        quota_percent = round((used / limit) * 100, 2)
+    quota = round((used / limit) * 100, 2) if limit > 0 else 0
 
-    current_path = os.path.join(TRAFFIC_DIR, "current_stats.json")
-    cumulative_path = os.path.join(TRAFFIC_DIR, "cumulative_totals.json")
+    current_path = TRAFFIC_DIR / "current_stats.json"
+    current = read_json(current_path, [])
+    if isinstance(current, list):
+        found = False
+        for rec in current:
+            if isinstance(rec, dict) and rec.get("client_name") == cn:
+                rec["current_received"] = recv
+                rec["current_sent"] = sent
+                rec["current_total"] = used
+                rec["daily_usage"] = used
+                rec["monthly_usage"] = used
+                rec["quota_used_percent"] = quota
+                rec["connected"] = connected
+                rec["last_seen"] = now
+                found = True
 
-    current = read_json(current_path)
-    if not isinstance(current, list):
-        current = []
+        if found:
+            write_json(current_path, current)
 
-    found = False
-    for rec in current:
-        if isinstance(rec, dict) and rec.get("client_name") == common_name:
-            rec["current_received"] = down
-            rec["current_sent"] = up
-            rec["current_total"] = used
-            rec["daily_usage"] = used
-            rec["monthly_usage"] = used
-            rec["quota_used_percent"] = quota_percent
-            rec["connected"] = False
-            rec["last_seen"] = now
-            found = True
+    cumulative_path = TRAFFIC_DIR / "cumulative_totals.json"
+    cumulative = read_json(cumulative_path, [])
+    if isinstance(cumulative, list):
+        found = False
+        for rec in cumulative:
+            if isinstance(rec, dict) and rec.get("client_name") == cn:
+                rec["total_received"] = recv
+                rec["total_sent"] = sent
+                rec["last_session_received"] = recv
+                rec["last_session_sent"] = sent
+                rec["last_update"] = now
+                found = True
 
-    if not found:
-        current.append({
-            "client_name": common_name,
-            "current_received": down,
-            "current_sent": up,
-            "current_total": used,
-            "last_seen": now,
-            "connected": False,
-            "real_address": "",
-            "virtual_ip": "",
-            "daily_usage": used,
-            "monthly_usage": used,
-            "quota_used_percent": quota_percent,
-        })
+        if found:
+            write_json(cumulative_path, cumulative)
+
+def best_split(cn, used, client, sessions, current_split, cumulative_split):
+    if cn in current_split:
+        recv, sent = current_split[cn]
+    elif cn in cumulative_split:
+        recv, sent = cumulative_split[cn]
+    else:
+        best_live = None
+        for sess in sessions.get(cn, []):
+            if best_live is None or sess.get("total", 0) > best_live.get("total", 0):
+                best_live = sess
+
+        if best_live:
+            recv = int(best_live.get("received") or 0)
+            sent = int(best_live.get("sent") or 0)
+        else:
+            recv = int(client.get("bytes_received") or client.get("download") or 0)
+            sent = int(client.get("bytes_sent") or client.get("upload") or 0)
+
+    total = recv + sent
+    if used > 0 and total != used:
+        if total > 0:
+            sent = int(used * sent / total)
+            recv = used - sent
+        else:
+            sent = int(used * 0.8)
+            recv = used - sent
+
+    return int(recv), int(sent)
+
+def kill_real(real, reason):
+    if not real:
+        return
+    resp = mgmt_cmd(f"kill {real}")
+    log(f"killed session {real} reason={reason} response={resp.strip()}")
+
+def kill_client_sessions(cn, sessions, reason):
+    for sess in sessions.get(cn, []):
+        kill_real(sess.get("real"), reason)
+
+def mark_exceeded(cn, client, used, recv, sent, limit):
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    client["active"] = False
+    client["status"] = "traffic_limit_exceeded"
+    client["traffic_used_bytes"] = int(used)
+    client["bytes_received"] = int(recv)
+    client["bytes_sent"] = int(sent)
+    client["download"] = int(recv)
+    client["upload"] = int(sent)
+    client["data_used_mb"] = int(used // 1048576)
+    client["traffic_exceeded_at"] = now
+    client["last_update"] = now
+
+    write_json(client_path(cn), client)
+    sync_traffic_files(cn, used, recv, sent, limit, connected=False)
+
+def enforce_client(cn, sessions, maps):
+    current, current_split, cumulative, cumulative_split = maps
+    client = load_client(cn)
+    if not client:
+        return
+
+    status = str(client.get("status") or "").lower()
+    active = client.get("active", True)
+
+    if active is False or "traffic_limit" in status or "exceeded" in status:
+        if sessions.get(cn):
+            kill_client_sessions(cn, sessions, "inactive")
+        return
 
     try:
-        write_json(current_path, current)
-    except Exception as exc:
-        logging.warning("failed to sync current traffic for %s: %s", common_name, exc)
-
-    cumulative = read_json(cumulative_path)
-    if not isinstance(cumulative, list):
-        cumulative = []
-
-    found = False
-    for rec in cumulative:
-        if isinstance(rec, dict) and rec.get("client_name") == common_name:
-            rec["total_received"] = down
-            rec["total_sent"] = up
-            rec["last_session_received"] = down
-            rec["last_session_sent"] = up
-            rec["last_update"] = now
-            found = True
-
-    if not found:
-        cumulative.append({
-            "client_name": common_name,
-            "total_received": down,
-            "total_sent": up,
-            "last_session_received": down,
-            "last_session_sent": up,
-            "last_update": now,
-        })
-
-    try:
-        write_json(cumulative_path, cumulative)
-    except Exception as exc:
-        logging.warning("failed to sync cumulative traffic for %s: %s", common_name, exc)
-
-    # Patch latest daily snapshot too, so panel/collector keeps a sane final value.
-    daily_root = os.path.join(TRAFFIC_DIR, "daily")
-    latest = None
-    try:
-        for root, _, files in os.walk(daily_root):
-            for fn in files:
-                if fn.startswith(common_name + "_") and fn.endswith(".json"):
-                    path = os.path.join(root, fn)
-                    if latest is None or path > latest:
-                        latest = path
+        limit = int(client.get("traffic_limit_bytes") or 0)
     except Exception:
-        latest = None
-
-    if latest:
-        obj = read_json(latest)
-        if isinstance(obj, dict):
-            obj["client_name"] = common_name
-            obj["received"] = down
-            obj["sent"] = up
-            obj["total"] = used
-            obj["bytes_received"] = down
-            obj["bytes_sent"] = up
-            obj["total_bytes"] = used
-            obj["timestamp"] = now
-            try:
-                write_json(latest, obj)
-            except Exception as exc:
-                logging.warning("failed to sync daily traffic for %s: %s", common_name, exc)
-
-def mark_traffic_exceeded(common_name, data, used, limit):
-    path = client_path(common_name)
-    if not data:
-        return
-
-    data = dict(data)
-    down, up, used = split_usage_for_display(data, int(used or 0))
-
-    data["active"] = False
-    data["status"] = "traffic_limit_exceeded"
-    data["traffic_exceeded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    data["traffic_used_bytes"] = int(used)
-    data["bytes_received"] = int(down)
-    data["bytes_sent"] = int(up)
-    data["download"] = int(down)
-    data["upload"] = int(up)
-    data["data_used_mb"] = int(used // 1048576)
+        limit = 0
 
     try:
-        write_json(path, data)
-        try:
-            st = os.stat(path)
-            _client_cache[common_name] = {"sig": (st.st_mtime_ns, st.st_size), "data": data}
-        except Exception:
-            _client_cache.pop(common_name, None)
+        json_used = int(client.get("traffic_used_bytes") or 0)
+    except Exception:
+        json_used = 0
 
-        update_traffic_display_files(common_name, data, used, limit)
-        logging.info("marked %s traffic exceeded used=%s limit=%s", common_name, used, limit)
-    except Exception as exc:
-        logging.warning("failed to mark %s exceeded: %s", common_name, exc)
+    json_bytes = int(client.get("bytes_sent") or 0) + int(client.get("bytes_received") or 0)
+    live_used = max([int(sess.get("total") or 0) for sess in sessions.get(cn, [])] or [0])
 
-def enforce_once():
-    sessions = get_sessions()
-    if not sessions:
-        return
-
-    traffic_totals = build_traffic_totals()
-
-    grouped = defaultdict(list)
-    for sess in sessions:
-        grouped[sess["common_name"]].append(sess)
-
-    for common_name, items in grouped.items():
-        data = load_client(common_name)
-
-        if data and data.get("active") is False:
-            for sess in items:
-                kill_session(sess["real_address"], "inactive")
-            continue
-
-        traffic_limit = load_traffic_limit(data)
-        if traffic_limit > 0:
-            live_total = max([x["live_total"] for x in items] or [0])
-            file_total = int(traffic_totals.get(common_name, 0) or 0)
-            used = max(live_total, file_total)
-
-            if used >= traffic_limit:
-                logging.info(
-                    "traffic limit exceeded client=%s used=%d limit=%d sessions=%d",
-                    common_name, used, traffic_limit, len(items)
-                )
-                for sess in items:
-                    kill_session(sess["real_address"], "traffic_limit")
-                mark_traffic_exceeded(common_name, data, used, traffic_limit)
-                continue
-
-        limit = load_connection_limit(data)
-        if limit <= 0:
-            continue
-        if len(items) <= limit:
-            continue
-
-        items.sort(key=lambda x: x.get("connected_ts", 0), reverse=True)
-        to_kill = items[limit:]
-
-        logging.info("client=%s active=%d limit=%d killing=%d", common_name, len(items), limit, len(to_kill))
-        for sess in to_kill:
-            kill_session(sess["real_address"], "connection_limit")
-
-def main():
-    logging.info(
-        "IranGate optimized guard started host=%s port=%s clients_dir=%s interval=%s",
-        HOST, PORT, CLIENTS_DIR, INTERVAL
+    used = max(
+        json_used,
+        json_bytes,
+        current.get(cn, 0),
+        cumulative.get(cn, 0),
+        live_used,
     )
 
+    if limit > 0 and used >= limit:
+        recv, sent = best_split(cn, used, client, sessions, current_split, cumulative_split)
+        log(f"traffic limit exceeded client={cn} used={used} limit={limit} sessions={len(sessions.get(cn, []))}")
+        kill_client_sessions(cn, sessions, "traffic_limit")
+        mark_exceeded(cn, client, used, recv, sent, limit)
+        return
+
+    try:
+        conn_limit = int(client.get("connection_limit") or 1)
+    except Exception:
+        conn_limit = 1
+
+    if conn_limit > 0 and len(sessions.get(cn, [])) > conn_limit:
+        sorted_sessions = sorted(
+            sessions.get(cn, []),
+            key=lambda x: int(x.get("connected_ts") or 0),
+            reverse=True
+        )
+        to_kill = sorted_sessions[conn_limit:]
+        log(f"client={cn} active={len(sessions.get(cn, []))} limit={conn_limit} killing={len(to_kill)}")
+        for sess in to_kill:
+            kill_real(sess.get("real"), "connection_limit")
+
+def enforce_once(cn=None):
+    sessions = get_sessions()
+    maps = usage_maps()
+
+    if cn:
+        enforce_client(cn, sessions, maps)
+        return
+
+    for active_cn in list(sessions.keys()):
+        enforce_client(active_cn, sessions, maps)
+
+def kick_client(cn):
+    sessions = get_sessions()
+    kill_client_sessions(cn, sessions, "admin_edit_reset_or_kick")
+
+def loop():
+    log(f"IranGate optimized unified guard started host={MGMT_HOST} port={MGMT_PORT} interval={INTERVAL}")
     while True:
         try:
             enforce_once()
         except Exception as exc:
-            logging.warning("guard iteration failed: %s", exc)
+            log(f"ERROR {exc}")
         time.sleep(INTERVAL)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", help="Enforce only one client immediately")
+    parser.add_argument("--kick", help="Kick all active sessions for one client")
+    args = parser.parse_args()
+
+    if args.kick:
+        kick_client(args.kick)
+        return
+
+    if args.once:
+        enforce_once(args.once)
+        return
+
+    loop()
 
 if __name__ == "__main__":
     main()
+
 PYGUARD
 
     chmod +x /usr/local/bin/irangate-connection-guard
@@ -577,7 +485,7 @@ Type=simple
 Environment=IRANGATE_DATA_DIR=/opt/irangate
 Environment=OPENVPN_MANAGEMENT_HOST=127.0.0.1
 Environment=OPENVPN_MANAGEMENT_PORT=7505
-Environment=IRANGATE_GUARD_INTERVAL=5
+Environment=IRANGATE_GUARD_INTERVAL=20
 ExecStart=/usr/local/bin/irangate-connection-guard
 Restart=always
 RestartSec=3

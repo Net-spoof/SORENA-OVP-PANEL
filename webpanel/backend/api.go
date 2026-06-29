@@ -529,6 +529,17 @@ func resetClientTrafficDisplay(clientName string) {
 	})
 }
 
+func enforceClientAfterEdit(name string, resetTraffic bool) {
+	if resetTraffic {
+		_ = exec.Command("/usr/local/bin/irangate-connection-guard", "--kick", name).Run()
+		return
+	}
+
+	go func() {
+		_ = exec.Command("/usr/local/bin/irangate-connection-guard", "--once", name).Run()
+	}()
+}
+
 func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := strings.TrimSpace(vars["name"])
@@ -624,6 +635,8 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Failed to save client data", http.StatusInternalServerError)
 		return
 	}
+
+	enforceClientAfterEdit(name, req.ResetTraffic)
 
 	sendSuccess(w, "Client updated successfully", clientData)
 }

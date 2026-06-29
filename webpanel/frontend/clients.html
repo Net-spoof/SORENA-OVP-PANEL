@@ -308,6 +308,31 @@
             return client.active ? 'Active' : 'Inactive';
         }
 
+        function getClientTrafficDisplay(client) {
+            const used = getClientUsedBytes(client);
+
+            let up = Number(client.bytes_sent || client.upload || client.current_sent || 0);
+            let down = Number(client.bytes_received || client.download || client.current_received || 0);
+
+            const directTotal = up + down;
+
+            if (used > 0 && directTotal > 0 && directTotal !== used) {
+                up = Math.round(used * up / directTotal);
+                down = used - up;
+            }
+
+            if (used > 0 && directTotal <= 0) {
+                up = used;
+                down = 0;
+            }
+
+            return {
+                upload: Math.max(0, up),
+                download: Math.max(0, down),
+                total: Math.max(0, used)
+            };
+        }
+
         function getClientRemainingBytes(client) {
             const limit = getClientLimitBytes(client);
             const used = getClientUsedBytes(client);
@@ -420,9 +445,9 @@
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="text-sm text-gray-600">
                             <div class="flex flex-col">
-                                <span class="text-xs text-gray-500">↑ ${formatBytes(client.bytes_sent || 0)}</span>
-                                <span class="text-xs text-gray-500">↓ ${formatBytes(client.bytes_received || 0)}</span>
-                                <span class="text-xs text-blue-500 font-medium">Total: ${formatBytes(getClientUsedBytes(client))}</span>
+                                <span class="text-xs text-gray-500">↑ ${formatBytes(getClientTrafficDisplay(client).upload)}</span>
+                                <span class="text-xs text-gray-500">↓ ${formatBytes(getClientTrafficDisplay(client).download)}</span>
+                                <span class="text-xs text-blue-500 font-medium">Total: ${formatBytes(getClientTrafficDisplay(client).total)}</span>
                             </div>
                         </div>
                     </td>
@@ -630,7 +655,7 @@
             document.getElementById('editTrafficUnit').value = limit.unit;
             document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
             document.getElementById('editActive').checked = !!client.active;
-            document.getElementById('editResetTraffic').checked = isClientVolumeFinished(client);
+            document.getElementById('editResetTraffic').checked = false;
 
             document.getElementById('editClientModal').classList.remove('hidden');
         }
@@ -665,6 +690,18 @@
                 return;
             }
 
+            const resetTraffic = document.getElementById('editResetTraffic').checked;
+            if (resetTraffic) {
+                const ok = confirm(
+                    `Reset traffic for "${name}"?\n\n` +
+                    `این کار مصرف قبلی، Upload، Download و Total را صفر می‌کند.\n` +
+                    `اگر فقط می‌خواهی حجم/روز/لیمیت را تغییر بدهی، Cancel بزن و تیک Reset Traffic را بردار.`
+                );
+                if (!ok) {
+                    return;
+                }
+            }
+
             try {
                 const response = await fetch(`/api/clients/${encodeURIComponent(name)}`, {
                     method: 'PUT',
@@ -677,7 +714,7 @@
                         traffic_limit_bytes: editTrafficLimitBytes(),
                         connection_limit: connectionLimit,
                         active: document.getElementById('editActive').checked,
-                        reset_traffic: document.getElementById('editResetTraffic').checked
+                        reset_traffic: resetTraffic
                     })
                 });
 
@@ -1096,7 +1133,7 @@
 
                 <label class="flex items-center space-x-2">
                     <input type="checkbox" id="editResetTraffic" class="rounded border-gray-300 text-purple-600 focus:ring-purple-500">
-                    <span class="text-sm text-gray-700">Reset used traffic to 0</span>
+                    <span class="text-sm text-gray-700">Reset used traffic to 0 - فقط اگر می‌خواهی مصرف قبلی پاک شود تیک بزن</span>
                 </label>
 
                 <div class="flex justify-end space-x-3 pt-4">
