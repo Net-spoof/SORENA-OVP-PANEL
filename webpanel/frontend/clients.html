@@ -81,7 +81,7 @@
                     </thead>
                     <tbody id="clientsTable" class="divide-y divide-gray-200">
                         <tr>
-                            <td colspan="6" class="px-6 py-8 text-center text-gray-500">
+                            <td colspan="7" class="px-6 py-8 text-center text-gray-500">
                                 Loading clients...
                             </td>
                         </tr>
@@ -308,13 +308,65 @@
             return client.active ? 'Active' : 'Inactive';
         }
 
+        function getClientRemainingBytes(client) {
+            const limit = getClientLimitBytes(client);
+            const used = getClientUsedBytes(client);
+
+            if (!limit || limit <= 0) return null;
+            return Math.max(0, limit - used);
+        }
+
+        function getClientRemainingDays(client) {
+            const expiresAt = new Date(client.expires_at);
+            if (Number.isNaN(expiresAt.getTime())) return null;
+
+            const diff = expiresAt.getTime() - Date.now();
+            return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+        }
+
+        function getClientLimitInfo(client) {
+            const limit = getClientLimitBytes(client);
+            const used = getClientUsedBytes(client);
+            const remaining = getClientRemainingBytes(client);
+            const days = getClientRemainingDays(client);
+            const connLimit = Number(client.connection_limit || 1);
+
+            const trafficLine = limit > 0
+                ? `${formatBytes(remaining)} left`
+                : 'Unlimited traffic';
+
+            const percent = limit > 0
+                ? Math.min(100, Math.round((used / limit) * 100))
+                : 0;
+
+            const daysLine = days === null
+                ? 'No expiry info'
+                : `${days} day${days === 1 ? '' : 's'} left`;
+
+            const limitLine = limit > 0
+                ? `${formatBytes(limit)} limit`
+                : 'No traffic limit';
+
+            const colorClass = isClientVolumeFinished(client)
+                ? 'text-red-600'
+                : (limit > 0 && percent >= 85 ? 'text-yellow-600' : 'text-gray-600');
+
+            return `
+                <div class="flex flex-col space-y-1">
+                    <span class="text-xs font-medium ${colorClass}">${trafficLine}</span>
+                    <span class="text-xs text-gray-500">${daysLine}</span>
+                    <span class="text-xs text-gray-400">${limitLine} · ${connLimit} user${connLimit === 1 ? '' : 's'}</span>
+                </div>
+            `;
+        }
+
         function renderClients(clients) {
             const tbody = document.getElementById('clientsTable');
             
             if (clients.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
+                        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
                             No clients found. Click "Add Client" to create one.
                         </td>
                     </tr>
@@ -334,6 +386,9 @@
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="text-sm text-gray-600">${formatDate(client.expires_at)}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${getClientLimitInfo(client)}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="flex flex-col space-y-1">
@@ -857,6 +912,7 @@
                     </div>
                     <div>
                         <p class="text-sm text-gray-600">Expires</p>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">REMAINING</th>
                         <p class="font-semibold">${formatDate(client.expires_at)}</p>
                     </div>
                     <div>
