@@ -267,6 +267,47 @@
         }
 
         // Render clients table
+        function getClientUsedBytes(client) {
+            return Math.max(
+                Number(client.traffic_used_bytes || 0),
+                Number(client.current_total || 0),
+                Number(client.monthly_usage || 0),
+                Number(client.daily_usage || 0),
+                Number(client.data_used_mb || 0) * 1048576,
+                Number(client.bytes_sent || 0) + Number(client.bytes_received || 0)
+            );
+        }
+
+        function getClientLimitBytes(client) {
+            return Number(client.traffic_limit_bytes || client.data_limit || client.limit_bytes || client.traffic_limit || 0);
+        }
+
+        function isClientVolumeFinished(client) {
+            const status = String(client.status || client.client_status || '').toLowerCase();
+            const used = getClientUsedBytes(client);
+            const limit = getClientLimitBytes(client);
+
+            return status === 'traffic_limit_exceeded' ||
+                   status.includes('traffic_limit') ||
+                   status.includes('exceeded') ||
+                   Boolean(limit > 0 && used >= limit && client.active === false);
+        }
+
+        function getClientStatusClass(client) {
+            if (isClientVolumeFinished(client)) return 'bg-red-100 text-red-800';
+            return client.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
+        }
+
+        function getClientStatusDotClass(client) {
+            if (isClientVolumeFinished(client)) return 'bg-red-500';
+            return client.active ? 'bg-green-400' : 'bg-gray-400';
+        }
+
+        function getClientStatusText(client) {
+            if (isClientVolumeFinished(client)) return 'Deactive';
+            return client.active ? 'Active' : 'Inactive';
+        }
+
         function renderClients(clients) {
             const tbody = document.getElementById('clientsTable');
             
@@ -297,12 +338,12 @@
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="flex flex-col space-y-1">
                             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                client.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                getClientStatusClass(client)
                             }">
                                 <span class="w-1.5 h-1.5 mr-1.5 rounded-full ${
-                                    client.active ? 'bg-green-400' : 'bg-gray-400'
+                                    getClientStatusDotClass(client)
                                 }"></span>
-                                ${client.active ? 'Active' : 'Inactive'}
+                                ${getClientStatusText(client)}
                             </span>
                             ${client.last_connection ? `
                                 <div class="text-xs text-gray-500 flex items-center">
@@ -326,7 +367,7 @@
                             <div class="flex flex-col">
                                 <span class="text-xs text-gray-500">↑ ${formatBytes(client.bytes_sent || 0)}</span>
                                 <span class="text-xs text-gray-500">↓ ${formatBytes(client.bytes_received || 0)}</span>
-                                <span class="text-xs text-blue-500 font-medium">Total: ${formatBytes((client.bytes_sent || 0) + (client.bytes_received || 0))}</span>
+                                <span class="text-xs text-blue-500 font-medium">Total: ${formatBytes(getClientUsedBytes(client))}</span>
                             </div>
                         </div>
                     </td>
@@ -823,117 +864,8 @@
     </script>
     </div>
 
-<!-- IRANGATE_TRAFFIC_EXHAUSTED_HIGHLIGHT -->
-<style>
-.traffic-exhausted-client {
-    border: 1px solid rgba(239, 68, 68, 0.75) !important;
-    background: linear-gradient(90deg, rgba(127, 29, 29, 0.45), rgba(30, 41, 59, 0.35)) !important;
-    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25), 0 0 18px rgba(239, 68, 68, 0.12) !important;
-}
-.traffic-exhausted-client .traffic-exhausted-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: 8px;
-    padding: 2px 8px;
-    border-radius: 9999px;
-    background: rgba(220, 38, 38, 0.22);
-    color: #fecaca;
-    border: 1px solid rgba(248, 113, 113, 0.55);
-    font-size: 11px;
-    font-weight: 700;
-}
-</style>
-<script>
-(function () {
-    const exhaustedNames = new Set();
 
-    function getClientsArray(payload) {
-        if (Array.isArray(payload)) return payload;
-        if (payload && Array.isArray(payload.clients)) return payload.clients;
-        if (payload && Array.isArray(payload.data)) return payload.data;
-        if (payload && payload.data && Array.isArray(payload.data.clients)) return payload.data.clients;
-        return [];
-    }
 
-    function isTrafficExhausted(client) {
-        const status = String(client.status || "").toLowerCase();
-        const used = Number(client.traffic_used_bytes || client.current_total || client.data_used_bytes * 1048576 || 0);
-        const limit = Number(client.traffic_limit_bytes || client.traffic_limit || 0);
-
-        return status === "traffic_limit_exceeded" ||
-               status.includes("traffic_limit") ||
-               Boolean(limit > 0 && used >= limit && client.active === false);
-    }
-
-    async function refreshExhaustedNames() {
-        const endpoints = ["/api/clients", "/api/clients/"];
-        for (const ep of endpoints) {
-            try {
-                const res = await fetch(ep, {cache: "no-store"});
-                if (!res.ok) continue;
-
-                const payload = await res.json();
-                const clients = getClientsArray(payload);
-
-                exhaustedNames.clear();
-                clients.forEach(c => {
-                    const name = c.name || c.client_name || c.username;
-                    if (name && isTrafficExhausted(c)) exhaustedNames.add(String(name));
-                });
-
-                markRows();
-                return;
-            } catch (e) {}
-        }
-    }
-
-    function findClientContainer(el) {
-        return el.closest("tr") ||
-               el.closest("[data-client-name]") ||
-               el.closest(".client-card") ||
-               el.closest(".client-row") ||
-               el.closest(".rounded") ||
-               el.closest(".border") ||
-               el.parentElement;
-    }
-
-    function markRows() {
-        document.querySelectorAll(".traffic-exhausted-client").forEach(el => {
-            el.classList.remove("traffic-exhausted-client");
-        });
-
-        exhaustedNames.forEach(name => {
-            const candidates = Array.from(document.querySelectorAll("tr, div, li, section"));
-            for (const el of candidates) {
-                const text = el.innerText || "";
-                if (!text.includes(name)) continue;
-
-                const box = findClientContainer(el);
-                if (!box) continue;
-
-                box.classList.add("traffic-exhausted-client");
-
-                if (!box.querySelector(".traffic-exhausted-badge")) {
-                    const badge = document.createElement("span");
-                    badge.className = "traffic-exhausted-badge";
-                    badge.textContent = "Volume Finished";
-                    const target = Array.from(box.querySelectorAll("*")).find(x => (x.innerText || "").trim() === name) || box;
-                    target.appendChild(badge);
-                }
-                break;
-            }
-        });
-    }
-
-    document.addEventListener("DOMContentLoaded", function () {
-        refreshExhaustedNames();
-        setInterval(refreshExhaustedNames, 5000);
-        const obs = new MutationObserver(() => markRows());
-        obs.observe(document.body, {childList: true, subtree: true});
-    });
-})();
-</script>
 
 </body>
 </html>

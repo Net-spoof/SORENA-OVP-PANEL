@@ -483,6 +483,89 @@ PYGUARD
 
     chmod +x /usr/local/bin/irangate-connection-guard
 
+    cat > /usr/local/bin/irangate-client-connect-guard <<'PYCLIENTCONNECT'
+#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+CLIENTS_DIR = Path("/opt/irangate/database/clients")
+LOG_FILE = Path("/var/log/irangate-client-connect-guard.log")
+
+def log(msg):
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+cn = os.environ.get("common_name") or ""
+cn = os.path.basename(cn.strip())
+
+if not cn:
+    log("REJECT no common_name")
+    sys.exit(1)
+
+client_file = CLIENTS_DIR / f"{cn}.json"
+data = read_json(client_file)
+
+# If client JSON is missing, allow to avoid breaking old/manual clients unexpectedly.
+if not isinstance(data, dict):
+    log(f"ALLOW {cn} no_json")
+    sys.exit(0)
+
+status = str(data.get("status") or "").lower()
+active = data.get("active", True)
+
+try:
+    used = int(data.get("traffic_used_bytes") or 0)
+except Exception:
+    used = 0
+
+try:
+    limit = int(data.get("traffic_limit_bytes") or 0)
+except Exception:
+    limit = 0
+
+if used <= 0:
+    try:
+        used = int(data.get("bytes_sent") or 0) + int(data.get("bytes_received") or 0)
+    except Exception:
+        used = 0
+
+if active is False:
+    log(f"REJECT {cn} inactive status={status} used={used} limit={limit}")
+    sys.exit(1)
+
+if status == "traffic_limit_exceeded" or "traffic_limit" in status or "exceeded" in status:
+    log(f"REJECT {cn} status={status} used={used} limit={limit}")
+    sys.exit(1)
+
+if limit > 0 and used >= limit:
+    log(f"REJECT {cn} quota used={used} limit={limit}")
+    sys.exit(1)
+
+log(f"ALLOW {cn} active={active} status={status} used={used} limit={limit}")
+sys.exit(0)
+PYCLIENTCONNECT
+
+    chmod +x /usr/local/bin/irangate-client-connect-guard
+
+    if [ -f /etc/openvpn/server.conf ]; then
+        grep -q '^script-security 2' /etc/openvpn/server.conf || echo 'script-security 2' >> /etc/openvpn/server.conf
+        grep -q '^client-connect /usr/local/bin/irangate-client-connect-guard' /etc/openvpn/server.conf || echo 'client-connect /usr/local/bin/irangate-client-connect-guard' >> /etc/openvpn/server.conf
+    fi
+
+
     cat > /etc/systemd/system/irangate-connection-guard.service <<'EOF'
 [Unit]
 Description=IranGate OpenVPN Connection Limit Guard
