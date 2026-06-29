@@ -598,7 +598,7 @@
             }
         }
 
-        document.getElementById('editClientForm').addEventListener('submit', async (e) => {
+        async function submitEditClient(e) {
             e.preventDefault();
 
             const name = document.getElementById('editClientName').value;
@@ -637,7 +637,7 @@
             } catch (error) {
                 showToast('Failed to update client', 'error');
             }
-        });
+        }
 
 
         // Add client
@@ -997,7 +997,7 @@
                 </div>
             </div>
 
-            <form id="editClientForm" class="p-6 space-y-4">
+            <form id="editClientForm" class="p-6 space-y-4" onsubmit="submitEditClient(event)">
                 <input type="hidden" id="editClientName">
 
                 <div>
