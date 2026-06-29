@@ -1,5 +1,21 @@
 #!/bin/bash
 set -euo pipefail
+
+# Allow OpenVPN to bind privileged UDP/TCP ports such as 443.
+# Without this systemd drop-in, OpenVPN may fail with:
+# "Socket bind failed ... Permission denied (errno=13)" on ports below 1024.
+ensure_openvpn_privileged_port_capability() {
+    mkdir -p /etc/systemd/system/openvpn@server.service.d
+
+    cat > /etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf <<'EOF'
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+EOF
+
+    systemctl daemon-reload
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -694,6 +710,7 @@ EOF
     systemctl daemon-reload
     
     systemctl stop openvpn@server 2>/dev/null || true
+    ensure_openvpn_privileged_port_capability
     systemctl enable openvpn@server
     log_info "Starting OpenVPN service..."
     if ! systemctl start openvpn@server; then
