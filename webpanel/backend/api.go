@@ -400,21 +400,21 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	
+
 	cmd := exec.Command("irangate", "client", "add", req.Name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		sendError(w, "Failed to create client: "+string(output), http.StatusInternalServerError)
 		return
 	}
-	
+
 	dataDir := os.Getenv("IRANGATE_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "/opt/irangate"
 	}
-	
+
 	clientPath := filepath.Join(dataDir, "database", "clients", req.Name+".json")
-	
+
 	if req.ExpirationDays > 0 || req.TrafficLimitBytes > 0 {
 		data, err := os.ReadFile(clientPath)
 		if err == nil {
@@ -424,11 +424,11 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 					expiresAt := time.Now().AddDate(0, 0, req.ExpirationDays)
 					clientData["expires_at"] = expiresAt.Format(time.RFC3339)
 				}
-				
+
 				if req.TrafficLimitBytes > 0 {
 					clientData["traffic_limit_bytes"] = req.TrafficLimitBytes
 				}
-				
+
 				newData, err := json.MarshalIndent(clientData, "", "  ")
 				if err == nil {
 					os.WriteFile(clientPath, newData, 0644)
@@ -436,7 +436,7 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
@@ -461,37 +461,37 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 func activateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
-	
+
 	if err := ActivateClient(name); err != nil {
 		sendError(w, fmt.Sprintf("Failed to activate client: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
 	clientsCache.mutex.Unlock()
-	
+
 	sendSuccess(w, "Client activated successfully", map[string]string{"name": name, "status": "active"})
 }
 func deactivateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
-	
+
 	if err := RevokeClientCertificate(name, "manual_deactivation"); err != nil {
 		log.Printf("Warning: Failed to revoke certificate for %s: %v", name, err)
 	}
-	
+
 	if err := DeactivateClient(name); err != nil {
 		sendError(w, fmt.Sprintf("Failed to deactivate client: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
 	clientsCache.mutex.Unlock()
-	
+
 	sendSuccess(w, "Client deactivated successfully", map[string]string{"name": name, "status": "inactive"})
 }
 func getClientStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -727,17 +727,141 @@ func updateServerSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
 	data, err := json.MarshalIndent(server, "", "  ")
 	if err != nil {
 		sendError(w, "Failed to serialize server settings", http.StatusInternalServerError)
 		return
 	}
+
+	if err := os.MkdirAll(filepath.Dir(ServerDBPath), 0755); err != nil {
+		sendError(w, "Failed to create webpanel config directory", http.StatusInternalServerError)
+		return
+	}
+
 	if err := os.WriteFile(ServerDBPath, data, 0600); err != nil {
 		sendError(w, "Failed to save server settings", http.StatusInternalServerError)
 		return
 	}
-	sendSuccess(w, "Server settings updated", server)
+
+	if err := syncServerSettingsForCLI(server); err != nil {
+		sendError(w, "Failed to sync server settings with CLI: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sendSuccess(w, "Server settings updated and synced with CLI", server)
 }
+
+func syncServerSettingsForCLI(server ServerConfig) error {
+	now := time.Now().Format(time.RFC3339)
+
+	serverIP := strings.TrimSpace(server.ServerIP)
+	serverDomain := strings.TrimSpace(server.ServerDomain)
+	protocol := strings.ToLower(strings.TrimSpace(server.Protocol))
+
+	serverConfigPath := filepath.Join(DataBaseDir, "server_config.json")
+	serverConfig, err := readJSONMapAllowMissing(serverConfigPath)
+	if err != nil {
+		return err
+	}
+
+	if serverIP != "" {
+		serverConfig["server_ip"] = serverIP
+		serverConfig["auto_detect_ip"] = false
+	}
+	serverConfig["server_domain"] = serverDomain
+
+	if server.ServerPort > 0 {
+		serverConfig["server_port"] = server.ServerPort
+	}
+	if protocol != "" {
+		serverConfig["protocol"] = protocol
+	}
+
+	serverConfig["last_updated"] = now
+
+	detectedIPs, _ := serverConfig["detected_ips"].(map[string]interface{})
+	if detectedIPs == nil {
+		detectedIPs = map[string]interface{}{}
+		serverConfig["detected_ips"] = detectedIPs
+	}
+	if serverIP != "" {
+		detectedIPs["primary"] = serverIP
+		detectedIPs["manual"] = serverIP
+	}
+
+	settingsMap, _ := serverConfig["settings"].(map[string]interface{})
+	if settingsMap == nil {
+		settingsMap = map[string]interface{}{}
+		serverConfig["settings"] = settingsMap
+	}
+	settingsMap["use_domain"] = serverDomain != ""
+	settingsMap["fallback_to_ip"] = true
+	settingsMap["force_manual_ip"] = serverIP != ""
+
+	if err := writeJSONMap(serverConfigPath, serverConfig, 0644); err != nil {
+		return err
+	}
+
+	dbSettingsPath := filepath.Join(DataBaseDir, "database", "settings.json")
+	dbSettings, err := readJSONMapAllowMissing(dbSettingsPath)
+	if err != nil {
+		return err
+	}
+
+	if serverIP != "" {
+		dbSettings["server_ip"] = serverIP
+	}
+	if server.ServerPort > 0 {
+		dbSettings["server_port"] = server.ServerPort
+	}
+	if protocol != "" {
+		dbSettings["protocol"] = protocol
+	}
+	dbSettings["updated_at"] = now
+
+	return writeJSONMap(dbSettingsPath, dbSettings, 0600)
+}
+
+func readJSONMapAllowMissing(path string) (map[string]interface{}, error) {
+	result := map[string]interface{}{}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return nil, err
+	}
+
+	if strings.TrimSpace(string(data)) == "" {
+		return result, nil
+	}
+
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+
+	return result, nil
+}
+
+func writeJSONMap(path string, value map[string]interface{}, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, perm)
+}
+
 func exportBackupHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("irangate", "config", "backup")
 	if _, err := cmd.CombinedOutput(); err != nil {
