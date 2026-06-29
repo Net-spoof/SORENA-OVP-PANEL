@@ -250,16 +250,158 @@ def kill_session(real_address, reason=""):
     except Exception as exc:
         logging.warning("failed to kill %s reason=%s error=%s", real_address, reason, exc)
 
+def split_usage_for_display(data, used):
+    try:
+        down = int(data.get("bytes_received") or data.get("download") or 0)
+    except Exception:
+        down = 0
+
+    try:
+        up = int(data.get("bytes_sent") or data.get("upload") or 0)
+    except Exception:
+        up = 0
+
+    total = down + up
+    if used <= 0:
+        used = total
+
+    if used <= 0:
+        return 0, 0, 0
+
+    if total <= 0:
+        up = int(used * 0.8)
+        down = used - up
+    elif total != used:
+        up = int(used * up / total)
+        down = used - up
+
+    return down, up, used
+
+def update_traffic_display_files(common_name, data, used, limit):
+    down, up, used = split_usage_for_display(data, int(used or 0))
+    if used <= 0:
+        return
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    quota_percent = 0
+    if limit and limit > 0:
+        quota_percent = round((used / limit) * 100, 2)
+
+    current_path = os.path.join(TRAFFIC_DIR, "current_stats.json")
+    cumulative_path = os.path.join(TRAFFIC_DIR, "cumulative_totals.json")
+
+    current = read_json(current_path)
+    if not isinstance(current, list):
+        current = []
+
+    found = False
+    for rec in current:
+        if isinstance(rec, dict) and rec.get("client_name") == common_name:
+            rec["current_received"] = down
+            rec["current_sent"] = up
+            rec["current_total"] = used
+            rec["daily_usage"] = used
+            rec["monthly_usage"] = used
+            rec["quota_used_percent"] = quota_percent
+            rec["connected"] = False
+            rec["last_seen"] = now
+            found = True
+
+    if not found:
+        current.append({
+            "client_name": common_name,
+            "current_received": down,
+            "current_sent": up,
+            "current_total": used,
+            "last_seen": now,
+            "connected": False,
+            "real_address": "",
+            "virtual_ip": "",
+            "daily_usage": used,
+            "monthly_usage": used,
+            "quota_used_percent": quota_percent,
+        })
+
+    try:
+        write_json(current_path, current)
+    except Exception as exc:
+        logging.warning("failed to sync current traffic for %s: %s", common_name, exc)
+
+    cumulative = read_json(cumulative_path)
+    if not isinstance(cumulative, list):
+        cumulative = []
+
+    found = False
+    for rec in cumulative:
+        if isinstance(rec, dict) and rec.get("client_name") == common_name:
+            rec["total_received"] = down
+            rec["total_sent"] = up
+            rec["last_session_received"] = down
+            rec["last_session_sent"] = up
+            rec["last_update"] = now
+            found = True
+
+    if not found:
+        cumulative.append({
+            "client_name": common_name,
+            "total_received": down,
+            "total_sent": up,
+            "last_session_received": down,
+            "last_session_sent": up,
+            "last_update": now,
+        })
+
+    try:
+        write_json(cumulative_path, cumulative)
+    except Exception as exc:
+        logging.warning("failed to sync cumulative traffic for %s: %s", common_name, exc)
+
+    # Patch latest daily snapshot too, so panel/collector keeps a sane final value.
+    daily_root = os.path.join(TRAFFIC_DIR, "daily")
+    latest = None
+    try:
+        for root, _, files in os.walk(daily_root):
+            for fn in files:
+                if fn.startswith(common_name + "_") and fn.endswith(".json"):
+                    path = os.path.join(root, fn)
+                    if latest is None or path > latest:
+                        latest = path
+    except Exception:
+        latest = None
+
+    if latest:
+        obj = read_json(latest)
+        if isinstance(obj, dict):
+            obj["client_name"] = common_name
+            obj["received"] = down
+            obj["sent"] = up
+            obj["total"] = used
+            obj["bytes_received"] = down
+            obj["bytes_sent"] = up
+            obj["total_bytes"] = used
+            obj["timestamp"] = now
+            try:
+                write_json(latest, obj)
+            except Exception as exc:
+                logging.warning("failed to sync daily traffic for %s: %s", common_name, exc)
+
 def mark_traffic_exceeded(common_name, data, used, limit):
     path = client_path(common_name)
     if not data:
         return
 
     data = dict(data)
+    down, up, used = split_usage_for_display(data, int(used or 0))
+
     data["active"] = False
     data["status"] = "traffic_limit_exceeded"
     data["traffic_exceeded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     data["traffic_used_bytes"] = int(used)
+    data["bytes_received"] = int(down)
+    data["bytes_sent"] = int(up)
+    data["download"] = int(down)
+    data["upload"] = int(up)
+    data["data_used_mb"] = int(used // 1048576)
 
     try:
         write_json(path, data)
@@ -268,6 +410,8 @@ def mark_traffic_exceeded(common_name, data, used, limit):
             _client_cache[common_name] = {"sig": (st.st_mtime_ns, st.st_size), "data": data}
         except Exception:
             _client_cache.pop(common_name, None)
+
+        update_traffic_display_files(common_name, data, used, limit)
         logging.info("marked %s traffic exceeded used=%s limit=%s", common_name, used, limit)
     except Exception as exc:
         logging.warning("failed to mark %s exceeded: %s", common_name, exc)
