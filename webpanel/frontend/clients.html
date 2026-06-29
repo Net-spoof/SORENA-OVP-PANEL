@@ -390,6 +390,15 @@
                                     </svg>
                                 </button>
                             `}
+                            <button onclick="showEditClient('${client.name}')"
+                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-md transition-colors duration-150"
+                                    title="Edit">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                                <span class="ml-1 hidden xl:inline">Edit</span>
+                            </button>
+
                             <button onclick="showDetails('${client.name}')" 
                                     class="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors duration-150"
                                     title="View Details">
@@ -524,6 +533,112 @@
                 inboundInfo.classList.add('hidden');
             }
         });
+
+
+        function hideEditModal() {
+            document.getElementById('editClientModal').classList.add('hidden');
+        }
+
+        function bytesToBestUnit(bytes) {
+            bytes = Number(bytes || 0);
+            if (bytes <= 0) return {value: 0, unit: 'GB'};
+            const tb = 1024 * 1024 * 1024 * 1024;
+            const gb = 1024 * 1024 * 1024;
+            const mb = 1024 * 1024;
+
+            if (bytes >= tb && bytes % tb === 0) return {value: bytes / tb, unit: 'TB'};
+            if (bytes >= gb && bytes % gb === 0) return {value: bytes / gb, unit: 'GB'};
+            if (bytes >= mb) return {value: Math.round((bytes / mb) * 100) / 100, unit: 'MB'};
+            return {value: Math.round((bytes / mb) * 100) / 100, unit: 'MB'};
+        }
+
+        function getDaysUntil(dateStr) {
+            const d = new Date(dateStr);
+            if (Number.isNaN(d.getTime())) return 30;
+            const diff = d.getTime() - Date.now();
+            return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+        }
+
+        function showEditClient(name) {
+            const client = allClients.find(c => c.name === name);
+            if (!client) {
+                showToast('Client not found', 'error');
+                return;
+            }
+
+            const limit = bytesToBestUnit(client.traffic_limit_bytes || 0);
+
+            document.getElementById('editClientName').value = client.name;
+            document.getElementById('editClientNameDisplay').value = client.name;
+            document.getElementById('editExpirationDays').value = getDaysUntil(client.expires_at);
+            document.getElementById('editTrafficLimit').value = limit.value;
+            document.getElementById('editTrafficUnit').value = limit.unit;
+            document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
+            document.getElementById('editActive').checked = !!client.active;
+            document.getElementById('editResetTraffic').checked = isClientVolumeFinished(client);
+
+            document.getElementById('editClientModal').classList.remove('hidden');
+        }
+
+        function editTrafficLimitBytes() {
+            const trafficLimit = parseFloat(document.getElementById('editTrafficLimit').value) || 0;
+            const trafficUnit = document.getElementById('editTrafficUnit').value;
+
+            if (trafficLimit <= 0) return 0;
+
+            switch (trafficUnit) {
+                case 'MB':
+                    return Math.round(trafficLimit * 1024 * 1024);
+                case 'GB':
+                    return Math.round(trafficLimit * 1024 * 1024 * 1024);
+                case 'TB':
+                    return Math.round(trafficLimit * 1024 * 1024 * 1024 * 1024);
+                default:
+                    return 0;
+            }
+        }
+
+        document.getElementById('editClientForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const name = document.getElementById('editClientName').value;
+            const expirationDays = parseInt(document.getElementById('editExpirationDays').value, 10) || 30;
+            const connectionLimit = parseInt(document.getElementById('editConnectionLimit').value, 10) || 1;
+
+            if (connectionLimit < 1 || connectionLimit > 100) {
+                showToast('Connection limit must be between 1 and 100', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/clients/${encodeURIComponent(name)}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    },
+                    body: JSON.stringify({
+                        expiration_days: expirationDays,
+                        traffic_limit_bytes: editTrafficLimitBytes(),
+                        connection_limit: connectionLimit,
+                        active: document.getElementById('editActive').checked,
+                        reset_traffic: document.getElementById('editResetTraffic').checked
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    showToast(`Client "${name}" updated successfully!`, 'success');
+                    hideEditModal();
+                    loadClients();
+                } else {
+                    showToast(result.message || 'Failed to update client', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to update client', 'error');
+            }
+        });
+
 
         // Add client
         document.getElementById('addClientForm').addEventListener('submit', async (e) => {
@@ -866,6 +981,81 @@
 
 
 
+
+
+    <!-- Edit Client Modal -->
+    <div id="editClientModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-screen overflow-y-auto">
+            <div class="p-6 border-b">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold text-gray-900">Edit Client</h3>
+                    <button onclick="hideEditModal()" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <form id="editClientForm" class="p-6 space-y-4">
+                <input type="hidden" id="editClientName">
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Client Name</label>
+                    <input type="text" id="editClientNameDisplay" disabled
+                           class="w-full px-4 py-2 border rounded-lg bg-gray-100 text-gray-600">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Expiration Days From Now</label>
+                    <input type="number" id="editExpirationDays" min="1" max="3650"
+                           class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <p class="text-xs text-gray-500 mt-1">مثلاً 30 یعنی از امروز ۳۰ روز تمدید شود.</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Traffic Limit</label>
+                    <div class="flex space-x-2">
+                        <input type="number" id="editTrafficLimit" min="0" step="0.01"
+                               class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                               placeholder="0 = Unlimited">
+                        <select id="editTrafficUnit" class="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="MB">MB</option>
+                            <option value="GB">GB</option>
+                            <option value="TB">TB</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Connection Limit</label>
+                    <input type="number" id="editConnectionLimit" min="1" max="100"
+                           class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="editActive" class="rounded border-gray-300 text-purple-600 focus:ring-purple-500">
+                    <span class="text-sm text-gray-700">Active / allow this client to connect</span>
+                </label>
+
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="editResetTraffic" class="rounded border-gray-300 text-purple-600 focus:ring-purple-500">
+                    <span class="text-sm text-gray-700">Reset used traffic to 0</span>
+                </label>
+
+                <div class="flex justify-end space-x-3 pt-4">
+                    <button type="button" onclick="hideEditModal()"
+                            class="px-4 py-2 text-gray-600 hover:text-gray-800">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                        Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
 </body>
 </html>

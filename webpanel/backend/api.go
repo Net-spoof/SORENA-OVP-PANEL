@@ -472,6 +472,162 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 	clientsCache.mutex.Unlock()
 	sendSuccess(w, "Client removed and certificate revoked", map[string]string{"name": name})
 }
+
+func resetClientTrafficDisplay(clientName string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	patchListFile := func(path string, patch func(map[string]interface{})) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+
+		var records []map[string]interface{}
+		if err := json.Unmarshal(data, &records); err != nil {
+			return
+		}
+
+		changed := false
+		for _, rec := range records {
+			if rec["client_name"] == clientName {
+				patch(rec)
+				changed = true
+			}
+		}
+
+		if !changed {
+			return
+		}
+
+		out, err := json.MarshalIndent(records, "", "  ")
+		if err != nil {
+			return
+		}
+
+		_ = os.WriteFile(path, out, 0644)
+	}
+
+	currentPath := filepath.Join(DataBaseDir, "traffic", "current_stats.json")
+	patchListFile(currentPath, func(rec map[string]interface{}) {
+		rec["current_received"] = 0
+		rec["current_sent"] = 0
+		rec["current_total"] = 0
+		rec["daily_usage"] = 0
+		rec["monthly_usage"] = 0
+		rec["quota_used_percent"] = 0
+		rec["connected"] = false
+		rec["last_seen"] = now
+	})
+
+	cumulativePath := filepath.Join(DataBaseDir, "traffic", "cumulative_totals.json")
+	patchListFile(cumulativePath, func(rec map[string]interface{}) {
+		rec["total_received"] = 0
+		rec["total_sent"] = 0
+		rec["last_session_received"] = 0
+		rec["last_session_sent"] = 0
+		rec["last_update"] = now
+	})
+}
+
+func updateClientHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := strings.TrimSpace(vars["name"])
+	if name == "" {
+		sendError(w, "Client name is required", http.StatusBadRequest)
+		return
+	}
+
+	type UpdateClientRequest struct {
+		ExpirationDays    *int   `json:"expiration_days,omitempty"`
+		TrafficLimitBytes *int64 `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit   *int   `json:"connection_limit,omitempty"`
+		Active            *bool  `json:"active,omitempty"`
+		ResetTraffic      bool   `json:"reset_traffic,omitempty"`
+	}
+
+	var req UpdateClientRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	clientPath := filepath.Join(DataBaseDir, "database", "clients", name+".json")
+	data, err := os.ReadFile(clientPath)
+	if err != nil {
+		sendError(w, "Client not found", http.StatusNotFound)
+		return
+	}
+
+	var clientData map[string]interface{}
+	if err := json.Unmarshal(data, &clientData); err != nil {
+		sendError(w, "Failed to parse client data", http.StatusInternalServerError)
+		return
+	}
+
+	if req.ExpirationDays != nil {
+		if *req.ExpirationDays <= 0 || *req.ExpirationDays > 3650 {
+			sendError(w, "Expiration days must be between 1 and 3650", http.StatusBadRequest)
+			return
+		}
+		expiresAt := time.Now().UTC().AddDate(0, 0, *req.ExpirationDays)
+		clientData["expires_at"] = expiresAt.Format(time.RFC3339)
+	}
+
+	if req.TrafficLimitBytes != nil {
+		if *req.TrafficLimitBytes < 0 {
+			sendError(w, "Traffic limit cannot be negative", http.StatusBadRequest)
+			return
+		}
+		clientData["traffic_limit_bytes"] = *req.TrafficLimitBytes
+	}
+
+	if req.ConnectionLimit != nil {
+		if *req.ConnectionLimit < 1 || *req.ConnectionLimit > 100 {
+			sendError(w, "Connection limit must be between 1 and 100", http.StatusBadRequest)
+			return
+		}
+		clientData["connection_limit"] = *req.ConnectionLimit
+	}
+
+	if req.ResetTraffic {
+		clientData["traffic_used_bytes"] = 0
+		clientData["bytes_sent"] = 0
+		clientData["bytes_received"] = 0
+		clientData["upload"] = 0
+		clientData["download"] = 0
+		clientData["data_used_mb"] = 0
+		delete(clientData, "traffic_exceeded_at")
+		resetClientTrafficDisplay(name)
+	}
+
+	if req.Active != nil {
+		clientData["active"] = *req.Active
+		if *req.Active {
+			clientData["status"] = "active"
+			if req.ResetTraffic {
+				delete(clientData, "traffic_exceeded_at")
+			}
+		} else {
+			clientData["status"] = "inactive"
+		}
+	}
+
+	clientData["last_update"] = time.Now().UTC().Format(time.RFC3339)
+
+	out, err := json.MarshalIndent(clientData, "", "  ")
+	if err != nil {
+		sendError(w, "Failed to encode client data", http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(clientPath, out, 0644); err != nil {
+		sendError(w, "Failed to save client data", http.StatusInternalServerError)
+		return
+	}
+
+	sendSuccess(w, "Client updated successfully", clientData)
+}
+
 func activateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
@@ -1142,6 +1298,7 @@ func main() {
 	api.Use(authMiddleware)
 	api.HandleFunc("/clients", getClientsHandler).Methods("GET")
 	api.HandleFunc("/clients", createClientHandler).Methods("POST")
+	api.HandleFunc("/clients/{name}", updateClientHandler).Methods("PUT")
 	api.HandleFunc("/clients/{name}", deleteClientHandler).Methods("DELETE")
 	api.HandleFunc("/clients/{name}/activate", activateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/deactivate", deactivateClientHandler).Methods("POST")
