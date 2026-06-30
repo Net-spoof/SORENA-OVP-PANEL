@@ -47,6 +47,22 @@ sudo ./install.sh
 
 ---
 
+## External OpenVPN Node Installation
+
+Use this command on each external node server:
+
+    wget -4 -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
+    chmod +x install-node.sh
+    bash install-node.sh
+
+After installation, manage the node with:
+
+    ovp-node
+
+Installer asks for: Node name, Location code, Agent API port, Shared token, OpenVPN listen port, ovpn remote IP/domain, and ovpn remote port.
+
+If you use an Iran tunnel, set the ovpn IP/domain and port to the Iran tunnel IP and tunnel port.
+
 ## Project Structure
 
 ```
