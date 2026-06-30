@@ -551,7 +551,7 @@
             `;
         }
 
-        function renderClients(clients) {
+        function renderClientsOriginal(clients) {
             const tbody = document.getElementById('clientsTable');
             
             if (clients.length === 0) {
@@ -673,11 +673,170 @@
             `).join('');
         }
 
+        const CLIENTS_PER_PAGE = 12;
+        let clientsCurrentPage = null;
+        let clientsLastRenderedList = [];
+
+        function getClientSortTime(client) {
+            const raw =
+                client.created_at ||
+                client.createdAt ||
+                client.created ||
+                client.creation_date ||
+                client.last_update ||
+                client.updated_at ||
+                '';
+
+            const ts = Date.parse(raw);
+            return Number.isNaN(ts) ? 0 : ts;
+        }
+
+        function paginateClientsList(list) {
+            const source = Array.isArray(list) ? list : [];
+
+            // ترتیب اصلی لیست حفظ می‌شود؛ فقط اگر تاریخ ساخت معتبر وجود داشته باشد،
+            // قدیمی‌ترها اول می‌مانند و یوزرهای جدیدتر به صفحات بعدی می‌روند.
+            const hasAnyDate = source.some(c => getClientSortTime(c) > 0);
+            const ordered = hasAnyDate
+                ? [...source].sort((a, b) => getClientSortTime(a) - getClientSortTime(b))
+                : [...source];
+
+            const totalItems = ordered.length;
+            const totalPages = Math.max(1, Math.ceil(totalItems / CLIENTS_PER_PAGE));
+
+            // بعد از باز شدن یا Refresh صفحه، برو آخرین صفحه که جدیدترین یوزرها اونجان
+            if (clientsCurrentPage === null || clientsCurrentPage === undefined) {
+                clientsCurrentPage = totalPages;
+            }
+
+            if (clientsCurrentPage > totalPages) clientsCurrentPage = totalPages;
+            if (clientsCurrentPage < 1) clientsCurrentPage = 1;
+
+            const startIndex = (clientsCurrentPage - 1) * CLIENTS_PER_PAGE;
+            const endIndex = startIndex + CLIENTS_PER_PAGE;
+
+            return {
+                pageItems: ordered.slice(startIndex, endIndex),
+                totalItems,
+                totalPages,
+                startIndex,
+                endIndex: Math.min(endIndex, totalItems)
+            };
+        }
+
+        function renderClients(list) {
+            clientsLastRenderedList = Array.isArray(list) ? list : [];
+
+            const page = paginateClientsList(clientsLastRenderedList);
+
+            renderClientsOriginal(page.pageItems);
+            renderClientsPagination(page);
+        }
+
+        function goToClientsPage(pageNumber) {
+            clientsCurrentPage = Number(pageNumber || 1);
+            renderClients(clientsLastRenderedList);
+        }
+
+        function resetClientsPagination() {
+            clientsCurrentPage = 1;
+        }
+
+        function findClientsListContainer() {
+            return (
+                document.getElementById('clientsGrid') ||
+                document.getElementById('clientsList') ||
+                document.getElementById('clientsContainer') ||
+                document.getElementById('clientsTable') ||
+                document.querySelector('tbody')?.closest('table')?.parentElement ||
+                document.querySelector('main') ||
+                document.body
+            );
+        }
+
+        function renderClientsPagination(page) {
+            let el = document.getElementById('clientsPagination');
+
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'clientsPagination';
+                el.className = 'mt-4 flex flex-col items-center gap-2';
+
+                const container = findClientsListContainer();
+                container.insertAdjacentElement('afterend', el);
+            }
+
+            if (!page || page.totalItems <= CLIENTS_PER_PAGE) {
+                el.innerHTML = '';
+                el.style.display = 'none';
+                return;
+            }
+
+            el.style.display = 'flex';
+
+            const current = clientsCurrentPage;
+            const total = page.totalPages;
+
+            const navBtn = 'h-8 px-3 rounded-lg border border-slate-700 bg-slate-900/70 text-xs text-slate-200 hover:border-cyan-400 hover:text-cyan-300 disabled:opacity-35 disabled:cursor-not-allowed transition';
+            const pageBtn = 'h-8 min-w-8 px-2 rounded-lg border border-slate-700 bg-slate-900/60 text-xs text-slate-300 hover:border-cyan-400 hover:text-cyan-300 transition';
+            const pageActive = 'h-8 min-w-8 px-2 rounded-lg border border-cyan-400 bg-cyan-500/15 text-xs text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,.25)]';
+
+            const pageButtons = [];
+            const startPage = Math.max(1, current - 1);
+            const endPage = Math.min(total, current + 1);
+
+            if (startPage > 1) {
+                pageButtons.push(`<button onclick="goToClientsPage(1)" class="${pageBtn}">1</button>`);
+                if (startPage > 2) {
+                    pageButtons.push(`<span class="h-8 px-1 flex items-center text-xs text-slate-500">...</span>`);
+                }
+            }
+
+            for (let i = startPage; i <= endPage; i++) {
+                pageButtons.push(`
+                    <button onclick="goToClientsPage(${i})" class="${i === current ? pageActive : pageBtn}">
+                        ${i}
+                    </button>
+                `);
+            }
+
+            if (endPage < total) {
+                if (endPage < total - 1) {
+                    pageButtons.push(`<span class="h-8 px-1 flex items-center text-xs text-slate-500">...</span>`);
+                }
+                pageButtons.push(`<button onclick="goToClientsPage(${total})" class="${pageBtn}">${total}</button>`);
+            }
+
+            el.innerHTML = `
+                <div class="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/50 px-2 py-2 shadow-lg">
+                    <button onclick="goToClientsPage(${current - 1})" ${current <= 1 ? 'disabled' : ''} class="${navBtn}">
+                        ‹
+                    </button>
+
+                    <div class="flex items-center gap-1">
+                        ${pageButtons.join('')}
+                    </div>
+
+                    <button onclick="goToClientsPage(${current + 1})" ${current >= total ? 'disabled' : ''} class="${navBtn}">
+                        ›
+                    </button>
+                </div>
+
+                <div class="text-[11px] text-slate-500">
+                    ${page.startIndex + 1}-${page.endIndex} از ${page.totalItems}
+                    · صفحه ${current}/${total}
+                </div>
+            `;
+        }
+
+
+
         // Filter clients
         document.getElementById('searchInput').addEventListener('input', filterClients);
         document.getElementById('filterStatus').addEventListener('change', filterClients);
 
         function filterClients() {
+            resetClientsPagination();
             ensureStatusFilterOptions();
 
             const searchInput =
