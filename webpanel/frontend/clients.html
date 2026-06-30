@@ -1155,13 +1155,13 @@
             if (trafficLimit > 0) {
                 switch(trafficUnit) {
                     case 'MB':
-                        trafficLimitBytes = trafficLimit * 1024 * 1024;
+                        trafficLimitBytes = trafficLimit * 1000 * 1000;
                         break;
                     case 'GB':
-                        trafficLimitBytes = trafficLimit * 1024 * 1024 * 1024;
+                        trafficLimitBytes = trafficLimit * 1000 * 1000 * 1000;
                         break;
                     case 'TB':
-                        trafficLimitBytes = trafficLimit * 1024 * 1024 * 1024 * 1024;
+                        trafficLimitBytes = trafficLimit * 1000 * 1000 * 1000 * 1000;
                         break;
                 }
             }
