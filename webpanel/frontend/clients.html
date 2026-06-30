@@ -40,12 +40,13 @@
                     <input type="text" id="searchInput" placeholder="Search clients..." 
                            class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
                 </div>
-                <select id="filterStatus" class="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                <select id="filterStatus" class="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" onchange="filterClients()">
                     <option value="all">All Status</option>
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
+                    <option value="deactive">Deactive</option>
                 </select>
-                <button onclick="loadClients()" class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg">
+                <button onclick="refreshClientsPage()" class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg">
                     Refresh
                 </button>
             </div>
@@ -226,6 +227,146 @@
         let allClients = [];
 
         // Load clients
+
+
+
+        function isClientOnline(client) {
+            const truthy = (v) =>
+                v === true ||
+                v === 'true' ||
+                v === 1 ||
+                v === '1' ||
+                String(v || '').toLowerCase() === 'online' ||
+                String(v || '').toLowerCase() === 'connected';
+
+            const activeConnections = Math.max(
+                Number(client.active_connections || 0),
+                Number(client.connection_count || 0),
+                Number(client.current_connections || 0),
+                Number(client.online_connections || 0),
+                Number(client.session_count || 0),
+                Array.isArray(client.sessions) ? client.sessions.length : 0
+            );
+
+            return (
+                truthy(client.connected) ||
+                truthy(client.online) ||
+                truthy(client.is_online) ||
+                truthy(client.connection_status) ||
+                activeConnections > 0
+            );
+        }
+
+        function isClientDeactiveByStatus(client) {
+            const status = String(client.status || '').toLowerCase();
+
+            const trafficLimitBytes = Number(client.traffic_limit_bytes || 0);
+            const trafficUsedBytes = Number(client.traffic_used_bytes || 0);
+
+            const now = Date.now();
+
+            const expiresRaw =
+                client.expires_at ||
+                client.expire_at ||
+                client.expiry_date ||
+                client.expiration_date ||
+                '';
+
+            let expiredByDate = false;
+            if (expiresRaw) {
+                const ts = Date.parse(expiresRaw);
+                expiredByDate = !Number.isNaN(ts) && ts > 0 && ts <= now;
+            }
+
+            const exceededByTraffic =
+                trafficLimitBytes > 0 &&
+                trafficUsedBytes >= trafficLimitBytes;
+
+            const exceededByStatus =
+                status.includes('traffic_limit') ||
+                status.includes('limit_exceeded') ||
+                status.includes('exceeded') ||
+                status.includes('expired') ||
+                status.includes('expire') ||
+                status.includes('time_limit') ||
+                status.includes('time_exceeded');
+
+            // Deactive فقط یعنی اتمام حجم یا اتمام زمان
+            return exceededByTraffic || expiredByDate || exceededByStatus;
+        }
+
+        function getClientFilterStatus(client) {
+            if (isClientDeactiveByStatus(client)) {
+                return 'deactive';
+            }
+
+            if (isClientOnline(client)) {
+                return 'active';
+            }
+
+            // Inactive یعنی آفلاین سالم: حجم/زمان دارد ولی وصل نیست
+            return 'inactive';
+        }
+
+        function getClientSearchText(client) {
+            return [
+                client.name,
+                client.username,
+                client.common_name,
+                client.email,
+                client.status,
+                client.real_address,
+                client.virtual_ip
+            ].filter(Boolean).join(' ').toLowerCase();
+        }
+
+        function ensureStatusFilterOptions() {
+            const selects = Array.from(document.querySelectorAll('select'));
+
+            let statusSelect =
+                document.getElementById('statusFilter') ||
+                document.getElementById('clientStatusFilter') ||
+                selects.find(sel => {
+                    const text = sel.innerText.toLowerCase();
+                    const html = sel.outerHTML.toLowerCase();
+                    return (
+                        html.includes('filterclients') ||
+                        html.includes('status') ||
+                        text.includes('all status') ||
+                        text.includes('active') ||
+                        text.includes('inactive') ||
+                        text.includes('deactive')
+                    ) && !(text.includes('mb') && text.includes('gb') && text.includes('tb'));
+                });
+
+            if (!statusSelect) return;
+
+            const current = String(statusSelect.value || 'all').toLowerCase();
+
+            statusSelect.innerHTML = `
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+                <option value="deactive">Deactive</option>
+            `;
+
+            statusSelect.setAttribute('onchange', 'filterClients()');
+
+            if (['all', 'active', 'inactive', 'deactive'].includes(current)) {
+                statusSelect.value = current;
+            } else if (['disabled', 'expired'].includes(current)) {
+                statusSelect.value = 'deactive';
+            } else {
+                statusSelect.value = 'all';
+            }
+        }
+
+        function refreshClientsPage() {
+            const url = new URL(window.location.href);
+            url.searchParams.set('v', Date.now().toString());
+            window.location.href = url.toString();
+        }
+
         async function loadClients() {
             try {
                 const result = await api.getClients();
@@ -537,24 +678,55 @@
         document.getElementById('filterStatus').addEventListener('change', filterClients);
 
         function filterClients() {
-            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-            const statusFilter = document.getElementById('filterStatus').value;
+            ensureStatusFilterOptions();
 
-            let filtered = allClients;
+            const searchInput =
+                document.getElementById('searchInput') ||
+                document.getElementById('clientSearch') ||
+                document.querySelector('input[placeholder*="Search"]') ||
+                document.querySelector('input[placeholder*="search"]');
 
-            // Search filter
-            if (searchTerm) {
-                filtered = filtered.filter(client => 
-                    client.name.toLowerCase().includes(searchTerm)
-                );
-            }
+            const statusSelect =
+                document.getElementById('statusFilter') ||
+                document.getElementById('clientStatusFilter') ||
+                Array.from(document.querySelectorAll('select')).find(sel => {
+                    const text = sel.innerText.toLowerCase();
+                    const html = sel.outerHTML.toLowerCase();
+                    return (
+                        html.includes('filterclients') ||
+                        html.includes('status') ||
+                        text.includes('all status') ||
+                        text.includes('active') ||
+                        text.includes('inactive') ||
+                        text.includes('deactive')
+                    ) && !(text.includes('mb') && text.includes('gb') && text.includes('tb'));
+                });
 
-            // Status filter
-            if (statusFilter !== 'all') {
-                filtered = filtered.filter(client => 
-                    statusFilter === 'active' ? client.active : !client.active
-                );
-            }
+            const searchTerm = String(searchInput ? searchInput.value : '').toLowerCase().trim();
+            const statusValue = String(statusSelect ? statusSelect.value : 'all').toLowerCase();
+
+            const source =
+                typeof allClients !== 'undefined' ? allClients :
+                typeof clients !== 'undefined' ? clients :
+                window.allClients || window.clients || [];
+
+            const filtered = source.filter(client => {
+                const searchText = getClientSearchText(client);
+                const clientStatus = getClientFilterStatus(client);
+
+                const matchesSearch =
+                    !searchTerm ||
+                    searchText.includes(searchTerm);
+
+                const matchesStatus =
+                    !statusValue ||
+                    statusValue === 'all' ||
+                    statusValue === 'all status' ||
+                    statusValue === 'all_status' ||
+                    statusValue === clientStatus;
+
+                return matchesSearch && matchesStatus;
+            });
 
             renderClients(filtered);
         }
