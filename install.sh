@@ -247,10 +247,17 @@ def calculate_enforced_usage(cn, client, cn_sessions, cumulative):
     if changed:
         write_json(BASELINES_PATH, baselines)
 
-    baseline_used = stored_used
+    # Use the frozen session baseline + live OpenVPN delta.
+    # Do NOT use stored_used as the live baseline while the session is alive.
+    # mark_progress writes stored_used every guard run; adding the same session_delta
+    # to that updated value inflates traffic every interval.
+    baseline_used = 0
     for key in alive_keys:
         base = baselines.get(key, {})
         baseline_used = max(baseline_used, as_int(base.get("base_used")))
+
+    if baseline_used <= 0:
+        baseline_used = stored_used
 
     return max(stored_used, baseline_used + session_delta)
 

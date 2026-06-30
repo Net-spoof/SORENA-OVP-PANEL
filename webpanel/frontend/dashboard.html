@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - IranGate</title>
+    <title>Dashboard - adsvpn</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
@@ -263,6 +263,86 @@
         // Set username
         document.getElementById('username').textContent = localStorage.getItem('username') || 'Admin';
 
+
+        function getDashboardClientsArray(clientsData) {
+            if (!clientsData || !clientsData.success) return [];
+
+            const data = clientsData.data;
+
+            if (Array.isArray(data)) return data;
+            if (Array.isArray(data?.clients)) return data.clients;
+            if (Array.isArray(data?.data)) return data.data;
+
+            return [];
+        }
+
+        function getDashboardUsedBytes(client) {
+            const trafficUsed = Number(client.traffic_used_bytes || 0);
+            if (trafficUsed > 0) return trafficUsed;
+
+            const upload = Number(client.upload || client.bytes_sent || 0);
+            const download = Number(client.download || client.bytes_received || 0);
+            const sum = upload + download;
+            if (sum > 0) return sum;
+
+            return Number(client.total_bytes || client.current_total || 0);
+        }
+
+        function isDashboardClientOnline(client) {
+            const truthy = (v) =>
+                v === true ||
+                v === 'true' ||
+                v === 1 ||
+                v === '1' ||
+                String(v || '').toLowerCase() === 'online' ||
+                String(v || '').toLowerCase() === 'connected';
+
+            const activeConnections = Math.max(
+                Number(client.active_connections || 0),
+                Number(client.connection_count || 0),
+                Number(client.current_connections || 0),
+                Number(client.online_connections || 0),
+                Number(client.session_count || 0),
+                Array.isArray(client.sessions) ? client.sessions.length : 0
+            );
+
+            return (
+                truthy(client.connected) ||
+                truthy(client.online) ||
+                truthy(client.is_online) ||
+                truthy(client.connection_status) ||
+                activeConnections > 0
+            );
+        }
+
+        function applyDashboardRealStats(clientsData, statsData) {
+            const clients = getDashboardClientsArray(clientsData);
+
+            const totalClients = clients.length;
+            const connectedClients = clients.filter(isDashboardClientOnline).length;
+
+            const totalTrafficBytes = clients.reduce((sum, client) => {
+                return sum + getDashboardUsedBytes(client);
+            }, 0);
+
+            const totalClientsEl = document.getElementById('totalClients');
+            if (totalClientsEl) {
+                totalClientsEl.textContent = totalClients;
+            }
+
+            const connectedEl = document.getElementById('connectedClients');
+            if (connectedEl) {
+                const statsConnected = Number(statsData?.data?.connected_clients || 0);
+                connectedEl.textContent = connectedClients > 0 ? connectedClients : statsConnected;
+            }
+
+            const totalTrafficEl = document.getElementById('totalTraffic');
+            if (totalTrafficEl) {
+                totalTrafficEl.textContent = formatBytes(totalTrafficBytes);
+            }
+        }
+
+
         // Load dashboard data
         async function loadDashboard() {
             try {
@@ -273,6 +353,8 @@
                     api.getOrphanedClients(),
                     api.getServerStatus()
                 ]);
+
+                setTimeout(() => applyDashboardRealStats(clientsData, statsData), 0);
 
                 // Update server status
                 if (statusData.success) {
