@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -301,6 +304,10 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 		for i, client := range clients {
 			if clientMap, ok := client.(map[string]interface{}); ok {
 				if name, ok := clientMap["name"].(string); ok {
+					if token, err := ensureClientSubscriptionToken(name); err == nil {
+						clientMap["subscription_token"] = token
+						clientMap["subscription_url"] = buildSubscriptionURL(r, token)
+					}
 					isCurrentlyConnected := currentlyConnected[name]
 					if name == "sandman" || isCurrentlyConnected {
 						log.Printf("DEBUG: Client %s - isCurrentlyConnected=%v, connectedSince=%v",
@@ -1322,6 +1329,445 @@ func renewSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSuccess(w, fmt.Sprintf("Subscription renewed for %d days", req.Days), nil)
 }
+
+func generateSubscriptionToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func ensureClientSubscriptionToken(name string) (string, error) {
+	clientPath := filepath.Join(DataBaseDir, "database", "clients", name+".json")
+
+	data, err := os.ReadFile(clientPath)
+	if err != nil {
+		return "", err
+	}
+
+	var clientData map[string]interface{}
+	if err := json.Unmarshal(data, &clientData); err != nil {
+		return "", err
+	}
+
+	if token, ok := clientData["subscription_token"].(string); ok && token != "" {
+		return token, nil
+	}
+
+	token, err := generateSubscriptionToken()
+	if err != nil {
+		return "", err
+	}
+
+	clientData["subscription_token"] = token
+
+	out, err := json.MarshalIndent(clientData, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(clientPath, out, 0644); err != nil {
+		return "", err
+	}
+
+	return token, nil
+}
+
+func buildSubscriptionURL(r *http.Request, token string) string {
+	scheme := "http"
+
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+		scheme = strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+
+	host := r.Host
+	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = strings.TrimSpace(strings.Split(forwardedHost, ",")[0])
+	}
+
+	hostname := host
+	if strings.Contains(host, ":") {
+		hostname = strings.Split(host, ":")[0]
+	}
+
+	// Subscription public port is separated from admin panel port.
+	return fmt.Sprintf("%s://%s:8090/sub/%s", scheme, hostname, token)
+}
+
+func findClientBySubscriptionToken(token string) (string, map[string]interface{}, error) {
+	if len(token) < 32 {
+		return "", nil, fmt.Errorf("invalid token")
+	}
+
+	clientsDir := filepath.Join(DataBaseDir, "database", "clients")
+	entries, err := os.ReadDir(clientsDir)
+	if err != nil {
+		return "", nil, err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		path := filepath.Join(clientsDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var clientData map[string]interface{}
+		if err := json.Unmarshal(data, &clientData); err != nil {
+			continue
+		}
+
+		if savedToken, ok := clientData["subscription_token"].(string); ok && savedToken == token {
+			name := strings.TrimSuffix(entry.Name(), ".json")
+			if jsonName, ok := clientData["name"].(string); ok && jsonName != "" {
+				name = jsonName
+			}
+			return name, clientData, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("subscription not found")
+}
+
+func subInt64(v interface{}) int64 {
+	switch t := v.(type) {
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case float32:
+		return int64(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return n
+	case string:
+		var n int64
+		fmt.Sscanf(t, "%d", &n)
+		return n
+	default:
+		return 0
+	}
+}
+
+func subFormatBytes(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(n)
+	unit := 0
+
+	for value >= 1000 && unit < len(units)-1 {
+		value = value / 1000
+		unit++
+	}
+
+	if unit == 0 {
+		return fmt.Sprintf("%d %s", n, units[unit])
+	}
+
+	return fmt.Sprintf("%.2f %s", value, units[unit])
+}
+
+func subDaysLeft(clientData map[string]interface{}) string {
+	raw, ok := clientData["expires_at"].(string)
+	if !ok || raw == "" {
+		return "Unlimited"
+	}
+
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return "Unknown"
+	}
+
+	d := time.Until(t)
+	if d <= 0 {
+		return "Expired"
+	}
+
+	days := int(d.Hours()+23) / 24
+	return fmt.Sprintf("%d days", days)
+}
+
+func getClientSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+
+	token, err := ensureClientSubscriptionToken(name)
+	if err != nil {
+		sendError(w, "Failed to create subscription link: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := map[string]string{
+		"name":               name,
+		"subscription_token": token,
+		"subscription_url":   buildSubscriptionURL(r, token),
+	}
+
+	sendSuccess(w, "Subscription link retrieved", data)
+}
+
+func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
+	token := mux.Vars(r)["token"]
+
+	clientName, clientData, err := findClientBySubscriptionToken(token)
+	if err != nil {
+		http.Error(w, "Subscription not found", http.StatusNotFound)
+		return
+	}
+
+	limit := subInt64(clientData["traffic_limit_bytes"])
+	used := subInt64(clientData["traffic_used_bytes"])
+
+	if used <= 0 {
+		used = subInt64(clientData["upload"]) + subInt64(clientData["download"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["bytes_sent"]) + subInt64(clientData["bytes_received"])
+	}
+
+	left := int64(0)
+	if limit > 0 && used < limit {
+		left = limit - used
+	}
+
+	status := fmt.Sprintf("%v", clientData["status"])
+	if status == "" || status == "<nil>" {
+		status = "active"
+	}
+
+	statusText := "فعال"
+	statusLower := strings.ToLower(status)
+	if strings.Contains(statusLower, "traffic") || strings.Contains(statusLower, "exceeded") {
+		statusText = "اتمام حجم"
+	} else if strings.Contains(statusLower, "expired") || strings.Contains(statusLower, "expire") {
+		statusText = "اتمام زمان"
+	} else if strings.Contains(statusLower, "inactive") || strings.Contains(statusLower, "disabled") {
+		statusText = "غیرفعال"
+	}
+
+	onlineText := "آفلاین"
+	if data, err := os.ReadFile("/etc/openvpn/openvpn-status.log"); err == nil {
+		inClients := false
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+
+			if strings.HasPrefix(line, "Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since") {
+				inClients = true
+				continue
+			}
+
+			if strings.HasPrefix(line, "ROUTING TABLE") {
+				inClients = false
+				continue
+			}
+
+			if !inClients || line == "" {
+				continue
+			}
+
+			parts := strings.Split(line, ",")
+			if len(parts) > 0 && parts[0] == clientName {
+				onlineText = "آنلاین"
+				break
+			}
+		}
+	}
+
+	daysLeft := subDaysLeft(clientData)
+	daysLeft = strings.ReplaceAll(daysLeft, " days", " روز")
+	daysLeft = strings.ReplaceAll(daysLeft, " day", " روز")
+	daysLeft = strings.ReplaceAll(daysLeft, "Unlimited", "نامحدود")
+	daysLeft = strings.ReplaceAll(daysLeft, "Expired", "تمام شده")
+	daysLeft = strings.ReplaceAll(daysLeft, "Unknown", "نامشخص")
+
+	limitText := "نامحدود"
+	leftText := "نامحدود"
+	if limit > 0 {
+		limitText = subFormatBytes(limit)
+		leftText = subFormatBytes(left)
+	}
+
+	progressPercent := 0.0
+	if limit > 0 {
+		progressPercent = float64(used) * 100 / float64(limit)
+		if progressPercent > 100 {
+			progressPercent = 100
+		}
+		if progressPercent < 0 {
+			progressPercent = 0
+		}
+	}
+
+	progressText := "مصرف نامحدود"
+	if limit > 0 {
+		progressText = fmt.Sprintf("%s از %s مصرف شده است", subFormatBytes(used), subFormatBytes(limit))
+	}
+
+	downloadURL := "/sub/" + template.URLQueryEscaper(token) + "/download"
+	subURL := buildSubscriptionURL(r, token)
+
+	pageData := map[string]interface{}{
+		"ClientName":      clientName,
+		"Status":          statusText,
+		"OnlineStatus":    onlineText,
+		"Limit":           limitText,
+		"Used":            subFormatBytes(used),
+		"Left":            leftText,
+		"DaysLeft":        daysLeft,
+		"ProgressPercent": fmt.Sprintf("%.2f", progressPercent),
+		"ProgressText":    progressText,
+		"DownloadURL":     downloadURL,
+		"SubscriptionURL": subURL,
+	}
+
+	tpl := template.Must(template.New("sub").Parse(`<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لینک ساب - {{.ClientName}}</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(circle at top left,#3b0764 0,#020617 34%,#020617 100%);color:#e5e7eb;min-height:100vh}
+.top{height:48px;background:rgba(15,23,42,.72);border-bottom:1px solid rgba(148,163,184,.12);display:flex;align-items:center;justify-content:flex-start;padding:0 24px}
+.dot{width:22px;height:22px;border-radius:50%;background:#2dd4bf;box-shadow:0 0 18px rgba(45,212,191,.8);border:6px solid rgba(15,23,42,.85)}
+.wrap{max-width:1120px;margin:24px auto;padding:0 16px}
+.card{background:rgba(15,23,42,.78);border:1px solid rgba(148,163,184,.16);border-radius:18px;box-shadow:0 22px 70px rgba(0,0,0,.38);padding:16px}
+.profile{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}
+.user{display:flex;align-items:center;gap:14px}
+.avatar{width:82px;height:82px;border-radius:22px;background:linear-gradient(135deg,#22d3ee,#6366f1);display:flex;align-items:center;justify-content:center;font-size:42px;box-shadow:0 0 30px rgba(34,211,238,.28)}
+.name{font-size:20px;font-weight:800;color:#fff}
+.pass{font-size:13px;color:#94a3b8;margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+.stat{background:rgba(30,41,59,.72);border:1px solid rgba(148,163,184,.14);border-radius:16px;padding:18px;text-align:center}
+.stat.ok{background:rgba(6,78,59,.42);border-color:rgba(16,185,129,.36)}
+.label{font-size:12px;color:#94a3b8;margin-bottom:8px}
+.value{font-size:16px;font-weight:900;color:#e0f2fe}
+.value.green{color:#00f5a0}
+.usage{margin-top:20px;background:rgba(30,41,59,.72);border:1px solid rgba(148,163,184,.14);border-radius:14px;padding:14px}
+.usage-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#94a3b8;margin-bottom:10px}
+.bar{height:8px;background:#090d22;border-radius:999px;overflow:hidden}
+.fill{height:100%;width:{{.ProgressPercent}}%;background:linear-gradient(90deg,#06b6d4,#00f5a0);border-radius:999px;box-shadow:0 0 18px rgba(34,211,238,.5)}
+.usage-text{text-align:left;direction:ltr;color:#94a3b8;font-size:12px;margin-top:10px}
+.section{margin-top:24px;background:rgba(15,23,42,.78);border:1px solid rgba(148,163,184,.16);border-radius:18px;padding:16px}
+.section-title{font-weight:900;font-size:16px;color:#fff;margin-bottom:16px}
+.config{display:flex;align-items:center;justify-content:space-between;gap:16px;background:rgba(15,23,42,.82);border:1px solid rgba(148,163,184,.14);border-radius:14px;padding:16px}
+.config-name{font-size:16px;font-weight:900;color:#fff}
+.badge{display:inline-flex;align-items:center;justify-content:center;margin-left:8px;padding:3px 8px;border-radius:999px;background:#064e3b;color:#5eead4;font-size:11px;font-weight:800}
+.meta{font-size:12px;color:#94a3b8;margin-top:8px;line-height:1.8}
+.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.btn{border:0;cursor:pointer;text-decoration:none;padding:13px 18px;border-radius:13px;font-weight:900;font-size:14px}
+.btn-main{background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#020617}
+.btn-ghost{background:rgba(30,41,59,.8);border:1px solid rgba(148,163,184,.24);color:#e5e7eb}
+.footer{margin-top:16px;text-align:center;color:#64748b;font-size:12px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.profile,.config{flex-direction:column;align-items:stretch}.actions{justify-content:stretch}.btn{text-align:center;flex:1}.avatar{width:72px;height:72px}}
+</style>
+</head>
+<body>
+<div class="top"><div class="dot"></div></div>
+
+<div class="wrap">
+  <div class="card">
+    <div class="profile">
+      <div class="user">
+        <div class="avatar">👨🏻‍💻</div>
+        <div>
+          <div class="name">نام کاربری: {{.ClientName}}</div>
+          <div class="pass">رمز عبور: فایل کانفیگ OpenVPN</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="stat">
+        <div class="label">وضعیت آنلاین</div>
+        <div class="value">{{.OnlineStatus}}</div>
+      </div>
+      <div class="stat">
+        <div class="label">زمان باقی‌مانده</div>
+        <div class="value">{{.DaysLeft}}</div>
+      </div>
+      <div class="stat ok">
+        <div class="label">وضعیت سرویس</div>
+        <div class="value green">{{.Status}}</div>
+      </div>
+    </div>
+
+    <div class="usage">
+      <div class="usage-head">
+        <span>{{.ProgressPercent}}%</span>
+        <span>مصرف ترافیک</span>
+      </div>
+      <div class="bar"><div class="fill"></div></div>
+      <div class="usage-text">{{.ProgressText}}</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">OpenVPN</div>
+
+    <div class="config">
+      <div>
+        <div class="config-name"><span class="badge">OVPN</span> کانفیگ اختصاصی {{.ClientName}}</div>
+        <div class="meta">
+          حجم کل: {{.Limit}}<br>
+          مصرف‌شده: {{.Used}}<br>
+          باقی‌مانده: {{.Left}}
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn-main" href="{{.DownloadURL}}">دانلود فایل .ovpn</a>
+        
+      </div>
+    </div>
+
+    <div class="footer">این لینک خصوصی است؛ هر کسی لینک را داشته باشد می‌تواند وضعیت سرویس و فایل کانفیگ را دریافت کند.</div>
+  </div>
+</div>
+
+</body>
+</html>`))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	tpl.Execute(w, pageData)
+}
+
+func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	token := mux.Vars(r)["token"]
+
+	clientName, _, err := findClientBySubscriptionToken(token)
+	if err != nil {
+		http.Error(w, "Subscription not found", http.StatusNotFound)
+		return
+	}
+
+	configPath := filepath.Join("/etc/openvpn/client", clientName+".ovpn")
+	if _, err := os.Stat(configPath); err != nil {
+		http.Error(w, "Config file not found", http.StatusNotFound)
+		return
+	}
+
+	safeName := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(clientName)
+
+	w.Header().Set("Content-Type", "application/x-openvpn-profile")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.ovpn\"", safeName))
+	http.ServeFile(w, r, configPath)
+}
+
 func main() {
 	if err := initDatabases(); err != nil {
 		log.Fatal("Failed to initialize databases:", err)
@@ -1371,6 +1817,8 @@ func main() {
 		r = rootRouter.PathPrefix(basePath).Subrouter()
 	}
 	r.HandleFunc("/ws", wsHandler)
+	r.HandleFunc("/sub/{token}", subscriptionPageHandler).Methods("GET")
+	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
 	r.HandleFunc("/api/health", healthHandler).Methods("GET")
 	api := r.PathPrefix("/api").Subrouter()
@@ -1382,6 +1830,7 @@ func main() {
 	api.HandleFunc("/clients/{name}/activate", activateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/deactivate", deactivateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/status", getClientStatusHandler).Methods("GET")
+	api.HandleFunc("/clients/{name}/subscription", getClientSubscriptionHandler).Methods("GET")
 	api.HandleFunc("/clients/{name}/export", exportClientHandler).Methods("GET")
 	api.HandleFunc("/clients/orphaned", getOrphanedClientsHandler).Methods("GET")
 	api.HandleFunc("/clients/cleanup-orphaned", cleanupOrphanedHandler).Methods("POST")
