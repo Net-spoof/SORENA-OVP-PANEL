@@ -173,8 +173,8 @@ cd "$EASYRSA_DIR"
 case "$ACTION" in
   create)
     if [ ! -f "pki/issued/$SAFE_NAME.crt" ]; then
-      ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null
-      ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null
+      EASYRSA_REQ_CN="$SAFE_NAME" ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null 2>&1
+      ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null 2>&1
     fi
 
     cat > "$OVPN_FILE" <<OVPN
