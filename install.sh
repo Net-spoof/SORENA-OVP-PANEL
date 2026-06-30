@@ -38,6 +38,7 @@ BASE = Path("/opt/irangate")
 CLIENTS_DIR = BASE / "database" / "clients"
 TRAFFIC_DIR = BASE / "traffic"
 LOG = Path("/var/log/irangate-connection-guard.log")
+BASELINES_PATH = TRAFFIC_DIR / "guard_session_baselines.json"
 
 MGMT_HOST = os.environ.get("IRANGATE_MGMT_HOST", "127.0.0.1")
 MGMT_PORT = int(os.environ.get("IRANGATE_MGMT_PORT", "7505"))
@@ -182,6 +183,78 @@ def usage_maps():
 
     return current, current_split, cumulative, cumulative_split
 
+
+def as_int(v):
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+def session_key(cn, sess):
+    return f"{cn}|{sess.get('real', '')}|{sess.get('connected_ts', 0)}"
+
+def calculate_enforced_usage(cn, client, cn_sessions, cumulative):
+    # Stable usage must come ONLY from client.json.
+    # current_stats/cumulative_totals can be stale or inflated after reconnect/reactivation.
+    json_used = as_int(client.get("traffic_used_bytes"))
+    json_bytes = as_int(client.get("bytes_sent")) + as_int(client.get("bytes_received"))
+
+    stored_used = max(json_used, json_bytes)
+
+    if not cn_sessions:
+        return stored_used
+
+    baselines = read_json(BASELINES_PATH, {})
+    if not isinstance(baselines, dict):
+        baselines = {}
+
+    changed = False
+    alive_keys = set()
+    session_delta = 0
+
+    for sess in cn_sessions:
+        key = session_key(cn, sess)
+        alive_keys.add(key)
+
+        live_total = as_int(sess.get("total"))
+        base = baselines.get(key)
+
+        if not isinstance(base, dict):
+            base = {
+                "base_used": stored_used,
+                "base_session_total": live_total,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            baselines[key] = base
+            changed = True
+
+        base_used = as_int(base.get("base_used"))
+        base_session_total = as_int(base.get("base_session_total"))
+
+        delta = live_total - base_session_total
+        if delta < 0:
+            delta = 0
+
+        session_delta += delta
+
+    # Remove old baselines for this client after reconnects/disconnects.
+    prefix = f"{cn}|"
+    for key in list(baselines.keys()):
+        if key.startswith(prefix) and key not in alive_keys:
+            baselines.pop(key, None)
+            changed = True
+
+    if changed:
+        write_json(BASELINES_PATH, baselines)
+
+    baseline_used = stored_used
+    for key in alive_keys:
+        base = baselines.get(key, {})
+        baseline_used = max(baseline_used, as_int(base.get("base_used")))
+
+    return max(stored_used, baseline_used + session_delta)
+
+
 def client_path(cn):
     return CLIENTS_DIR / f"{cn}.json"
 
@@ -272,6 +345,48 @@ def kill_client_sessions(cn, sessions, reason):
 def mark_exceeded(cn, client, used, recv, sent, limit):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+    try:
+        used = int(used or 0)
+    except Exception:
+        used = 0
+
+    try:
+        limit = int(limit or 0)
+    except Exception:
+        limit = 0
+
+    try:
+        recv = int(recv or 0)
+    except Exception:
+        recv = 0
+
+    try:
+        sent = int(sent or 0)
+    except Exception:
+        sent = 0
+
+    # Critical rule:
+    # When quota is exceeded, freeze displayed usage at the quota limit.
+    # Do NOT write inflated current_stats/session values into client.json.
+    if limit > 0:
+        used = limit
+
+    # Prefer existing stable split if the incoming split is empty.
+    if recv + sent <= 0:
+        recv = int(client.get("bytes_received") or client.get("download") or 0)
+        sent = int(client.get("bytes_sent") or client.get("upload") or 0)
+
+    total = recv + sent
+
+    # Scale upload/download to exactly match frozen used bytes.
+    if used > 0 and total != used:
+        if total > 0:
+            sent = int(used * sent / total)
+            recv = used - sent
+        else:
+            sent = int(used * 0.32)
+            recv = used - sent
+
     client["active"] = False
     client["status"] = "traffic_limit_exceeded"
     client["traffic_used_bytes"] = int(used)
@@ -279,12 +394,80 @@ def mark_exceeded(cn, client, used, recv, sent, limit):
     client["bytes_sent"] = int(sent)
     client["download"] = int(recv)
     client["upload"] = int(sent)
-    client["data_used_mb"] = int(used // 1048576)
+    client["data_used_mb"] = int(used // 1000000)
     client["traffic_exceeded_at"] = now
     client["last_update"] = now
 
     write_json(client_path(cn), client)
     sync_traffic_files(cn, used, recv, sent, limit, connected=False)
+
+
+
+def mark_progress(cn, client, used, recv, sent, limit):
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    try:
+        used = int(used or 0)
+    except Exception:
+        used = 0
+
+    try:
+        limit = int(limit or 0)
+    except Exception:
+        limit = 0
+
+    try:
+        recv = int(recv or 0)
+    except Exception:
+        recv = 0
+
+    try:
+        sent = int(sent or 0)
+    except Exception:
+        sent = 0
+
+    old_used = int(client.get("traffic_used_bytes") or 0)
+    old_recv = int(client.get("bytes_received") or client.get("download") or 0)
+    old_sent = int(client.get("bytes_sent") or client.get("upload") or 0)
+
+    # Never decrease stored usage.
+    if used < old_used:
+        used = old_used
+
+    # Do not let progress write above limit. mark_exceeded handles exact limit lock.
+    if limit > 0 and used > limit:
+        used = limit
+
+    if used <= 0:
+        return
+
+    if recv + sent <= 0:
+        recv = old_recv
+        sent = old_sent
+
+    total = recv + sent
+
+    if used > 0 and total != used:
+        if total > 0:
+            sent = int(used * sent / total)
+            recv = used - sent
+        else:
+            sent = old_sent
+            recv = old_recv
+
+    client["traffic_used_bytes"] = int(used)
+    client["bytes_received"] = int(recv)
+    client["bytes_sent"] = int(sent)
+    client["download"] = int(recv)
+    client["upload"] = int(sent)
+    client["data_used_mb"] = int(used // 1000000)
+    client["active"] = True
+    client["status"] = "active"
+    client["last_update"] = now
+
+    write_json(client_path(cn), client)
+    sync_traffic_files(cn, used, recv, sent, limit, connected=True)
+
 
 def enforce_client(cn, sessions, maps):
     current, current_split, cumulative, cumulative_split = maps
@@ -310,23 +493,20 @@ def enforce_client(cn, sessions, maps):
     except Exception:
         json_used = 0
 
-    json_bytes = int(client.get("bytes_sent") or 0) + int(client.get("bytes_received") or 0)
-    live_used = max([int(sess.get("total") or 0) for sess in sessions.get(cn, [])] or [0])
-
-    used = max(
-        json_used,
-        json_bytes,
-        current.get(cn, 0),
-        cumulative.get(cn, 0),
-        live_used,
-    )
+    used = calculate_enforced_usage(cn, client, sessions.get(cn, []), cumulative)
 
     if limit > 0 and used >= limit:
-        recv, sent = best_split(cn, used, client, sessions, current_split, cumulative_split)
+        recv, sent = best_split(cn, used, client, sessions, {}, {})
         log(f"traffic limit exceeded client={cn} used={used} limit={limit} sessions={len(sessions.get(cn, []))}")
         kill_client_sessions(cn, sessions, "traffic_limit")
         mark_exceeded(cn, client, used, recv, sent, limit)
         return
+
+    # Persist live progress while the client is connected.
+    # This makes "left" decrease in the panel before quota is fully exhausted.
+    if sessions.get(cn) and used > int(client.get("traffic_used_bytes") or 0):
+        recv, sent = best_split(cn, used, client, sessions, {}, {})
+        mark_progress(cn, client, used, recv, sent, limit)
 
     try:
         conn_limit = int(client.get("connection_limit") or 1)
@@ -386,7 +566,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 PYGUARD
 
     chmod +x /usr/local/bin/irangate-connection-guard

@@ -540,6 +540,70 @@ func enforceClientAfterEdit(name string, resetTraffic bool) {
 	}()
 }
 
+func adsFinalInt64(v interface{}) int64 {
+	switch t := v.(type) {
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case float32:
+		return int64(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return n
+	case string:
+		n, _ := strconv.ParseInt(t, 10, 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+func adsFinalExpiresInFuture(clientData map[string]interface{}) bool {
+	expiresRaw, ok := clientData["expires_at"]
+	if !ok {
+		return true
+	}
+
+	expiresStr := fmt.Sprintf("%v", expiresRaw)
+	if expiresStr == "" || expiresStr == "<nil>" {
+		return true
+	}
+
+	t, err := time.Parse(time.RFC3339, expiresStr)
+	if err != nil {
+		return true
+	}
+
+	return time.Now().UTC().Before(t)
+}
+
+func adsFinalReactivateAfterEdit(clientData map[string]interface{}, requestedActive *bool) {
+	if requestedActive == nil || !*requestedActive {
+		return
+	}
+
+	limit := adsFinalInt64(clientData["traffic_limit_bytes"])
+	used := adsFinalInt64(clientData["traffic_used_bytes"])
+
+	if used <= 0 {
+		used = adsFinalInt64(clientData["upload"]) + adsFinalInt64(clientData["download"])
+	}
+	if used <= 0 {
+		used = adsFinalInt64(clientData["bytes_sent"]) + adsFinalInt64(clientData["bytes_received"])
+	}
+
+	if (limit <= 0 || used < limit) && adsFinalExpiresInFuture(clientData) {
+		clientData["active"] = true
+		clientData["status"] = "active"
+		delete(clientData, "traffic_exceeded_at")
+	}
+}
+
 func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := strings.TrimSpace(vars["name"])
@@ -622,6 +686,8 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 			clientData["status"] = "inactive"
 		}
 	}
+
+	adsFinalReactivateAfterEdit(clientData, req.Active)
 
 	clientData["last_update"] = time.Now().UTC().Format(time.RFC3339)
 

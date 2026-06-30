@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clients - IranGate</title>
+    <title>Clients - adsvpn</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
     <link rel="stylesheet" href="css/loading.css">
@@ -268,13 +268,26 @@
 
         // Render clients table
         function getClientUsedBytes(client) {
+            const trafficUsed = Number(client.traffic_used_bytes || 0);
+
+            // upload/download are the persisted client.json values.
+            // bytes_sent/bytes_received may be overwritten by current_stats in API.
+            const stableUploadDownload =
+                Number(client.upload || 0) +
+                Number(client.download || 0);
+
+            const byteUploadDownload =
+                Number(client.bytes_sent || 0) +
+                Number(client.bytes_received || 0);
+
+            if (trafficUsed > 0) return trafficUsed;
+            if (stableUploadDownload > 0) return stableUploadDownload;
+            if (byteUploadDownload > 0) return byteUploadDownload;
+
             return Math.max(
-                Number(client.traffic_used_bytes || 0),
                 Number(client.current_total || 0),
                 Number(client.monthly_usage || 0),
-                Number(client.daily_usage || 0),
-                Number(client.data_used_mb || 0) * 1048576,
-                Number(client.bytes_sent || 0) + Number(client.bytes_received || 0)
+                Number(client.daily_usage || 0)
             );
         }
 
@@ -311,25 +324,37 @@
         function getClientTrafficDisplay(client) {
             const used = getClientUsedBytes(client);
 
-            let up = Number(client.bytes_sent || client.upload || client.current_sent || 0);
-            let down = Number(client.bytes_received || client.download || client.current_received || 0);
+            // Prefer stable persisted values from client.json.
+            let upload = Number(client.upload || 0);
+            let download = Number(client.download || 0);
 
-            const directTotal = up + down;
-
-            if (used > 0 && directTotal > 0 && directTotal !== used) {
-                up = Math.round(used * up / directTotal);
-                down = used - up;
+            // Fallback only if upload/download do not exist.
+            if (upload + download <= 0) {
+                upload = Number(client.bytes_sent || 0);
+                download = Number(client.bytes_received || 0);
             }
 
-            if (used > 0 && directTotal <= 0) {
-                up = used;
-                down = 0;
+            if (upload + download <= 0) {
+                upload = Number(client.current_sent || 0);
+                download = Number(client.current_received || 0);
+            }
+
+            const sum = upload + download;
+
+            if (used > 0 && sum > 0 && sum !== used) {
+                upload = Math.round(used * upload / sum);
+                download = used - upload;
+            }
+
+            if (used > 0 && upload + download <= 0) {
+                upload = Math.round(used * 0.7);
+                download = used - upload;
             }
 
             return {
-                upload: Math.max(0, up),
-                download: Math.max(0, down),
-                total: Math.max(0, used)
+                upload: Math.max(0, Math.round(upload)),
+                download: Math.max(0, Math.round(download)),
+                total: Math.max(0, Math.round(used))
             };
         }
 
@@ -619,16 +644,29 @@
             document.getElementById('editClientModal').classList.add('hidden');
         }
 
+        function quotaUnitMultiplier(unit) {
+            switch (unit) {
+                case 'MB':
+                    return 1000 * 1000;
+                case 'GB':
+                    return 1000 * 1000 * 1000;
+                case 'TB':
+                    return 1000 * 1000 * 1000 * 1000;
+                default:
+                    return 1000 * 1000;
+            }
+        }
+
         function bytesToBestUnit(bytes) {
             bytes = Number(bytes || 0);
             if (bytes <= 0) return {value: 0, unit: 'GB'};
-            const tb = 1024 * 1024 * 1024 * 1024;
-            const gb = 1024 * 1024 * 1024;
-            const mb = 1024 * 1024;
 
-            if (bytes >= tb && bytes % tb === 0) return {value: bytes / tb, unit: 'TB'};
-            if (bytes >= gb && bytes % gb === 0) return {value: bytes / gb, unit: 'GB'};
-            if (bytes >= mb) return {value: Math.round((bytes / mb) * 100) / 100, unit: 'MB'};
+            const tb = quotaUnitMultiplier('TB');
+            const gb = quotaUnitMultiplier('GB');
+            const mb = quotaUnitMultiplier('MB');
+
+            if (bytes >= tb) return {value: Math.round((bytes / tb) * 100) / 100, unit: 'TB'};
+            if (bytes >= gb) return {value: Math.round((bytes / gb) * 100) / 100, unit: 'GB'};
             return {value: Math.round((bytes / mb) * 100) / 100, unit: 'MB'};
         }
 
@@ -654,28 +692,20 @@
             document.getElementById('editTrafficLimit').value = limit.value;
             document.getElementById('editTrafficUnit').value = limit.unit;
             document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
-            document.getElementById('editActive').checked = !!client.active;
+            document.getElementById('editActive').checked = true;
             document.getElementById('editResetTraffic').checked = false;
 
             document.getElementById('editClientModal').classList.remove('hidden');
         }
 
         function editTrafficLimitBytes() {
-            const trafficLimit = parseFloat(document.getElementById('editTrafficLimit').value) || 0;
+            const rawValue = String(document.getElementById('editTrafficLimit').value || '').replace(',', '.');
+            const trafficLimit = parseFloat(rawValue) || 0;
             const trafficUnit = document.getElementById('editTrafficUnit').value;
 
             if (trafficLimit <= 0) return 0;
 
-            switch (trafficUnit) {
-                case 'MB':
-                    return Math.round(trafficLimit * 1024 * 1024);
-                case 'GB':
-                    return Math.round(trafficLimit * 1024 * 1024 * 1024);
-                case 'TB':
-                    return Math.round(trafficLimit * 1024 * 1024 * 1024 * 1024);
-                default:
-                    return 0;
-            }
+            return Math.round(trafficLimit * quotaUnitMultiplier(trafficUnit));
         }
 
         async function submitEditClient(e) {
@@ -1023,11 +1053,20 @@
 
         // Utility functions
         function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            bytes = Number(bytes || 0);
+            if (bytes <= 0) return '0 B';
+
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let size = bytes;
+            let unitIndex = 0;
+
+            while (size >= 1000 && unitIndex < units.length - 1) {
+                size = size / 1000;
+                unitIndex++;
+            }
+
+            if (unitIndex === 0) return `${Math.round(size)} ${units[unitIndex]}`;
+            return `${Math.round(size * 100) / 100} ${units[unitIndex]}`;
         }
 
         function formatDate(dateString) {
@@ -1109,9 +1148,9 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Traffic Limit</label>
                     <div class="flex space-x-2">
-                        <input type="number" id="editTrafficLimit" min="0" step="0.01"
+                        <input type="number" id="editTrafficLimit" min="0"
                                class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                               placeholder="0 = Unlimited">
+                               placeholder="0 = Unlimited" step="any" inputmode="decimal">
                         <select id="editTrafficUnit" class="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
                             <option value="MB">MB</option>
                             <option value="GB">GB</option>
