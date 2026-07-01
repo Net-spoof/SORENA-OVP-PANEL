@@ -106,6 +106,12 @@ function createSidebar(activePage) {
                         <span>Inbound</span>
                         <span class="badge beta">💫 Coming Soon</span>
                     </a>
+                    <a href="nodes.html" class="menu-item ${activePage === 'nodes' ? 'active' : ''}" title="Nodes">
+                        <i data-lucide="server" class="w-5 h-5"></i>
+                        <span>Nodes</span>
+                    </a>
+
+
 
                     <a href="server-checker.html" class="menu-item ${activePage === 'server-checker' ? 'active' : ''}" title="Server Checker">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">

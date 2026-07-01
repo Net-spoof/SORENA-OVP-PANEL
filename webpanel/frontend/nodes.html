@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>IranGate Nodes</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="max-w-6xl mx-auto p-6">
+        <div class="flex items-center justify-between mb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Nodes / Locations</h1>
+                <p class="text-gray-500 mt-1">Manage OpenVPN locations connected to this panel</p>
+            </div>
+
+            <div class="flex gap-2">
+                <a href="/clients.html" class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-lg">
+                    Clients
+                </a>
+                <button onclick="loadNodes()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <div id="messageBox" class="hidden mb-4 p-4 rounded-lg"></div>
+
+        <div class="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Add New Node</h2>
+
+            <form id="nodeForm" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Node ID</label>
+                    <input id="nodeId" class="w-full border rounded-lg px-3 py-2" placeholder="turkey" required>
+                    <p class="text-xs text-gray-500 mt-1">Example: turkey, finland, netherlands</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
+                    <input id="nodeName" class="w-full border rounded-lg px-3 py-2" placeholder="Turkey Node" required>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Location Code</label>
+                    <input id="nodeLocation" class="w-full border rounded-lg px-3 py-2" placeholder="TR" required>
+                    <p class="text-xs text-gray-500 mt-1">Example: DE, TR, FI, NL, US</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Flag / Emoji</label>
+                    <input id="nodeFlag" class="w-full border rounded-lg px-3 py-2" placeholder="🇳🇱">
+                    <p class="text-xs text-gray-500 mt-1">Example: 🇩🇪 🇳🇱 🇹🇷 🇫🇮</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Public IP</label>
+                    <input id="nodePublicIp" class="w-full border rounded-lg px-3 py-2" placeholder="1.2.3.4">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Agent URL</label>
+                    <input id="nodeAgentUrl" class="w-full border rounded-lg px-3 py-2" placeholder="http://1.2.3.4:8091" required>
+                    <p class="text-xs text-gray-500 mt-1">The node-agent API address</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Token</label>
+                    <input id="nodeToken" class="w-full border rounded-lg px-3 py-2" placeholder="secret token">
+                </div>
+
+                <div class="md:col-span-2 flex justify-end">
+                    <button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg font-semibold">
+                        Add Node
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div class="bg-white rounded-xl shadow overflow-hidden">
+            <div class="p-5 border-b">
+                <h2 class="text-xl font-bold text-gray-800">Configured Nodes</h2>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="text-left p-4 text-sm font-semibold text-gray-600">ID</th>
+                            <th class="text-left p-4 text-sm font-semibold text-gray-600">Name</th>
+                            <th class="text-left p-4 text-sm font-semibold text-gray-600">Location</th>
+                            <th class="text-left p-4 text-sm font-semibold text-gray-600">Agent</th>
+                            <th class="text-left p-4 text-sm font-semibold text-gray-600">Status</th>
+                            <th class="text-right p-4 text-sm font-semibold text-gray-600">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="nodesTable">
+                        <tr>
+                            <td colspan="6" class="p-6 text-center text-gray-500">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Edit Node Modal -->
+    <div id="editNodeModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-xl p-6 max-w-lg w-full mx-4">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Edit Node</h2>
+
+            <form id="editNodeForm" class="space-y-4">
+                <input type="hidden" id="editNodeId">
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
+                    <input id="editNodeName" class="w-full border rounded-lg px-3 py-2" placeholder="Germany Master">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Flag / Emoji</label>
+                    <input id="editNodeFlag" class="w-full border rounded-lg px-3 py-2" placeholder="🇩🇪">
+                    <p class="text-xs text-gray-500 mt-1">Example: 🇩🇪 🇳🇱 🇹🇷 🇫🇮</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Location Code</label>
+                    <input id="editNodeLocation" class="w-full border rounded-lg px-3 py-2" placeholder="DE">
+                </div>
+
+                <div id="editRemoteFields" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Public IP</label>
+                        <input id="editNodePublicIp" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Agent URL</label>
+                        <input id="editNodeAgentUrl" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Token</label>
+                        <input id="editNodeToken" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" id="editNodeEnabled">
+                    <span>Enabled</span>
+                </label>
+
+                <div class="flex gap-3 pt-2">
+                    <button type="button" onclick="hideEditNodeModal()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 rounded-lg font-semibold">
+                        Cancel
+                    </button>
+                    <button type="button" onclick="saveEditNodeManual()" class="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg font-semibold">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+<script>
+
+let currentNodes = [];
+
+function openEditNode(id) {
+    const node = currentNodes.find(n => n.id === id);
+    if (!node) {
+        showMessage('Node not found: ' + id, 'error');
+        return;
+    }
+
+    document.getElementById('editNodeId').value = node.id || '';
+    document.getElementById('editNodeName').value = node.name || '';
+    document.getElementById('editNodeFlag').value = node.flag || node.location || '';
+    document.getElementById('editNodeLocation').value = node.location || '';
+    document.getElementById('editNodePublicIp').value = node.public_ip || '';
+    document.getElementById('editNodeAgentUrl').value = node.agent_url || '';
+    document.getElementById('editNodeToken').value = node.token || '';
+    document.getElementById('editNodeEnabled').checked = node.enabled !== false;
+
+    const remoteFields = document.getElementById('editRemoteFields');
+    remoteFields.style.display = node.is_local ? 'none' : 'block';
+
+    document.getElementById('editNodeModal').classList.remove('hidden');
+}
+
+function hideEditNodeModal() {
+    document.getElementById('editNodeModal').classList.add('hidden');
+}
+
+async function saveEditNodeManual() {
+    return saveEditNode({ preventDefault: () => {} });
+}
+
+async function saveEditNode(e) {
+    e.preventDefault();
+
+    const id = document.getElementById('editNodeId').value;
+    const existing = currentNodes.find(n => n.id === id) || {};
+    const isLocal = !!existing.is_local;
+
+    const payload = {
+        id: id,
+        name: document.getElementById('editNodeName').value.trim() || id,
+        flag: document.getElementById('editNodeFlag').value.trim(),
+        location: document.getElementById('editNodeLocation').value.trim().toUpperCase(),
+        public_ip: isLocal ? '' : document.getElementById('editNodePublicIp').value.trim(),
+        agent_url: isLocal ? 'local' : document.getElementById('editNodeAgentUrl').value.trim(),
+        token: isLocal ? '' : document.getElementById('editNodeToken').value.trim(),
+        enabled: document.getElementById('editNodeEnabled').checked,
+        is_local: isLocal
+    };
+
+    try {
+        await apiRequest('/nodes/' + encodeURIComponent(id), {
+            method: 'PUT',
+            body: JSON.stringify(payload)
+        });
+
+        showMessage('Node updated successfully');
+        hideEditNodeModal();
+        await document.getElementById('editNodeForm').addEventListener('submit', saveEditNode);
+loadNodes();
+    } catch (err) {
+        showMessage(err.message, 'error');
+    }
+}
+
+
+function getToken() {
+    return localStorage.getItem('token')
+        || localStorage.getItem('authToken')
+        || localStorage.getItem('jwt')
+        || localStorage.getItem('irangate_token')
+        || sessionStorage.getItem('token')
+        || sessionStorage.getItem('authToken')
+        || '';
+}
+
+async function apiRequest(path, options = {}) {
+    const token = getToken();
+    const headers = options.headers || {};
+    headers['Content-Type'] = 'application/json';
+
+    if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+    }
+
+    const res = await fetch('/api' + path, {
+        ...options,
+        headers
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || data.success === false) {
+        throw new Error(data.message || 'Request failed');
+    }
+
+    return data;
+}
+
+function showMessage(text, type = 'success') {
+    const box = document.getElementById('messageBox');
+    box.className = 'mb-4 p-4 rounded-lg ' + (
+        type === 'error'
+            ? 'bg-red-100 text-red-700'
+            : 'bg-green-100 text-green-700'
+    );
+    box.textContent = text;
+    box.classList.remove('hidden');
+
+    setTimeout(() => box.classList.add('hidden'), 4000);
+}
+
+function esc(v) {
+    return String(v ?? '').replace(/[&<>"']/g, m => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    }[m]));
+}
+
+async function loadNodes() {
+    const tbody = document.getElementById('nodesTable');
+    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">Loading...</td></tr>`;
+
+    try {
+        const result = await apiRequest('/nodes');
+        const nodes = result.data || [];
+        currentNodes = nodes;
+
+        if (!nodes.length) {
+            tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No nodes found</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = nodes.map(node => `
+            <tr class="border-t hover:bg-gray-50">
+                <td class="p-4 font-mono text-sm">${esc(node.id)}</td>
+                <td class="p-4">
+                    <div class="font-semibold text-gray-800"><span class="text-lg mr-1">${esc(node.flag || '')}</span>${esc(node.name)}</div>
+                    <div class="text-xs text-gray-500">${node.is_local ? 'Local Master' : esc(node.public_ip || '')}</div>
+                </td>
+                <td class="p-4">
+                    <span class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-sm font-semibold">${esc(node.location)}</span>
+                </td>
+                <td class="p-4 text-sm text-gray-600">${esc(node.agent_url)}</td>
+                <td class="p-4">
+                    <span class="px-2 py-1 rounded text-sm font-semibold ${node.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                        ${node.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                </td>
+                <td class="p-4 text-right">
+                    <button id="ping-${esc(node.id)}" onclick="pingNode('${esc(node.id)}')" class="ping-btn bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors">
+                        Ping
+                    </button>
+                    <button onclick="openEditNode('${esc(node.id)}')" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm ml-2" title="Edit Node">
+                        Edit
+                    </button>
+                    ${node.is_local ? '' : `
+                    <button onclick="deleteNode('${esc(node.id)}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm ml-2">
+                        Delete
+                    </button>
+                    `}
+                </td>
+            </tr>
+        `).join('');
+
+        setTimeout(() => {
+            nodes.forEach(node => pingNode(node.id, true));
+        }, 200);
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">${esc(err.message)}</td></tr>`;
+    }
+}
+
+function setPingButtonState(id, state, text) {
+    const btn = document.getElementById('ping-' + id);
+    if (!btn) return;
+
+    const base = 'ping-btn text-white px-3 py-1 rounded text-sm font-semibold transition-colors ';
+    const colors = {
+        pending: 'bg-yellow-500 hover:bg-yellow-600',
+        ok: 'bg-green-600 hover:bg-green-700',
+        fail: 'bg-red-600 hover:bg-red-700',
+        idle: 'bg-gray-600 hover:bg-gray-700'
+    };
+
+    btn.className = base + (colors[state] || colors.idle);
+    btn.textContent = text || 'Ping';
+}
+
+async function pingNode(id, silent = false) {
+    const btn = document.getElementById('ping-' + id);
+
+    try {
+        if (btn) btn.disabled = true;
+        setPingButtonState(id, 'pending', 'Checking...');
+
+        const result = await apiRequest('/nodes/' + encodeURIComponent(id) + '/ping');
+
+        const statusCode = result?.data?.status_code ? (' HTTP ' + result.data.status_code) : '';
+        const location = result?.data?.response?.location ? (' ' + result.data.response.location) : '';
+        const msg = 'Ping OK: ' + id + statusCode + location;
+
+        setPingButtonState(id, 'ok', 'Online');
+        if (!silent) showMessage(msg);
+        console.log('Node ping result:', result);
+    } catch (err) {
+        const msg = 'Ping failed: ' + (err && err.message ? err.message : err);
+
+        setPingButtonState(id, 'fail', 'Offline');
+        if (!silent) showMessage(msg, 'error');
+        console.error('Node ping failed:', err);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function deleteNode(id) {
+    if (!confirm('Delete node "' + id + '"?')) return;
+
+    try {
+        await apiRequest('/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
+        showMessage('Node deleted');
+        loadNodes();
+    } catch (err) {
+        showMessage(err.message, 'error');
+    }
+}
+
+document.getElementById('nodeForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const payload = {
+        id: document.getElementById('nodeId').value.trim(),
+        name: document.getElementById('nodeName').value.trim(),
+        location: document.getElementById('nodeLocation').value.trim().toUpperCase(),
+        public_ip: document.getElementById('nodePublicIp').value.trim(),
+        agent_url: document.getElementById('nodeAgentUrl').value.trim(),
+        token: document.getElementById('nodeToken').value.trim(),
+        enabled: true
+    };
+
+    try {
+        await apiRequest('/nodes', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        showMessage('Node added successfully');
+        e.target.reset();
+        loadNodes();
+    } catch (err) {
+        showMessage(err.message, 'error');
+    }
+});
+
+loadNodes();
+</script>
+</body>
+</html>

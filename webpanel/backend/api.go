@@ -30,6 +30,7 @@ var (
 	AdminDBPath     = filepath.Join(DataBaseDir, "webpanel", "admin.json")
 	TelegramDBPath  = filepath.Join(DataBaseDir, "webpanel", "telegram.json")
 	ServerDBPath    = filepath.Join(DataBaseDir, "webpanel", "server.json")
+	NodesDBPath     = filepath.Join(DataBaseDir, "webpanel", "nodes.json")
 	TemplatesPath   = filepath.Join(DataBaseDir, "webpanel", "templates")
 	JWTSecret       = readEnvOrDefault("JWT_SECRET", "your-secret-key-change-this-in-production")
 	TokenExpiration = 24 * time.Hour
@@ -64,6 +65,24 @@ type ServerConfig struct {
 	ServerDomain string `json:"server_domain"`
 	ServerPort   int    `json:"server_port"`
 	Protocol     string `json:"protocol"`
+}
+
+type NodeConfig struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Flag      string `json:"flag,omitempty"`
+	Location  string `json:"location"`
+	PublicIP  string `json:"public_ip"`
+	AgentURL  string `json:"agent_url"`
+	Token     string `json:"token,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	IsLocal   bool   `json:"is_local"`
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+type NodesFile struct {
+	Nodes []NodeConfig `json:"nodes"`
 }
 type Template struct {
 	Name        string    `json:"name"`
@@ -308,6 +327,33 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 						clientMap["subscription_token"] = token
 						clientMap["subscription_url"] = buildSubscriptionURL(r, token)
 					}
+
+					clientJSONPath := filepath.Join(DataBaseDir, "database", "clients", name+".json")
+					if diskDataBytes, err := os.ReadFile(clientJSONPath); err == nil {
+						var diskData map[string]interface{}
+						if err := json.Unmarshal(diskDataBytes, &diskData); err == nil {
+							if nodes, ok := diskData["nodes"]; ok {
+								clientMap["nodes"] = nodes
+							}
+							if email, ok := diskData["email"]; ok {
+								clientMap["email"] = email
+							}
+							if expiresAt, ok := diskData["expires_at"]; ok {
+								clientMap["expires_at"] = expiresAt
+							}
+							if limit, ok := diskData["traffic_limit_bytes"]; ok {
+								clientMap["traffic_limit_bytes"] = limit
+							}
+							if connLimit, ok := diskData["connection_limit"]; ok {
+								clientMap["connection_limit"] = connLimit
+							}
+						}
+					}
+
+					if _, ok := clientMap["nodes"]; !ok {
+						clientMap["nodes"] = []string{"local"}
+					}
+
 					isCurrentlyConnected := currentlyConnected[name]
 					if name == "sandman" || isCurrentlyConnected {
 						log.Printf("DEBUG: Client %s - isCurrentlyConnected=%v, connectedSince=%v",
@@ -398,11 +444,12 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 }
 func createClientHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name              string `json:"name"`
-		Email             string `json:"email,omitempty"`
-		ExpirationDays    int    `json:"expiration_days,omitempty"`
-		TrafficLimitBytes int64  `json:"traffic_limit_bytes,omitempty"`
-		ConnectionLimit   int    `json:"connection_limit,omitempty"`
+		Name              string   `json:"name"`
+		Email             string   `json:"email,omitempty"`
+		ExpirationDays    int      `json:"expiration_days,omitempty"`
+		TrafficLimitBytes int64    `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit   int      `json:"connection_limit,omitempty"`
+		Nodes             []string `json:"nodes,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
@@ -450,6 +497,15 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 					clientData["email"] = req.Email
 				}
 
+				selectedNodes := []string{"local"}
+				for _, nodeID := range req.Nodes {
+					nodeID = normalizeNodeID(nodeID)
+					if nodeID != "" && nodeID != "local" {
+						selectedNodes = append(selectedNodes, nodeID)
+					}
+				}
+				clientData["nodes"] = selectedNodes
+
 				newData, err := json.MarshalIndent(clientData, "", "  ")
 				if err == nil {
 					os.WriteFile(clientPath, newData, 0644)
@@ -458,11 +514,30 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	nodeResults := []map[string]interface{}{}
+	for _, node := range activeRemoteNodesByIDs(req.Nodes) {
+		err := createClientOnNode(node, req.Name)
+		res := map[string]interface{}{
+			"id":       node.ID,
+			"name":     node.Name,
+			"location": node.Location,
+			"success":  err == nil,
+		}
+		if err != nil {
+			res["error"] = err.Error()
+		}
+		nodeResults = append(nodeResults, res)
+	}
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
 	clientsCache.mutex.Unlock()
-	sendSuccess(w, "Client created successfully", map[string]string{"name": req.Name})
+
+	sendSuccess(w, "Client created successfully", map[string]interface{}{
+		"name":  req.Name,
+		"nodes": nodeResults,
+	})
 }
 func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -964,6 +1039,430 @@ func getTelegramSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSuccess(w, "Telegram settings retrieved", telegram)
 }
+
+func normalizeNodeID(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	v = strings.ReplaceAll(v, " ", "-")
+	v = strings.ReplaceAll(v, "_", "-")
+	if v == "" {
+		v = fmt.Sprintf("node-%d", time.Now().Unix())
+	}
+	return v
+}
+
+func loadNodesFile() (NodesFile, error) {
+	var nf NodesFile
+
+	data, err := os.ReadFile(NodesDBPath)
+	if os.IsNotExist(err) {
+		now := time.Now().Format(time.RFC3339)
+		nf.Nodes = []NodeConfig{
+			{
+				ID:        "local",
+				Name:      "Germany Master",
+				Flag:      "🇩🇪",
+				Location:  "DE",
+				PublicIP:  "",
+				AgentURL:  "local",
+				Token:     "",
+				Enabled:   true,
+				IsLocal:   true,
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+		}
+		_ = saveNodesFile(nf)
+		return nf, nil
+	}
+	if err != nil {
+		return nf, err
+	}
+	if len(data) == 0 {
+		nf.Nodes = []NodeConfig{}
+		return nf, nil
+	}
+	if err := json.Unmarshal(data, &nf); err != nil {
+		return nf, err
+	}
+	if nf.Nodes == nil {
+		nf.Nodes = []NodeConfig{}
+	}
+	return nf, nil
+}
+
+func saveNodesFile(nf NodesFile) error {
+	if err := os.MkdirAll(filepath.Dir(NodesDBPath), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(nf, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(NodesDBPath, data, 0600)
+}
+
+func findNodeConfig(id string) (NodeConfig, bool) {
+	nf, err := loadNodesFile()
+	if err != nil {
+		return NodeConfig{}, false
+	}
+
+	for _, node := range nf.Nodes {
+		if node.ID == id {
+			return node, true
+		}
+	}
+
+	return NodeConfig{}, false
+}
+
+func activeRemoteNodesByIDs(ids []string) []NodeConfig {
+	nf, err := loadNodesFile()
+	if err != nil {
+		return nil
+	}
+
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		id = normalizeNodeID(id)
+		if id != "" && id != "local" {
+			wanted[id] = true
+		}
+	}
+
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	out := []NodeConfig{}
+	for _, node := range nf.Nodes {
+		if node.IsLocal || node.AgentURL == "local" || !node.Enabled {
+			continue
+		}
+
+		if wanted[node.ID] {
+			out = append(out, node)
+		}
+	}
+
+	return out
+}
+
+func clientHasNode(clientData map[string]interface{}, nodeID string) bool {
+	nodeID = normalizeNodeID(nodeID)
+	if nodeID == "" {
+		return false
+	}
+
+	raw, ok := clientData["nodes"]
+	if !ok {
+		return nodeID == "local"
+	}
+
+	if arr, ok := raw.([]interface{}); ok {
+		for _, v := range arr {
+			if normalizeNodeID(fmt.Sprintf("%v", v)) == nodeID {
+				return true
+			}
+		}
+	}
+
+	if arr, ok := raw.([]string); ok {
+		for _, v := range arr {
+			if normalizeNodeID(v) == nodeID {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func createClientOnNode(node NodeConfig, clientName string) error {
+	body := strings.NewReader(fmt.Sprintf(`{"name":%q}`, clientName))
+
+	req, err := http.NewRequest("POST", strings.TrimRight(node.AgentURL, "/")+"/clients", body)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if node.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+node.Token)
+	}
+
+	client := &http.Client{Timeout: 25 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("node %s create failed: HTTP %d %s", node.ID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(respBody, &parsed); err == nil {
+		if ok, exists := parsed["success"].(bool); exists && !ok {
+			return fmt.Errorf("node %s create failed: %v", node.ID, parsed["message"])
+		}
+	}
+
+	return nil
+}
+
+func ensureClientOnNode(node NodeConfig, clientName string) {
+	_ = createClientOnNode(node, clientName)
+}
+
+func downloadClientFromNode(w http.ResponseWriter, r *http.Request, node NodeConfig, clientName string) {
+	ensureClientOnNode(node, clientName)
+
+	req, err := http.NewRequest("GET", strings.TrimRight(node.AgentURL, "/")+"/clients/"+clientName+"/download", nil)
+	if err != nil {
+		http.Error(w, "Invalid node agent URL", http.StatusBadRequest)
+		return
+	}
+
+	if node.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+node.Token)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Node download failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		http.Error(w, fmt.Sprintf("Node download failed: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(b))), http.StatusBadGateway)
+		return
+	}
+
+	safeName := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(clientName)
+	safeNode := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(node.ID)
+
+	w.Header().Set("Content-Type", "application/x-openvpn-profile")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.ovpn\"", safeName, safeNode))
+	io.Copy(w, resp.Body)
+}
+
+func getNodesHandler(w http.ResponseWriter, r *http.Request) {
+	nf, err := loadNodesFile()
+	if err != nil {
+		sendError(w, "Failed to read nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sendSuccess(w, "Nodes retrieved successfully", nf.Nodes)
+}
+
+func createNodeHandler(w http.ResponseWriter, r *http.Request) {
+	var node NodeConfig
+	if err := json.NewDecoder(r.Body).Decode(&node); err != nil {
+		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	node.ID = normalizeNodeID(node.ID)
+	if node.Name == "" {
+		node.Name = node.ID
+	}
+	if node.Location == "" {
+		node.Location = strings.ToUpper(node.ID)
+	}
+	if node.Flag == "" {
+		node.Flag = node.Location
+	}
+	if node.AgentURL == "" {
+		sendError(w, "Agent URL is required", http.StatusBadRequest)
+		return
+	}
+	node.AgentURL = strings.TrimRight(node.AgentURL, "/")
+	if !node.Enabled {
+		node.Enabled = true
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	node.CreatedAt = now
+	node.UpdatedAt = now
+
+	nf, err := loadNodesFile()
+	if err != nil {
+		sendError(w, "Failed to read nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, existing := range nf.Nodes {
+		if existing.ID == node.ID {
+			sendError(w, "Node already exists", http.StatusConflict)
+			return
+		}
+	}
+
+	nf.Nodes = append(nf.Nodes, node)
+	if err := saveNodesFile(nf); err != nil {
+		sendError(w, "Failed to save node: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sendSuccess(w, "Node created successfully", node)
+}
+
+func updateNodeHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	var patch NodeConfig
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	nf, err := loadNodesFile()
+	if err != nil {
+		sendError(w, "Failed to read nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for i := range nf.Nodes {
+		if nf.Nodes[i].ID == id {
+			if nf.Nodes[i].IsLocal {
+				patch.IsLocal = true
+				patch.AgentURL = "local"
+				patch.ID = "local"
+			} else {
+				if patch.ID == "" {
+					patch.ID = nf.Nodes[i].ID
+				}
+				patch.ID = normalizeNodeID(patch.ID)
+				patch.AgentURL = strings.TrimRight(patch.AgentURL, "/")
+			}
+
+			if patch.Name == "" {
+				patch.Name = nf.Nodes[i].Name
+			}
+			if patch.Location == "" {
+				patch.Location = nf.Nodes[i].Location
+			}
+			if patch.Flag == "" {
+				patch.Flag = nf.Nodes[i].Flag
+			}
+			if patch.Token == "" {
+				patch.Token = nf.Nodes[i].Token
+			}
+			patch.CreatedAt = nf.Nodes[i].CreatedAt
+			patch.UpdatedAt = time.Now().Format(time.RFC3339)
+
+			nf.Nodes[i] = patch
+			if err := saveNodesFile(nf); err != nil {
+				sendError(w, "Failed to save node: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			sendSuccess(w, "Node updated successfully", patch)
+			return
+		}
+	}
+
+	sendError(w, "Node not found", http.StatusNotFound)
+}
+
+func deleteNodeHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	nf, err := loadNodesFile()
+	if err != nil {
+		sendError(w, "Failed to read nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]NodeConfig, 0, len(nf.Nodes))
+	deleted := false
+	for _, node := range nf.Nodes {
+		if node.ID == id {
+			if node.IsLocal {
+				sendError(w, "Local node cannot be deleted", http.StatusBadRequest)
+				return
+			}
+			deleted = true
+			continue
+		}
+		out = append(out, node)
+	}
+
+	if !deleted {
+		sendError(w, "Node not found", http.StatusNotFound)
+		return
+	}
+
+	nf.Nodes = out
+	if err := saveNodesFile(nf); err != nil {
+		sendError(w, "Failed to save nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sendSuccess(w, "Node deleted successfully", map[string]string{"id": id})
+}
+
+func pingNodeHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	nf, err := loadNodesFile()
+	if err != nil {
+		sendError(w, "Failed to read nodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, node := range nf.Nodes {
+		if node.ID != id {
+			continue
+		}
+
+		if node.IsLocal || node.AgentURL == "local" {
+			sendSuccess(w, "Local node is available", map[string]interface{}{
+				"id":      node.ID,
+				"name":    node.Name,
+				"status":  "ok",
+				"isLocal": true,
+			})
+			return
+		}
+
+		req, err := http.NewRequest("GET", strings.TrimRight(node.AgentURL, "/")+"/status", nil)
+		if err != nil {
+			sendError(w, "Invalid agent URL", http.StatusBadRequest)
+			return
+		}
+		if node.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+node.Token)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			sendError(w, "Node ping failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		var body interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+
+		sendSuccess(w, "Node ping completed", map[string]interface{}{
+			"id":          node.ID,
+			"name":        node.Name,
+			"status_code": resp.StatusCode,
+			"response":    body,
+		})
+		return
+	}
+
+	sendError(w, "Node not found", http.StatusNotFound)
+}
+
 func getServerSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile(ServerDBPath)
 	if err != nil {
@@ -1619,6 +2118,37 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	downloadURL := "/sub/" + template.URLQueryEscaper(token) + "/download"
 	subURL := buildSubscriptionURL(r, token)
 
+	masterName := "Germany Master"
+	masterFlag := "🇩🇪"
+
+	subNodes := []map[string]string{}
+	if nf, err := loadNodesFile(); err == nil {
+		for _, node := range nf.Nodes {
+			if node.IsLocal || node.AgentURL == "local" {
+				if node.Name != "" {
+					masterName = node.Name
+				}
+				if node.Flag != "" {
+					masterFlag = node.Flag
+				}
+				continue
+			}
+			if !node.Enabled {
+				continue
+			}
+			if !clientHasNode(clientData, node.ID) {
+				continue
+			}
+			subNodes = append(subNodes, map[string]string{
+				"ID":       node.ID,
+				"Name":     node.Name,
+				"Flag":     node.Flag,
+				"Location": node.Location,
+				"URL":      "/sub/" + template.URLQueryEscaper(token) + "/node/" + template.URLQueryEscaper(node.ID) + "/download",
+			})
+		}
+	}
+
 	pageData := map[string]interface{}{
 		"ClientName":      clientName,
 		"Status":          statusText,
@@ -1630,6 +2160,9 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"ProgressPercent": fmt.Sprintf("%.2f", progressPercent),
 		"ProgressText":    progressText,
 		"DownloadURL":     downloadURL,
+		"MasterName":      masterName,
+		"MasterFlag":      masterFlag,
+		"NodeDownloads":   subNodes,
 		"SubscriptionURL": subURL,
 	}
 
@@ -1730,8 +2263,10 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
       </div>
 
       <div class="actions">
-        <a class="btn btn-main" href="{{.DownloadURL}}">دانلود فایل .ovpn</a>
-        
+        <a class="btn btn-main" href="{{.DownloadURL}}">دانلود {{.MasterFlag}} {{.MasterName}}</a>
+        {{range .NodeDownloads}}
+        <a class="btn btn-ghost" href="{{.URL}}">دانلود {{.Flag}} {{.Name}}</a>
+        {{end}}
       </div>
     </div>
 
@@ -1766,6 +2301,31 @@ func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-openvpn-profile")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.ovpn\"", safeName))
 	http.ServeFile(w, r, configPath)
+}
+
+func subscriptionNodeDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	token := vars["token"]
+	nodeID := normalizeNodeID(vars["node"])
+
+	clientName, clientData, err := findClientBySubscriptionToken(token)
+	if err != nil {
+		http.Error(w, "Subscription not found", http.StatusNotFound)
+		return
+	}
+
+	if !clientHasNode(clientData, nodeID) {
+		http.Error(w, "Node not selected for this client", http.StatusNotFound)
+		return
+	}
+
+	node, ok := findNodeConfig(nodeID)
+	if !ok || node.IsLocal || node.AgentURL == "local" || !node.Enabled {
+		http.Error(w, "Node not found", http.StatusNotFound)
+		return
+	}
+
+	downloadClientFromNode(w, r, node, clientName)
 }
 
 func main() {
@@ -1819,6 +2379,7 @@ func main() {
 	r.HandleFunc("/ws", wsHandler)
 	r.HandleFunc("/sub/{token}", subscriptionPageHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")
+	r.HandleFunc("/sub/{token}/node/{node}/download", subscriptionNodeDownloadHandler).Methods("GET")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
 	r.HandleFunc("/api/health", healthHandler).Methods("GET")
 	api := r.PathPrefix("/api").Subrouter()
@@ -1843,6 +2404,11 @@ func main() {
 	api.HandleFunc("/openvpn/sync/status", getOpenVPNSyncStatusHandler).Methods("GET")
 	api.HandleFunc("/openvpn/create-configs", createOpenVPNConfigsHandler).Methods("POST")
 	api.HandleFunc("/openvpn/update-config", updateOpenVPNConfigHandler).Methods("PUT")
+	api.HandleFunc("/nodes", getNodesHandler).Methods("GET")
+	api.HandleFunc("/nodes", createNodeHandler).Methods("POST")
+	api.HandleFunc("/nodes/{id}", updateNodeHandler).Methods("PUT")
+	api.HandleFunc("/nodes/{id}", deleteNodeHandler).Methods("DELETE")
+	api.HandleFunc("/nodes/{id}/ping", pingNodeHandler).Methods("GET")
 	api.HandleFunc("/server-checker/ping", initiatePingCheckHandler).Methods("POST")
 	api.HandleFunc("/server-checker/status/{request_id}", getPingCheckStatusHandler).Methods("GET")
 	api.HandleFunc("/server-checker/history", getPingCheckHistoryHandler).Methods("GET")

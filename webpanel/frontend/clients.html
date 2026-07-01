@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
     <script src="js/particles.js"></script>
-    <script src="js/sidebar.js"></script>
+    <script src="js/sidebar.js?v=nodes-1782854627"></script>
     <script src="js/theme-loader.js"></script>
 </head>
 <body>
@@ -184,6 +184,21 @@
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Node / Location Selection</label>
+                    <div id="clientNodesBox" class="bg-gray-50 border rounded-lg p-3 space-y-2 text-sm">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" class="client-node-checkbox" value="local" checked disabled>
+                            <span class="font-semibold text-gray-800">Germany Master</span>
+                            <span class="text-xs text-gray-500">(Local)</span>
+                        </label>
+                        <div id="remoteNodesList" class="space-y-2">
+                            <div class="text-xs text-gray-500">Loading nodes...</div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Selected nodes will also generate .ovpn configs and appear in subscription downloads.</p>
                 </div>
 
                 <div class="flex gap-4">
@@ -901,10 +916,123 @@
             renderClients(filtered);
         }
 
+
+        let availableClientNodes = [];
+
+        async function loadClientNodeOptions() {
+            const box = document.getElementById('remoteNodesList');
+            if (!box) return;
+
+            box.innerHTML = '<div class="text-xs text-gray-500">Loading nodes...</div>';
+
+            try {
+                const response = await fetch('/api/nodes', {
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    }
+                });
+
+                const result = await response.json();
+                if (!result.success) {
+                    throw new Error(result.message || 'Failed to load nodes');
+                }
+
+                availableClientNodes = (result.data || []).filter(node => !node.is_local && node.enabled);
+
+                if (!availableClientNodes.length) {
+                    box.innerHTML = '<div class="text-xs text-gray-500">No remote nodes enabled</div>';
+                    return;
+                }
+
+                box.innerHTML = availableClientNodes.map(node => `
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" class="client-node-checkbox" value="${node.id}">
+                        <span class="font-semibold text-gray-800">${node.name || node.id}</span>
+                        <span class="text-xs text-gray-500">(${node.location || node.id})</span>
+                    </label>
+                `).join('');
+            } catch (error) {
+                console.error('Failed to load nodes:', error);
+                box.innerHTML = '<div class="text-xs text-red-600">Failed to load nodes</div>';
+            }
+        }
+
+        function getSelectedClientNodes() {
+            const nodes = ['local'];
+            document.querySelectorAll('.client-node-checkbox:not(:disabled):checked').forEach(cb => {
+                if (cb.value && !nodes.includes(cb.value)) {
+                    nodes.push(cb.value);
+                }
+            });
+            return nodes;
+        }
+
+        function getClientSelectedNodes(client) {
+            if (client && Array.isArray(client.nodes) && client.nodes.length) {
+                return client.nodes;
+            }
+            return ['local'];
+        }
+
+        async function ensureSubscriptionForDownload(name) {
+            const client = allClients.find(c => c.name === name);
+            let token = client?.subscription_token || '';
+
+            if (!token) {
+                const result = await api.request(`/clients/${encodeURIComponent(name)}/subscription`);
+                token = result?.data?.subscription_token || '';
+                if (client && token) {
+                    client.subscription_token = token;
+                    client.subscription_url = result?.data?.subscription_url || `${window.location.origin}/sub/${token}`;
+                }
+            }
+
+            return token;
+        }
+
+        async function downloadClientConfigs(name) {
+            const client = allClients.find(c => c.name === name);
+            const nodes = getClientSelectedNodes(client);
+
+            try {
+                await api.exportClient(name);
+                showToast(`Downloading master config for "${name}"...`, 'success');
+
+                const remoteNodes = nodes.filter(n => n && n !== 'local');
+                if (!remoteNodes.length) {
+                    return;
+                }
+
+                const token = await ensureSubscriptionForDownload(name);
+                if (!token) {
+                    showToast('Subscription token not ready for node downloads', 'error');
+                    return;
+                }
+
+                remoteNodes.forEach((nodeID, index) => {
+                    setTimeout(() => {
+                        const a = document.createElement('a');
+                        a.href = `/sub/${encodeURIComponent(token)}/node/${encodeURIComponent(nodeID)}/download`;
+                        a.download = '';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                    }, 500 + (index * 500));
+                });
+
+                showToast(`Downloading ${remoteNodes.length + 1} config file(s) for "${name}"`, 'success');
+            } catch (error) {
+                console.error('Failed to download configs:', error);
+                showToast('Failed to download client config(s)', 'error');
+            }
+        }
+
+
         // Show add modal
         async function showAddModal() {
             document.getElementById('addModal').classList.remove('hidden');
             await loadInboundConfigurations();
+            await loadClientNodeOptions();
         }
 
         function hideAddModal() {
@@ -1110,6 +1238,7 @@
             const name = document.getElementById('clientName').value.trim();
             const email = document.getElementById('clientEmail').value.trim();
             const inbound = document.getElementById('clientInbound').value;
+            const selectedNodes = getSelectedClientNodes();
 
             // Validate client name
             if (!name) {
@@ -1178,13 +1307,20 @@
                         email: email,
                         expiration_days: expirationDays,
                         traffic_limit_bytes: trafficLimitBytes,
-                        connection_limit: connectionLimit
+                        connection_limit: connectionLimit,
+                        nodes: selectedNodes
                     })
                 });
                 
                 const result = await response.json();
                 if (result.success) {
-                    showToast(`Client "${name}" created successfully!`, 'success');
+                    const nodeResults = Array.isArray(result.data?.nodes) ? result.data.nodes : [];
+                    const failedNodes = nodeResults.filter(n => !n.success);
+                    if (failedNodes.length) {
+                        showToast(`Client created, but ${failedNodes.length} node(s) failed`, 'error');
+                    } else {
+                        showToast(`Client "${name}" created successfully!`, 'success');
+                    }
                     hideAddModal();
                     loadClients();
                 } else {
@@ -1270,12 +1406,7 @@
 
         // Export client
         async function exportClient(name) {
-            try {
-                await api.exportClient(name);
-                showToast(`Downloading ${name}.ovpn...`, 'success');
-            } catch (error) {
-                showToast('Failed to export client config', 'error');
-            }
+            await downloadClientConfigs(name);
         }
 
         // Check status
@@ -1583,6 +1714,8 @@
             </form>
         </div>
     </div>
+
+
 
 </body>
 </html>
