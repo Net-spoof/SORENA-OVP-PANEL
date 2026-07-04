@@ -85,3 +85,5 @@ node_modules/
 *.crt
 *.key
 *.csr
+*.bak.*
+*.clean-backup.*

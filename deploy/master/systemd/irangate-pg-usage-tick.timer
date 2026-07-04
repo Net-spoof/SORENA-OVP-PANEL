@@ -1,0 +1,12 @@
+[Unit]
+Description=Run IranGate PostgreSQL usage tick every 10 seconds
+
+[Timer]
+OnCalendar=*-*-* *:*:03/10
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=irangate-pg-usage-tick.service
+
+[Install]
+WantedBy=timers.target

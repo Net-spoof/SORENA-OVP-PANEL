@@ -1,0 +1,7 @@
+[Unit]
+Description=IranGate PostgreSQL usage tick
+After=postgresql.service irangate-webpanel.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '/usr/local/bin/irangate-local-status-snapshot.py; /usr/local/bin/irangate-pg-usage-tick.py --apply'

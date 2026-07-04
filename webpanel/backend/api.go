@@ -753,6 +753,8 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		clientData["upload"] = 0
 		clientData["download"] = 0
 		clientData["data_used_mb"] = 0
+		clientData["active"] = false
+		clientData["status"] = "inactive"
 		delete(clientData, "traffic_exceeded_at")
 		resetClientTrafficDisplay(name)
 	}
@@ -1928,7 +1930,7 @@ func findClientBySubscriptionToken(token string) (string, map[string]interface{}
 			if jsonName, ok := clientData["name"].(string); ok && jsonName != "" {
 				name = jsonName
 			}
-			return name, clientData, nil
+			return name, applySubGlobalUsageToClientData(name, clientData), nil
 		}
 	}
 
@@ -2028,8 +2030,29 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := subInt64(clientData["traffic_limit_bytes"])
-	used := subInt64(clientData["traffic_used_bytes"])
 
+	used := subInt64(clientData["global_total_bytes"])
+	if used <= 0 {
+		used = subInt64(clientData["total_bytes"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["current_total"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["used_bytes"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["used"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["usage"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["traffic"])
+	}
+	if used <= 0 {
+		used = subInt64(clientData["traffic_used_bytes"])
+	}
 	if used <= 0 {
 		used = subInt64(clientData["upload"]) + subInt64(clientData["download"])
 	}
@@ -2042,19 +2065,29 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		left = limit - used
 	}
 
-	status := fmt.Sprintf("%v", clientData["status"])
-	if status == "" || status == "<nil>" {
-		status = "active"
+	serviceFinished := false
+
+	if limit > 0 && used >= limit {
+		serviceFinished = true
+	}
+
+	if rawExp := fmt.Sprintf("%v", clientData["expires_at"]); rawExp != "" && rawExp != "<nil>" && !strings.HasPrefix(rawExp, "0001-01-01") {
+		if expTime, err := time.Parse(time.RFC3339, rawExp); err == nil && !time.Now().UTC().Before(expTime) {
+			serviceFinished = true
+		}
+	}
+
+	statusLower := strings.ToLower(fmt.Sprintf("%v", clientData["status"]))
+	if strings.Contains(statusLower, "traffic_limit_exceeded") ||
+		strings.Contains(statusLower, "expired") ||
+		strings.Contains(statusLower, "disabled") ||
+		strings.Contains(statusLower, "deactive") {
+		serviceFinished = true
 	}
 
 	statusText := "فعال"
-	statusLower := strings.ToLower(status)
-	if strings.Contains(statusLower, "traffic") || strings.Contains(statusLower, "exceeded") {
-		statusText = "اتمام حجم"
-	} else if strings.Contains(statusLower, "expired") || strings.Contains(statusLower, "expire") {
-		statusText = "اتمام زمان"
-	} else if strings.Contains(statusLower, "inactive") || strings.Contains(statusLower, "disabled") {
-		statusText = "غیرفعال"
+	if serviceFinished {
+		statusText = "سرویس تمام شده"
 	}
 
 	onlineText := "آفلاین"
@@ -2384,9 +2417,9 @@ func main() {
 	r.HandleFunc("/api/health", healthHandler).Methods("GET")
 	api := r.PathPrefix("/api").Subrouter()
 	api.Use(authMiddleware)
-	api.HandleFunc("/clients", getClientsHandler).Methods("GET")
+	api.HandleFunc("/clients", getClientsWithNodeStatsHandler).Methods("GET")
 	api.HandleFunc("/clients", createClientHandler).Methods("POST")
-	api.HandleFunc("/clients/{name}", updateClientHandler).Methods("PUT")
+	api.HandleFunc("/clients/{name}", updateClientWithGlobalResetHandler).Methods("PUT")
 	api.HandleFunc("/clients/{name}", deleteClientHandler).Methods("DELETE")
 	api.HandleFunc("/clients/{name}/activate", activateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/deactivate", deactivateClientHandler).Methods("POST")
@@ -2405,6 +2438,7 @@ func main() {
 	api.HandleFunc("/openvpn/create-configs", createOpenVPNConfigsHandler).Methods("POST")
 	api.HandleFunc("/openvpn/update-config", updateOpenVPNConfigHandler).Methods("PUT")
 	api.HandleFunc("/nodes", getNodesHandler).Methods("GET")
+	api.HandleFunc("/node-current-stats", getNodeCurrentStatsDebugHandler).Methods("GET")
 	api.HandleFunc("/nodes", createNodeHandler).Methods("POST")
 	api.HandleFunc("/nodes/{id}", updateNodeHandler).Methods("PUT")
 	api.HandleFunc("/nodes/{id}", deleteNodeHandler).Methods("DELETE")

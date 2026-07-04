@@ -1,0 +1,7 @@
+[Unit]
+Description=IranGate PostgreSQL quota enforcer
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/irangate-pg-enforcer.py --apply

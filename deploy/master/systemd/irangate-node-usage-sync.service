@@ -1,0 +1,6 @@
+[Unit]
+Description=IranGate Node Usage Sync
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/irangate-node-usage-sync.py

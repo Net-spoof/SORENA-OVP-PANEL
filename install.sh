@@ -17,674 +17,6 @@ EOF
 }
 
 
-# Install a lightweight OpenVPN connection guard.
-# It enforces per-client connection_limit from:
-# /opt/irangate/database/clients/<client>.json
-install_connection_guard() {
-    log_info "Installing IranGate connection limit guard..."
-
-    apt-get install -y python3 >/dev/null 2>&1 || true
-
-    cat > /usr/local/bin/irangate-connection-guard <<'PYGUARD'
-#!/usr/bin/env python3
-import argparse
-import json
-import os
-import socket
-import time
-from pathlib import Path
-
-BASE = Path("/opt/irangate")
-CLIENTS_DIR = BASE / "database" / "clients"
-TRAFFIC_DIR = BASE / "traffic"
-LOG = Path("/var/log/irangate-connection-guard.log")
-BASELINES_PATH = TRAFFIC_DIR / "guard_session_baselines.json"
-
-MGMT_HOST = os.environ.get("IRANGATE_MGMT_HOST", "127.0.0.1")
-MGMT_PORT = int(os.environ.get("IRANGATE_MGMT_PORT", "7505"))
-INTERVAL = float(os.environ.get("IRANGATE_GUARD_INTERVAL", "20"))
-
-def log(msg):
-    try:
-        LOG.parent.mkdir(parents=True, exist_ok=True)
-        with LOG.open("a") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
-    except Exception:
-        pass
-
-def read_json(path, default=None):
-    try:
-        return json.loads(Path(path).read_text())
-    except Exception:
-        return default
-
-def write_json(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    os.replace(tmp, path)
-
-def mgmt_cmd(cmd, timeout=3):
-    sock = socket.create_connection((MGMT_HOST, MGMT_PORT), timeout=timeout)
-    try:
-        try:
-            sock.settimeout(0.5)
-            sock.recv(4096)
-        except Exception:
-            pass
-
-        sock.settimeout(timeout)
-        sock.sendall((cmd.strip() + "\n").encode())
-
-        chunks = []
-        while True:
-            try:
-                data = sock.recv(8192)
-            except socket.timeout:
-                break
-            if not data:
-                break
-
-            chunks.append(data.decode(errors="ignore"))
-            text = "".join(chunks)
-
-            if "\nEND" in text or "SUCCESS:" in text or "ERROR:" in text:
-                break
-
-        return "".join(chunks)
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-
-def get_sessions():
-    out = mgmt_cmd("status 2")
-    sessions = {}
-
-    for line in out.splitlines():
-        if not line.startswith("CLIENT_LIST,"):
-            continue
-
-        parts = line.split(",")
-        if len(parts) < 9:
-            continue
-
-        cn = parts[1]
-        real = parts[2]
-
-        try:
-            received = int(parts[5] or 0)
-            sent = int(parts[6] or 0)
-        except Exception:
-            received = 0
-            sent = 0
-
-        try:
-            connected_ts = int(parts[8] or 0)
-        except Exception:
-            connected_ts = 0
-
-        sessions.setdefault(cn, []).append({
-            "real": real,
-            "received": received,
-            "sent": sent,
-            "total": received + sent,
-            "connected_ts": connected_ts,
-        })
-
-    return sessions
-
-def usage_maps():
-    current = {}
-    current_split = {}
-
-    cur = read_json(TRAFFIC_DIR / "current_stats.json", [])
-    if isinstance(cur, list):
-        for rec in cur:
-            if not isinstance(rec, dict):
-                continue
-
-            cn = rec.get("client_name")
-            if not cn:
-                continue
-
-            recv = int(rec.get("current_received") or 0)
-            sent = int(rec.get("current_sent") or 0)
-            total = int(rec.get("current_total") or 0)
-            if total <= 0:
-                total = recv + sent
-
-            if total > current.get(cn, 0):
-                current[cn] = total
-                current_split[cn] = (recv, sent)
-
-    cumulative = {}
-    cumulative_split = {}
-
-    cum = read_json(TRAFFIC_DIR / "cumulative_totals.json", [])
-    if isinstance(cum, list):
-        for rec in cum:
-            if not isinstance(rec, dict):
-                continue
-
-            cn = rec.get("client_name")
-            if not cn:
-                continue
-
-            recv = int(rec.get("total_received") or 0)
-            sent = int(rec.get("total_sent") or 0)
-            total = recv + sent
-
-            if total > cumulative.get(cn, 0):
-                cumulative[cn] = total
-                cumulative_split[cn] = (recv, sent)
-
-    return current, current_split, cumulative, cumulative_split
-
-
-def as_int(v):
-    try:
-        return int(v or 0)
-    except Exception:
-        return 0
-
-def session_key(cn, sess):
-    return f"{cn}|{sess.get('real', '')}|{sess.get('connected_ts', 0)}"
-
-def calculate_enforced_usage(cn, client, cn_sessions, cumulative):
-    # Stable usage must come ONLY from client.json.
-    # current_stats/cumulative_totals can be stale or inflated after reconnect/reactivation.
-    json_used = as_int(client.get("traffic_used_bytes"))
-    json_bytes = as_int(client.get("bytes_sent")) + as_int(client.get("bytes_received"))
-
-    stored_used = max(json_used, json_bytes)
-
-    if not cn_sessions:
-        return stored_used
-
-    baselines = read_json(BASELINES_PATH, {})
-    if not isinstance(baselines, dict):
-        baselines = {}
-
-    changed = False
-    alive_keys = set()
-    session_delta = 0
-
-    for sess in cn_sessions:
-        key = session_key(cn, sess)
-        alive_keys.add(key)
-
-        live_total = as_int(sess.get("total"))
-        base = baselines.get(key)
-
-        if not isinstance(base, dict):
-            base = {
-                "base_used": stored_used,
-                "base_session_total": live_total,
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-            baselines[key] = base
-            changed = True
-
-        base_used = as_int(base.get("base_used"))
-        base_session_total = as_int(base.get("base_session_total"))
-
-        delta = live_total - base_session_total
-        if delta < 0:
-            delta = 0
-
-        session_delta += delta
-
-    # Remove old baselines for this client after reconnects/disconnects.
-    prefix = f"{cn}|"
-    for key in list(baselines.keys()):
-        if key.startswith(prefix) and key not in alive_keys:
-            baselines.pop(key, None)
-            changed = True
-
-    if changed:
-        write_json(BASELINES_PATH, baselines)
-
-    # Use the frozen session baseline + live OpenVPN delta.
-    # Do NOT use stored_used as the live baseline while the session is alive.
-    # mark_progress writes stored_used every guard run; adding the same session_delta
-    # to that updated value inflates traffic every interval.
-    baseline_used = 0
-    for key in alive_keys:
-        base = baselines.get(key, {})
-        baseline_used = max(baseline_used, as_int(base.get("base_used")))
-
-    if baseline_used <= 0:
-        baseline_used = stored_used
-
-    return max(stored_used, baseline_used + session_delta)
-
-
-def client_path(cn):
-    return CLIENTS_DIR / f"{cn}.json"
-
-def load_client(cn):
-    data = read_json(client_path(cn), {})
-    if isinstance(data, dict):
-        return data
-    return {}
-
-def sync_traffic_files(cn, used, recv, sent, limit, connected=False):
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    quota = round((used / limit) * 100, 2) if limit > 0 else 0
-
-    current_path = TRAFFIC_DIR / "current_stats.json"
-    current = read_json(current_path, [])
-    if isinstance(current, list):
-        found = False
-        for rec in current:
-            if isinstance(rec, dict) and rec.get("client_name") == cn:
-                rec["current_received"] = recv
-                rec["current_sent"] = sent
-                rec["current_total"] = used
-                rec["daily_usage"] = used
-                rec["monthly_usage"] = used
-                rec["quota_used_percent"] = quota
-                rec["connected"] = connected
-                rec["last_seen"] = now
-                found = True
-
-        if found:
-            write_json(current_path, current)
-
-    cumulative_path = TRAFFIC_DIR / "cumulative_totals.json"
-    cumulative = read_json(cumulative_path, [])
-    if isinstance(cumulative, list):
-        found = False
-        for rec in cumulative:
-            if isinstance(rec, dict) and rec.get("client_name") == cn:
-                rec["total_received"] = recv
-                rec["total_sent"] = sent
-                rec["last_session_received"] = recv
-                rec["last_session_sent"] = sent
-                rec["last_update"] = now
-                found = True
-
-        if found:
-            write_json(cumulative_path, cumulative)
-
-def best_split(cn, used, client, sessions, current_split, cumulative_split):
-    if cn in current_split:
-        recv, sent = current_split[cn]
-    elif cn in cumulative_split:
-        recv, sent = cumulative_split[cn]
-    else:
-        best_live = None
-        for sess in sessions.get(cn, []):
-            if best_live is None or sess.get("total", 0) > best_live.get("total", 0):
-                best_live = sess
-
-        if best_live:
-            recv = int(best_live.get("received") or 0)
-            sent = int(best_live.get("sent") or 0)
-        else:
-            recv = int(client.get("bytes_received") or client.get("download") or 0)
-            sent = int(client.get("bytes_sent") or client.get("upload") or 0)
-
-    total = recv + sent
-    if used > 0 and total != used:
-        if total > 0:
-            sent = int(used * sent / total)
-            recv = used - sent
-        else:
-            sent = int(used * 0.8)
-            recv = used - sent
-
-    return int(recv), int(sent)
-
-def kill_real(real, reason):
-    if not real:
-        return
-    resp = mgmt_cmd(f"kill {real}")
-    log(f"killed session {real} reason={reason} response={resp.strip()}")
-
-def kill_client_sessions(cn, sessions, reason):
-    for sess in sessions.get(cn, []):
-        kill_real(sess.get("real"), reason)
-
-def mark_exceeded(cn, client, used, recv, sent, limit):
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    try:
-        used = int(used or 0)
-    except Exception:
-        used = 0
-
-    try:
-        limit = int(limit or 0)
-    except Exception:
-        limit = 0
-
-    try:
-        recv = int(recv or 0)
-    except Exception:
-        recv = 0
-
-    try:
-        sent = int(sent or 0)
-    except Exception:
-        sent = 0
-
-    # Critical rule:
-    # When quota is exceeded, freeze displayed usage at the quota limit.
-    # Do NOT write inflated current_stats/session values into client.json.
-    if limit > 0:
-        used = limit
-
-    # Prefer existing stable split if the incoming split is empty.
-    if recv + sent <= 0:
-        recv = int(client.get("bytes_received") or client.get("download") or 0)
-        sent = int(client.get("bytes_sent") or client.get("upload") or 0)
-
-    total = recv + sent
-
-    # Scale upload/download to exactly match frozen used bytes.
-    if used > 0 and total != used:
-        if total > 0:
-            sent = int(used * sent / total)
-            recv = used - sent
-        else:
-            sent = int(used * 0.32)
-            recv = used - sent
-
-    client["active"] = False
-    client["status"] = "traffic_limit_exceeded"
-    client["traffic_used_bytes"] = int(used)
-    client["bytes_received"] = int(recv)
-    client["bytes_sent"] = int(sent)
-    client["download"] = int(recv)
-    client["upload"] = int(sent)
-    client["data_used_mb"] = int(used // 1000000)
-    client["traffic_exceeded_at"] = now
-    client["last_update"] = now
-
-    write_json(client_path(cn), client)
-    sync_traffic_files(cn, used, recv, sent, limit, connected=False)
-
-
-
-def mark_progress(cn, client, used, recv, sent, limit):
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    try:
-        used = int(used or 0)
-    except Exception:
-        used = 0
-
-    try:
-        limit = int(limit or 0)
-    except Exception:
-        limit = 0
-
-    try:
-        recv = int(recv or 0)
-    except Exception:
-        recv = 0
-
-    try:
-        sent = int(sent or 0)
-    except Exception:
-        sent = 0
-
-    old_used = int(client.get("traffic_used_bytes") or 0)
-    old_recv = int(client.get("bytes_received") or client.get("download") or 0)
-    old_sent = int(client.get("bytes_sent") or client.get("upload") or 0)
-
-    # Never decrease stored usage.
-    if used < old_used:
-        used = old_used
-
-    # Do not let progress write above limit. mark_exceeded handles exact limit lock.
-    if limit > 0 and used > limit:
-        used = limit
-
-    if used <= 0:
-        return
-
-    if recv + sent <= 0:
-        recv = old_recv
-        sent = old_sent
-
-    total = recv + sent
-
-    if used > 0 and total != used:
-        if total > 0:
-            sent = int(used * sent / total)
-            recv = used - sent
-        else:
-            sent = old_sent
-            recv = old_recv
-
-    client["traffic_used_bytes"] = int(used)
-    client["bytes_received"] = int(recv)
-    client["bytes_sent"] = int(sent)
-    client["download"] = int(recv)
-    client["upload"] = int(sent)
-    client["data_used_mb"] = int(used // 1000000)
-    client["active"] = True
-    client["status"] = "active"
-    client["last_update"] = now
-
-    write_json(client_path(cn), client)
-    sync_traffic_files(cn, used, recv, sent, limit, connected=True)
-
-
-def enforce_client(cn, sessions, maps):
-    current, current_split, cumulative, cumulative_split = maps
-    client = load_client(cn)
-    if not client:
-        return
-
-    status = str(client.get("status") or "").lower()
-    active = client.get("active", True)
-
-    if active is False or "traffic_limit" in status or "exceeded" in status:
-        if sessions.get(cn):
-            kill_client_sessions(cn, sessions, "inactive")
-        return
-
-    try:
-        limit = int(client.get("traffic_limit_bytes") or 0)
-    except Exception:
-        limit = 0
-
-    try:
-        json_used = int(client.get("traffic_used_bytes") or 0)
-    except Exception:
-        json_used = 0
-
-    used = calculate_enforced_usage(cn, client, sessions.get(cn, []), cumulative)
-
-    if limit > 0 and used >= limit:
-        recv, sent = best_split(cn, used, client, sessions, {}, {})
-        log(f"traffic limit exceeded client={cn} used={used} limit={limit} sessions={len(sessions.get(cn, []))}")
-        kill_client_sessions(cn, sessions, "traffic_limit")
-        mark_exceeded(cn, client, used, recv, sent, limit)
-        return
-
-    # Persist live progress while the client is connected.
-    # This makes "left" decrease in the panel before quota is fully exhausted.
-    if sessions.get(cn) and used > int(client.get("traffic_used_bytes") or 0):
-        recv, sent = best_split(cn, used, client, sessions, {}, {})
-        mark_progress(cn, client, used, recv, sent, limit)
-
-    try:
-        conn_limit = int(client.get("connection_limit") or 1)
-    except Exception:
-        conn_limit = 1
-
-    if conn_limit > 0 and len(sessions.get(cn, [])) > conn_limit:
-        sorted_sessions = sorted(
-            sessions.get(cn, []),
-            key=lambda x: int(x.get("connected_ts") or 0),
-            reverse=True
-        )
-        to_kill = sorted_sessions[conn_limit:]
-        log(f"client={cn} active={len(sessions.get(cn, []))} limit={conn_limit} killing={len(to_kill)}")
-        for sess in to_kill:
-            kill_real(sess.get("real"), "connection_limit")
-
-def enforce_once(cn=None):
-    sessions = get_sessions()
-    maps = usage_maps()
-
-    if cn:
-        enforce_client(cn, sessions, maps)
-        return
-
-    for active_cn in list(sessions.keys()):
-        enforce_client(active_cn, sessions, maps)
-
-def kick_client(cn):
-    sessions = get_sessions()
-    kill_client_sessions(cn, sessions, "admin_edit_reset_or_kick")
-
-def loop():
-    log(f"IranGate optimized unified guard started host={MGMT_HOST} port={MGMT_PORT} interval={INTERVAL}")
-    while True:
-        try:
-            enforce_once()
-        except Exception as exc:
-            log(f"ERROR {exc}")
-        time.sleep(INTERVAL)
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--once", help="Enforce only one client immediately")
-    parser.add_argument("--kick", help="Kick all active sessions for one client")
-    args = parser.parse_args()
-
-    if args.kick:
-        kick_client(args.kick)
-        return
-
-    if args.once:
-        enforce_once(args.once)
-        return
-
-    loop()
-
-if __name__ == "__main__":
-    main()
-PYGUARD
-
-    chmod +x /usr/local/bin/irangate-connection-guard
-
-    cat > /usr/local/bin/irangate-client-connect-guard <<'PYCLIENTCONNECT'
-#!/usr/bin/env python3
-import json
-import os
-import sys
-import time
-from pathlib import Path
-
-CLIENTS_DIR = Path("/opt/irangate/database/clients")
-LOG_FILE = Path("/var/log/irangate-client-connect-guard.log")
-
-def log(msg):
-    try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with LOG_FILE.open("a") as f:
-            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
-    except Exception:
-        pass
-
-def read_json(path):
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
-
-cn = os.environ.get("common_name") or ""
-cn = os.path.basename(cn.strip())
-
-if not cn:
-    log("REJECT no common_name")
-    sys.exit(1)
-
-client_file = CLIENTS_DIR / f"{cn}.json"
-data = read_json(client_file)
-
-# If client JSON is missing, allow to avoid breaking old/manual clients unexpectedly.
-if not isinstance(data, dict):
-    log(f"ALLOW {cn} no_json")
-    sys.exit(0)
-
-status = str(data.get("status") or "").lower()
-active = data.get("active", True)
-
-try:
-    used = int(data.get("traffic_used_bytes") or 0)
-except Exception:
-    used = 0
-
-try:
-    limit = int(data.get("traffic_limit_bytes") or 0)
-except Exception:
-    limit = 0
-
-if used <= 0:
-    try:
-        used = int(data.get("bytes_sent") or 0) + int(data.get("bytes_received") or 0)
-    except Exception:
-        used = 0
-
-if active is False:
-    log(f"REJECT {cn} inactive status={status} used={used} limit={limit}")
-    sys.exit(1)
-
-if status == "traffic_limit_exceeded" or "traffic_limit" in status or "exceeded" in status:
-    log(f"REJECT {cn} status={status} used={used} limit={limit}")
-    sys.exit(1)
-
-if limit > 0 and used >= limit:
-    log(f"REJECT {cn} quota used={used} limit={limit}")
-    sys.exit(1)
-
-log(f"ALLOW {cn} active={active} status={status} used={used} limit={limit}")
-sys.exit(0)
-PYCLIENTCONNECT
-
-    chmod +x /usr/local/bin/irangate-client-connect-guard
-
-    if [ -f /etc/openvpn/server.conf ]; then
-        grep -q '^script-security 2' /etc/openvpn/server.conf || echo 'script-security 2' >> /etc/openvpn/server.conf
-        grep -q '^client-connect /usr/local/bin/irangate-client-connect-guard' /etc/openvpn/server.conf || echo 'client-connect /usr/local/bin/irangate-client-connect-guard' >> /etc/openvpn/server.conf
-    fi
-
-
-    cat > /etc/systemd/system/irangate-connection-guard.service <<'EOF'
-[Unit]
-Description=IranGate OpenVPN Connection Limit Guard
-After=network-online.target openvpn@server.service
-Wants=openvpn@server.service
-
-[Service]
-Type=simple
-Environment=IRANGATE_DATA_DIR=/opt/irangate
-Environment=OPENVPN_MANAGEMENT_HOST=127.0.0.1
-Environment=OPENVPN_MANAGEMENT_PORT=7505
-Environment=IRANGATE_GUARD_INTERVAL=20
-ExecStart=/usr/local/bin/irangate-connection-guard
-Restart=always
-RestartSec=3
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable irangate-connection-guard >/dev/null 2>&1 || true
-}
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -1384,7 +716,7 @@ EOF
     
     systemctl stop openvpn@server 2>/dev/null || true
     ensure_openvpn_privileged_port_capability
-    install_connection_guard
+    # Legacy connection guard disabled; PostgreSQL enforcer is authoritative
     systemctl enable openvpn@server
     log_info "Starting OpenVPN service..."
     if ! systemctl start openvpn@server; then
@@ -1698,6 +1030,17 @@ install_webpanel() {
         cp -r "$SCRIPT_DIR/webpanel/frontend"/* /opt/irangate/webpanel/frontend/ 2>/dev/null || true
     fi
     log_info "Creating Web Panel environment configuration..."
+
+    local jwt_secret=""
+
+    if [[ -f /etc/irangate/webpanel.env ]]; then
+        jwt_secret="$(sed -n 's/^JWT_SECRET=//p' /etc/irangate/webpanel.env | head -n1)"
+    fi
+
+    if [[ -z "$jwt_secret" ]]; then
+        jwt_secret="$(openssl rand -hex 32)"
+    fi
+
     cat > /etc/irangate/webpanel.env << EOF
 WEBPANEL_PORT=$WEBPANEL_PORT
 WEBPANEL_BASEPATH=/$WEB_PATH
@@ -1705,6 +1048,7 @@ WEBPANEL_STATIC_DIR=/opt/irangate/webpanel/frontend
 WEBPANEL_ADMIN_USER=$ADMIN_USER
 WEBPANEL_ADMIN_PASS=$ADMIN_PASS
 WEBPANEL_ADMIN_EMAIL=admin@irangate.local
+JWT_SECRET=$jwt_secret
 EOF
     chmod 600 /etc/irangate/webpanel.env
     log_info "Creating Web Panel systemd service..."
@@ -1759,6 +1103,197 @@ EOF
     fi
     log_info "IranGate Web Panel installed successfully"
 }
+
+install_master_postgres_stack() {
+    log_info "Installing IranGate PostgreSQL traffic stack..."
+
+    local deploy_dir="$SCRIPT_DIR/deploy/master"
+    local db_env_file="/etc/irangate-db.env"
+    local db_name="irangate"
+    local db_user="irangate"
+    local db_password=""
+
+    if [[ ! -d "$deploy_dir" ]]; then
+        log_error "Master deploy directory not found: $deploy_dir"
+        return 1
+    fi
+
+    if [[ ! -f "$deploy_dir/postgres/schema.sql" ]]; then
+        log_error "PostgreSQL schema not found"
+        return 1
+    fi
+
+    log_info "Installing PostgreSQL and Python PostgreSQL driver..."
+
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        postgresql \
+        postgresql-contrib \
+        python3-psycopg2
+
+    systemctl enable postgresql >/dev/null 2>&1 || true
+    systemctl start postgresql
+
+    mkdir -p /opt/irangate/traffic
+    mkdir -p /etc/irangate
+
+    if [[ -f "$db_env_file" ]]; then
+        db_password="$(
+            sed -n 's/^IRANGATE_DB_PASSWORD=//p' \
+            "$db_env_file" \
+            | head -n1
+        )"
+    fi
+
+    if [[ -z "$db_password" ]]; then
+        db_password="$(openssl rand -hex 32)"
+    fi
+
+    log_info "Creating/updating PostgreSQL role..."
+
+    if ! runuser -u postgres -- \
+        psql -tAc \
+        "SELECT 1 FROM pg_roles WHERE rolname='$db_user'" \
+        | grep -q 1
+    then
+        runuser -u postgres -- \
+            psql \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE $db_user LOGIN PASSWORD '$db_password';"
+    else
+        runuser -u postgres -- \
+            psql \
+            -v ON_ERROR_STOP=1 \
+            -c "ALTER ROLE $db_user WITH LOGIN PASSWORD '$db_password';"
+    fi
+
+    log_info "Creating PostgreSQL database if required..."
+
+    if ! runuser -u postgres -- \
+        psql -tAc \
+        "SELECT 1 FROM pg_database WHERE datname='$db_name'" \
+        | grep -q 1
+    then
+        runuser -u postgres -- \
+            createdb \
+            -O "$db_user" \
+            "$db_name"
+    fi
+
+    cat > "$db_env_file" <<EOF
+IRANGATE_DB_HOST=127.0.0.1
+IRANGATE_DB_PORT=5432
+IRANGATE_DB_NAME=$db_name
+IRANGATE_DB_USER=$db_user
+IRANGATE_DB_PASSWORD=$db_password
+IRANGATE_DB_DSN=postgresql://$db_user:$db_password@127.0.0.1:5432/$db_name
+EOF
+
+    chmod 600 "$db_env_file"
+
+    log_info "Applying PostgreSQL schema..."
+
+    if ! PGPASSWORD="$db_password" \
+        psql \
+        -h 127.0.0.1 \
+        -p 5432 \
+        -U "$db_user" \
+        -d "$db_name" \
+        -tAc \
+        "SELECT to_regclass('public.clients')" \
+        | grep -q clients
+    then
+        PGPASSWORD="$db_password" \
+            psql \
+            -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -p 5432 \
+            -U "$db_user" \
+            -d "$db_name" \
+            -f "$deploy_dir/postgres/schema.sql"
+    else
+        log_info "PostgreSQL schema already exists; skipping initial schema import"
+    fi
+
+    log_info "Installing master runtime scripts..."
+
+    for script in "$deploy_dir"/scripts/*.py; do
+        install -m 0755 \
+            "$script" \
+            "/usr/local/bin/$(basename "$script")"
+    done
+
+    log_info "Installing master systemd units..."
+
+    for unit in "$deploy_dir"/systemd/*.service; do
+        install -m 0644 \
+            "$unit" \
+            "/etc/systemd/system/$(basename "$unit")"
+    done
+
+    for unit in "$deploy_dir"/systemd/*.timer; do
+        install -m 0644 \
+            "$unit" \
+            "/etc/systemd/system/$(basename "$unit")"
+    done
+
+    log_info "Removing legacy traffic enforcement hooks..."
+
+    systemctl disable --now \
+        irangate-connection-guard.service \
+        >/dev/null 2>&1 || true
+
+    systemctl disable --now \
+        irangate-quota-enforcer.timer \
+        >/dev/null 2>&1 || true
+
+    systemctl stop \
+        irangate-quota-enforcer.service \
+        >/dev/null 2>&1 || true
+
+    if [[ -f /etc/openvpn/server.conf ]]; then
+        sed -i \
+            '\|^client-connect /usr/local/bin/irangate-client-connect-guard$|d' \
+            /etc/openvpn/server.conf
+    fi
+
+    rm -f \
+        /usr/local/bin/irangate-connection-guard \
+        /usr/local/bin/irangate-client-connect-guard
+
+    systemctl daemon-reload
+
+    log_info "Restarting OpenVPN after legacy hook cleanup..."
+
+    if systemctl is-active --quiet openvpn@server; then
+        systemctl restart openvpn@server
+    fi
+
+    log_info "Running initial PostgreSQL client metadata sync..."
+
+    if ! /usr/local/bin/irangate-pg-sync-clients.py; then
+        log_error "Initial PostgreSQL client sync failed"
+        return 1
+    fi
+
+    log_info "Initial PostgreSQL client metadata sync completed"
+
+    log_info "Enabling PostgreSQL traffic timers..."
+
+    systemctl enable --now \
+        irangate-node-usage-sync.timer
+
+    systemctl enable --now \
+        irangate-pg-usage-tick.timer
+
+    systemctl enable --now \
+        irangate-pg-enforcer.timer
+
+    systemctl enable --now \
+        irangate-pg-sync-clients.timer
+
+    log_info "PostgreSQL traffic stack installed successfully"
+}
+
 test_services() {
     log_step "Step 4/5: Testing all services..."
     echo ""
@@ -1888,6 +1423,7 @@ main() {
     install_openvpn_core
     install_irangate_cli
     install_webpanel
+    install_master_postgres_stack
     test_services
     show_final_summary
     log_info "=== Installation Completed ==="

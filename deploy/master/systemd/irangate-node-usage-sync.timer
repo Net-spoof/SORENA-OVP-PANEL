@@ -1,0 +1,12 @@
+[Unit]
+Description=Run IranGate Node Usage Sync every 10 seconds
+
+[Timer]
+OnCalendar=*-*-* *:*:00/10
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=irangate-node-usage-sync.service
+
+[Install]
+WantedBy=timers.target

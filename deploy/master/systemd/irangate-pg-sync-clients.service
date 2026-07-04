@@ -1,0 +1,7 @@
+[Unit]
+Description=IranGate PostgreSQL clients metadata sync
+After=irangate-webpanel.service postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/irangate-pg-sync-clients.py

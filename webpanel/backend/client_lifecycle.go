@@ -74,7 +74,7 @@ func RevokeClientCertificate(clientName string, reason string) error {
 		} else {
 			errMsg := fmt.Sprintf("easyrsa revoke failed: %v, output: %s", err, string(output))
 			logRevocation(clientName, reason, false, errMsg)
-			return fmt.Errorf(errMsg)
+			return fmt.Errorf("%s", errMsg)
 		}
 	}
 
@@ -85,7 +85,7 @@ func RevokeClientCertificate(clientName string, reason string) error {
 	if output, err := genCRLCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("easyrsa gen-crl failed: %v, output: %s", err, string(output))
 		logRevocation(clientName, reason, false, errMsg)
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	crlSource := "/etc/openvpn/easy-rsa/pki/crl.pem"
@@ -107,7 +107,7 @@ func DeactivateClient(clientName string) error {
 	}
 
 	clientPath := filepath.Join(dataDir, "database", "clients", clientName+".json")
-	
+
 	data, err := os.ReadFile(clientPath)
 	if err != nil {
 		return fmt.Errorf("failed to read client data: %v", err)
@@ -140,7 +140,7 @@ func ActivateClient(clientName string) error {
 	}
 
 	clientPath := filepath.Join(dataDir, "database", "clients", clientName+".json")
-	
+
 	data, err := os.ReadFile(clientPath)
 	if err != nil {
 		return fmt.Errorf("failed to read client data: %v", err)
@@ -220,7 +220,7 @@ func CheckExpiredClients() error {
 
 		if now.After(expiresAt) {
 			log.Printf("⏰ Client %s has expired (expiry: %s)", clientName, expiresAt.Format("2006-01-02 15:04:05"))
-			
+
 			if err := RevokeClientCertificate(clientName, "expired"); err != nil {
 				log.Printf("Error revoking expired client %s: %v", clientName, err)
 				continue
@@ -278,7 +278,7 @@ func CheckTrafficLimits() error {
 		}
 
 		clientName, _ := clientData["name"].(string)
-		
+
 		trafficLimit, ok := clientData["traffic_limit_bytes"].(float64)
 		if !ok || trafficLimit <= 0 {
 			continue
@@ -337,4 +337,3 @@ func StartClientLifecycleMonitor(intervalMinutes int) {
 		}
 	}
 }
-
