@@ -29,7 +29,7 @@ ask() {
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt update
-  apt install -y openvpn easy-rsa curl jq python3 python3-pip iptables
+  apt install -y openvpn easy-rsa curl jq python3 python3-pip iptables netcat-openbsd openssl
 }
 
 write_env() {
@@ -114,6 +114,10 @@ status /etc/openvpn/openvpn-status.log
 log-append /var/log/openvpn.log
 verb 3
 explicit-exit-notify 1
+
+script-security 2
+client-connect /etc/openvpn/irangate-client-connect.sh
+management 127.0.0.1 7505
 EOF
 }
 
@@ -121,7 +125,55 @@ setup_network() {
   cat > /etc/sysctl.d/99-irangate-openvpn.conf <<'EOF'
 net.ipv4.ip_forward=1
 EOF
+
   sysctl --system >/dev/null
+
+  cat > /usr/local/bin/irangate-node-nat <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ACTION="${1:-start}"
+
+IFACE="$(ip route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+
+if [ -z "$IFACE" ]; then
+  echo "Unable to detect default network interface" >&2
+  exit 1
+fi
+
+case "$ACTION" in
+  start)
+    iptables -t nat \
+      -C POSTROUTING \
+      -s 10.88.0.0/24 \
+      -o "$IFACE" \
+      -j MASQUERADE \
+      2>/dev/null \
+    || iptables -t nat \
+      -A POSTROUTING \
+      -s 10.88.0.0/24 \
+      -o "$IFACE" \
+      -j MASQUERADE
+    ;;
+
+  stop)
+    iptables -t nat \
+      -D POSTROUTING \
+      -s 10.88.0.0/24 \
+      -o "$IFACE" \
+      -j MASQUERADE \
+      2>/dev/null \
+    || true
+    ;;
+
+  *)
+    echo "Usage: $0 start|stop" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  chmod +x /usr/local/bin/irangate-node-nat
 
   cat > /etc/systemd/system/irangate-node-nat.service <<'EOF'
 [Unit]
@@ -132,8 +184,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -lc 'IFACE=$(ip route get 1.1.1.1 | awk "{print \$5; exit}"); iptables -t nat -C POSTROUTING -s 10.88.0.0/24 -o "$IFACE" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.88.0.0/24 -o "$IFACE" -j MASQUERADE'
-ExecStop=/bin/bash -lc 'IFACE=$(ip route get 1.1.1.1 | awk "{print \$5; exit}"); iptables -t nat -D POSTROUTING -s 10.88.0.0/24 -o "$IFACE" -j MASQUERADE 2>/dev/null || true'
+ExecStart=/usr/local/bin/irangate-node-nat start
+ExecStop=/usr/local/bin/irangate-node-nat stop
 
 [Install]
 WantedBy=multi-user.target
@@ -141,7 +193,7 @@ EOF
 }
 
 write_client_tool() {
-  cat > /usr/local/bin/irangate-node-client <<'EOF'
+  cat > /usr/local/bin/irangate-node-client <<'CLIENT_TOOL_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -214,13 +266,34 @@ OVPN
     exit 1
     ;;
 esac
-EOF
+CLIENT_TOOL_EOF
 
   chmod +x /usr/local/bin/irangate-node-client
 }
 
+write_client_connect_guard() {
+  mkdir -p /etc/openvpn/blocked-clients
+  cat > /etc/openvpn/irangate-client-connect.sh <<'CONNECT_GUARD_EOF'
+#!/bin/sh
+CN="$common_name"
+
+if [ -z "$CN" ]; then
+  exit 0
+fi
+
+if [ -f "/etc/openvpn/blocked-clients/$CN" ]; then
+  echo "IranGate quota block: $CN" >&2
+  exit 1
+fi
+
+exit 0
+CONNECT_GUARD_EOF
+
+  chmod +x /etc/openvpn/irangate-client-connect.sh
+}
+
 write_agent() {
-  cat > "$AGENT_DIR/agent.py" <<'PY'
+  cat > "$AGENT_DIR/agent.py" <<'AGENT_PY_EOF'
 #!/usr/bin/env python3
 import json, os, re, subprocess
 from pathlib import Path
@@ -256,6 +329,108 @@ def send_file(h, code, content, filename):
     h.end_headers()
     h.wfile.write(body)
 
+
+# ===== IranGate node usage endpoint patch =====
+def irangate_send_json(handler, code, payload):
+    import json
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(code)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+def irangate_auth_ok(handler):
+    import os
+    token = os.environ.get("NODE_TOKEN", "").strip()
+    if not token:
+        return True
+    auth = handler.headers.get("Authorization", "").strip()
+    return auth == ("Bearer " + token)
+
+def irangate_parse_status_file():
+    import os, time
+    path = os.environ.get("OPENVPN_STATUS_LOG_PATH", "/etc/openvpn/openvpn-status.log")
+    clients = []
+
+    if not os.path.exists(path):
+        return clients
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("CLIENT_LIST,"):
+                continue
+
+            parts = line.split(",")
+            if len(parts) < 8:
+                continue
+
+            def to_int(x):
+                try:
+                    return int(x)
+                except Exception:
+                    return 0
+
+            common_name = parts[1]
+            real_address = parts[2]
+            virtual_address = parts[3]
+            # OpenVPN status v3 columns:
+            # 0 CLIENT_LIST
+            # 1 Common Name
+            # 2 Real Address
+            # 3 Virtual Address
+            # 4 Virtual IPv6 Address
+            # 5 Bytes Received
+            # 6 Bytes Sent
+            # 7 Connected Since
+            # 8 Connected Since time_t
+            # 9 Username
+            # 10 Client ID
+            # 11 Peer ID
+            bytes_received = to_int(parts[5]) if len(parts) > 5 else 0
+            bytes_sent = to_int(parts[6]) if len(parts) > 6 else 0
+
+            clients.append({
+                "common_name": common_name,
+                "client_name": common_name,
+                "real_address": real_address,
+                "virtual_address": virtual_address,
+                "virtual_ip": virtual_address,
+                "bytes_received": bytes_received,
+                "bytes_sent": bytes_sent,
+                "total_bytes": bytes_received + bytes_sent,
+                "connected_since": parts[7] if len(parts) > 7 else "",
+                "connected_since_time_t": to_int(parts[8]) if len(parts) > 8 else 0,
+                "username": parts[9] if len(parts) > 9 else "",
+                "last_updated": int(time.time()),
+                "status": "connected",
+            })
+
+    return clients
+
+def irangate_handle_usage(handler):
+    import os, time
+
+    if not irangate_auth_ok(handler):
+        return irangate_send_json(handler, 401, {
+            "success": False,
+            "message": "Unauthorized",
+        })
+
+    clients = irangate_parse_status_file()
+
+    return irangate_send_json(handler, 200, {
+        "success": True,
+        "message": "OpenVPN usage retrieved",
+        "node": os.environ.get("NODE_NAME", ""),
+        "location": os.environ.get("NODE_LOCATION", ""),
+        "timestamp": int(time.time()),
+        "clients": clients,
+        "data": clients,
+    })
+# ===== /IranGate node usage endpoint patch =====
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -270,6 +445,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n).decode() or "{}")
 
     def do_GET(self):
+        if self.path.split("?")[0] in ("/usage", "/clients", "/openvpn/status"):
+            return irangate_handle_usage(self)
+
         if not self.auth_ok():
             return send_json(self, 401, {"success": False, "message": "Unauthorized"})
 
@@ -337,9 +515,83 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     CLIENT_DIR.mkdir(parents=True, exist_ok=True)
     ThreadingHTTPServer(("0.0.0.0", NODE_AGENT_PORT), Handler).serve_forever()
-PY
+AGENT_PY_EOF
 
   chmod +x "$AGENT_DIR/agent.py"
+}
+
+write_control_server() {
+  cat > "$AGENT_DIR/node_control_server.py" <<'CONTROL_PY_EOF'
+#!/usr/bin/env python3
+import os, json, re, subprocess
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+TOKEN = os.environ.get("NODE_TOKEN", "").strip()
+PORT = int(os.environ.get("NODE_CONTROL_PORT", "5024"))
+BLOCK_DIR = Path("/etc/openvpn/blocked-clients")
+BLOCK_DIR.mkdir(parents=True, exist_ok=True)
+
+def send_json(h, code, obj):
+    b = json.dumps(obj, ensure_ascii=False).encode()
+    h.send_response(code)
+    h.send_header("Content-Type", "application/json; charset=utf-8")
+    h.send_header("Content-Length", str(len(b)))
+    h.end_headers()
+    h.wfile.write(b)
+
+def auth_ok(h):
+    if not TOKEN:
+        return True
+    return h.headers.get("Authorization", "").strip() == "Bearer " + TOKEN
+
+def clean_name(name):
+    name = (name or "").strip()
+    if not re.match(r"^[A-Za-z0-9_.@+-]{1,128}$", name):
+        return ""
+    return name
+
+def kill_client(name):
+    cmd = f'printf "kill {name}\\nquit\\n" | nc -w 2 127.0.0.1 7505'
+    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        return
+
+    def do_GET(self):
+        if not auth_ok(self):
+            return send_json(self, 401, {"success": False, "message": "Unauthorized"})
+
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        name = clean_name((q.get("name") or [""])[0])
+
+        if u.path == "/health":
+            return send_json(self, 200, {"success": True, "status": "ok"})
+
+        if not name:
+            return send_json(self, 400, {"success": False, "message": "Invalid name"})
+
+        if u.path == "/block-client":
+            (BLOCK_DIR / name).write_text("blocked\n")
+            kill_client(name)
+            return send_json(self, 200, {"success": True, "message": "blocked", "name": name})
+
+        if u.path == "/unblock-client":
+            try:
+                (BLOCK_DIR / name).unlink()
+            except FileNotFoundError:
+                pass
+            return send_json(self, 200, {"success": True, "message": "unblocked", "name": name})
+
+        return send_json(self, 404, {"success": False, "message": "Not found"})
+
+ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+CONTROL_PY_EOF
+
+  chmod +x "$AGENT_DIR/node_control_server.py"
 }
 
 write_systemd() {
@@ -360,10 +612,29 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  cat > /etc/systemd/system/irangate-node-control.service <<'EOF'
+[Unit]
+Description=IranGate Node Control API
+After=network.target openvpn-server@server.service
+Wants=openvpn-server@server.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/irangate-node-agent.env
+Environment=NODE_CONTROL_PORT=5024
+WorkingDirectory=/opt/irangate-node-agent
+ExecStart=/usr/bin/python3 /opt/irangate-node-agent/node_control_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 write_menu() {
-  cat > /usr/local/bin/ovp-node <<'EOF'
+  cat > /usr/local/bin/ovp-node <<'OVP_NODE_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -391,12 +662,28 @@ restart_agent() {
   systemctl restart irangate-node-agent.service
 }
 
+restart_node_apis() {
+  systemctl restart irangate-node-agent.service
+  systemctl restart irangate-node-control.service
+}
+
 show_status() {
   load_env
   echo "Node Name: ${NODE_NAME:-}"
   echo "Location: ${NODE_LOCATION:-}"
   echo "Agent URL: http://$(hostname -I | awk '{print $1}'):${NODE_AGENT_PORT:-8091}"
-  echo "Token: ${NODE_TOKEN:-}"
+  local token="${NODE_TOKEN:-}"
+  local masked_token="<not set>"
+
+  if [ -n "$token" ]; then
+    if [ "${#token}" -le 8 ]; then
+      masked_token="****"
+    else
+      masked_token="${token:0:4}****${token: -4}"
+    fi
+  fi
+
+  echo "Token: $masked_token"
   echo "OVPN remote in configs: ${NODE_PUBLIC_HOST:-}:${NODE_OVPN_PORT:-1194}/${NODE_OVPN_PROTO:-udp}"
   echo "OpenVPN listen port: ${NODE_OPENVPN_LISTEN_PORT:-1194}"
   echo
@@ -420,8 +707,8 @@ change_token() {
   read -rp "New shared token: " t
   [ -z "$t" ] && echo "Empty token rejected" && return
   set_var NODE_TOKEN "$t"
-  restart_agent
-  echo "Token changed"
+  restart_node_apis
+  echo "Token changed and both Node APIs restarted"
 }
 
 change_remote_host() {
@@ -467,13 +754,18 @@ uninstall_node() {
   [ "$x" != "REMOVE" ] && echo "Canceled" && return
 
   systemctl disable --now irangate-node-agent.service 2>/dev/null || true
+  systemctl disable --now irangate-node-control.service 2>/dev/null || true
   systemctl disable --now openvpn-server@server.service 2>/dev/null || true
   systemctl disable --now irangate-node-nat.service 2>/dev/null || true
 
   rm -f /etc/systemd/system/irangate-node-agent.service
+  rm -f /etc/systemd/system/irangate-node-control.service
   rm -f /etc/systemd/system/irangate-node-nat.service
   rm -f /usr/local/bin/irangate-node-client
+  rm -f /usr/local/bin/irangate-node-nat
   rm -f /usr/local/bin/ovp-node
+  rm -f /etc/openvpn/irangate-client-connect.sh
+  rm -rf /etc/openvpn/blocked-clients
   rm -f /etc/irangate-node-agent.env
   rm -rf /opt/irangate-node-agent
 
@@ -513,16 +805,25 @@ while true; do
     *) echo "Invalid choice" ;;
   esac
 done
-EOF
+OVP_NODE_EOF
 
   chmod +x /usr/local/bin/ovp-node
 }
 
 start_services() {
   systemctl daemon-reload
-  systemctl enable --now irangate-node-nat.service
-  systemctl enable --now openvpn-server@server.service
-  systemctl enable --now irangate-node-agent.service
+
+  systemctl enable irangate-node-nat.service
+  systemctl restart irangate-node-nat.service
+
+  systemctl enable openvpn-server@server.service
+  systemctl restart openvpn-server@server.service
+
+  systemctl enable irangate-node-agent.service
+  systemctl enable irangate-node-control.service
+
+  systemctl restart irangate-node-agent.service
+  systemctl restart irangate-node-control.service
 }
 
 main() {
@@ -549,7 +850,9 @@ main() {
   setup_openvpn
   setup_network
   write_client_tool
+  write_client_connect_guard
   write_agent
+  write_control_server
   write_systemd
   write_menu
   start_services
@@ -557,6 +860,7 @@ main() {
   echo
   echo "DONE"
   echo "Agent URL for panel: http://$PUBLIC_IP:$NODE_AGENT_PORT"
+  echo "Control URL for Master: http://$PUBLIC_IP:5024"
   echo "Token: $NODE_TOKEN"
   echo "Public IP: $PUBLIC_IP"
   echo "Config remote: $NODE_PUBLIC_HOST:$NODE_OVPN_PORT/$NODE_OVPN_PROTO"

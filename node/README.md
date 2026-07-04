@@ -1,22 +1,63 @@
 # IranGate OpenVPN Node Installer
 
-Install this on each external OpenVPN node server.
+Install this script on each external IranGate OpenVPN node.
 
 ## Install
 
-```bash
-wget -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
-chmod +x install-node.sh
-bash install-node.sh
-```
+    wget -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
+    chmod +x install-node.sh
+    bash install-node.sh
+
+The installer configures:
+
+- OpenVPN server
+- Node Agent API
+- OpenVPN usage API
+- Node Control API
+- block/unblock enforcement
+- immediate session termination through the OpenVPN management interface
+- persistent client-connect blocking
+- IPv4 forwarding and NAT
+- client profile creation and download
+- ovp-node management CLI
+
+## Node Agent API
+
+Authenticated endpoints include:
+
+- /status
+- /usage
+- /clients
+- /openvpn/status
+- client profile creation
+- client profile download
+
+The Agent port is selected during installation.
+
+## Node Control API
+
+The Node Control service listens on TCP port 5024 by default.
+
+Authenticated endpoints:
+
+- /health
+- /block-client?name=CLIENT
+- /unblock-client?name=CLIENT
+
+The Control API and Agent API use the same shared Node token.
+
+Blocking a client performs two actions:
+
+1. Creates a persistent block marker under /etc/openvpn/blocked-clients.
+2. Terminates the active OpenVPN session through the local management interface.
+
+The OpenVPN client-connect hook prevents blocked clients from reconnecting.
 
 ## Manage
 
-After install, run:
+Run:
 
-```bash
-ovp-node
-```
+    ovp-node
 
 Menu options:
 
@@ -29,4 +70,4 @@ Menu options:
 7. Create test ovpn config
 8. Remove node completely
 
-If you use an Iran tunnel, set the ovpn config IP/domain and port to the Iran tunnel IP and tunnel port.
+When using an Iran-to-external tunnel, set the IP/domain and port written into generated .ovpn profiles to the Iran-side tunnel endpoint.
