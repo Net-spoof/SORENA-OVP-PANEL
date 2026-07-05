@@ -2531,7 +2531,7 @@ func main() {
 	api.HandleFunc("/logs/tail", tailLogsHandler).Methods("GET")
 	api.HandleFunc("/logs/stream", streamLogsHandler).Methods("GET")
 	api.HandleFunc("/backup/export", exportBackupV2Handler).Methods("GET")
-	api.HandleFunc("/backup/import", importBackupHandler).Methods("POST")
+	api.HandleFunc("/backup/import", importBackupV2Handler).Methods("POST")
 	api.HandleFunc("/users", getUsersHandler).Methods("GET")
 	api.HandleFunc("/users", createUserHandler).Methods("POST")
 	api.HandleFunc("/users/{username}", updateUserHandler).Methods("PUT")
