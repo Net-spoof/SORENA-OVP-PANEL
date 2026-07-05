@@ -102,12 +102,134 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+func syncAdminCredentialsFromEnv() error {
+	username := readEnvOrDefault(
+		"WEBPANEL_ADMIN_USER",
+		"admin",
+	)
+
+	password := readEnvOrDefault(
+		"WEBPANEL_ADMIN_PASS",
+		"adminadmin",
+	)
+
+	emailFromEnv := strings.TrimSpace(
+		os.Getenv("WEBPANEL_ADMIN_EMAIL"),
+	)
+
+	if err := os.MkdirAll(
+		filepath.Dir(AdminDBPath),
+		0755,
+	); err != nil {
+		return fmt.Errorf(
+			"create admin database directory: %w",
+			err,
+		)
+	}
+
+	now := time.Now()
+
+	admin := Admin{
+		CreatedAt: now,
+		Email:     "admin@irangate.local",
+	}
+
+	existingData, err := os.ReadFile(
+		AdminDBPath,
+	)
+
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(
+			existingData,
+			&admin,
+		); err != nil {
+			return fmt.Errorf(
+				"parse existing admin database: %w",
+				err,
+			)
+		}
+
+		if admin.CreatedAt.IsZero() {
+			admin.CreatedAt = now
+		}
+
+	case os.IsNotExist(err):
+		// Fresh installation.
+
+	default:
+		return fmt.Errorf(
+			"read admin database: %w",
+			err,
+		)
+	}
+
+	admin.Username = username
+	admin.PasswordHash = hashPassword(password)
+
+	if emailFromEnv != "" {
+		admin.Email = emailFromEnv
+	} else if strings.TrimSpace(admin.Email) == "" {
+		admin.Email = "admin@irangate.local"
+	}
+
+	data, err := json.MarshalIndent(
+		admin,
+		"",
+		"  ",
+	)
+
+	if err != nil {
+		return fmt.Errorf(
+			"encode admin database: %w",
+			err,
+		)
+	}
+
+	tempPath := AdminDBPath + ".tmp"
+
+	if err := os.WriteFile(
+		tempPath,
+		data,
+		0600,
+	); err != nil {
+		return fmt.Errorf(
+			"write temporary admin database: %w",
+			err,
+		)
+	}
+
+	if err := os.Rename(
+		tempPath,
+		AdminDBPath,
+	); err != nil {
+		_ = os.Remove(tempPath)
+
+		return fmt.Errorf(
+			"replace admin database: %w",
+			err,
+		)
+	}
+
+	if err := os.Chmod(
+		AdminDBPath,
+		0600,
+	); err != nil {
+		return fmt.Errorf(
+			"secure admin database permissions: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
 func initDatabases() error {
 	os.MkdirAll(filepath.Dir(AdminDBPath), 0755)
 	os.MkdirAll(TemplatesPath, 0755)
 	if _, err := os.Stat(AdminDBPath); os.IsNotExist(err) {
 		initialUser := readEnvOrDefault("WEBPANEL_ADMIN_USER", "admin")
-		initialPass := readEnvOrDefault("WEBPANEL_ADMIN_PASS", "admin123")
+		initialPass := readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin")
 		initialEmail := readEnvOrDefault("WEBPANEL_ADMIN_EMAIL", "admin@irangate.local")
 		passwordHash := hashPassword(initialPass)
 		admin := Admin{
@@ -124,8 +246,8 @@ func initDatabases() error {
 			return err
 		}
 		log.Printf("⚠️  Initial admin created - Username: %s\n", initialUser)
-		if initialPass == "admin123" {
-			log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
+		if initialPass == "adminadmin" {
+			log.Println("⚠️  Default admin password is in use; change it for production.")
 		}
 	}
 	if _, err := os.Stat(TelegramDBPath); os.IsNotExist(err) {
@@ -2012,26 +2134,59 @@ func ensureClientSubscriptionToken(name string) (string, error) {
 }
 
 func buildSubscriptionURL(r *http.Request, token string) string {
-	scheme := "http"
+	scheme := strings.TrimSpace(
+		readEnvOrDefault("SUBSCRIPTION_SCHEME", ""),
+	)
 
-	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
-		scheme = strings.TrimSpace(strings.Split(forwarded, ",")[0])
-	} else if r.TLS != nil {
-		scheme = "https"
+	if scheme == "" {
+		scheme = "http"
+
+		if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+			scheme = strings.TrimSpace(
+				strings.Split(forwarded, ",")[0],
+			)
+		} else if r.TLS != nil {
+			scheme = "https"
+		}
 	}
 
-	host := r.Host
-	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
-		host = strings.TrimSpace(strings.Split(forwardedHost, ",")[0])
+	hostname := strings.TrimSpace(
+		readEnvOrDefault("SUBSCRIPTION_PUBLIC_HOST", ""),
+	)
+
+	if hostname == "" {
+		host := r.Host
+
+		if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+			host = strings.TrimSpace(
+				strings.Split(forwardedHost, ",")[0],
+			)
+		}
+
+		hostname = host
+
+		if strings.Count(host, ":") == 1 {
+			hostname = strings.SplitN(host, ":", 2)[0]
+		}
 	}
 
-	hostname := host
-	if strings.Contains(host, ":") {
-		hostname = strings.Split(host, ":")[0]
+	port := strings.TrimSpace(
+		readEnvOrDefault("SUBSCRIPTION_PORT", "8090"),
+	)
+
+	authority := hostname
+
+	if !((scheme == "http" && port == "80") ||
+		(scheme == "https" && port == "443")) {
+		authority = fmt.Sprintf("%s:%s", hostname, port)
 	}
 
-	// Subscription public port is separated from admin panel port.
-	return fmt.Sprintf("%s://%s:8090/sub/%s", scheme, hostname, token)
+	return fmt.Sprintf(
+		"%s://%s/sub/%s",
+		scheme,
+		authority,
+		token,
+	)
 }
 
 func findClientBySubscriptionToken(token string) (string, map[string]interface{}, error) {
@@ -2518,6 +2673,27 @@ func subscriptionNodeDownloadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	if len(os.Args) > 1 &&
+		os.Args[1] == "--sync-admin-from-env" {
+
+		if err := syncAdminCredentialsFromEnv(); err != nil {
+			log.Fatalf(
+				"Admin credential synchronization failed: %v",
+				err,
+			)
+		}
+
+		log.Printf(
+			"Admin credentials synchronized successfully for user %q",
+			readEnvOrDefault(
+				"WEBPANEL_ADMIN_USER",
+				"admin",
+			),
+		)
+
+		return
+	}
+
 	if err := initDatabases(); err != nil {
 		log.Fatal("Failed to initialize databases:", err)
 	}
@@ -2714,7 +2890,7 @@ func main() {
 	log.Println("🚀 IranGate Web Panel API Starting...")
 	log.Printf("📍 API Server: http://localhost:%s", portStr)
 	log.Println("🔐 Default Login: configured via env or admin/admin123")
-	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "admin123") == "admin123" {
+	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin") == "admin123" {
 		log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
 	}
 	addr := ":" + portStr

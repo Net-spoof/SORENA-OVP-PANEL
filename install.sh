@@ -32,6 +32,10 @@ PORT=1194
 DNS="2"
 CLIENT_NAME="client"
 WEBPANEL_PORT=8080
+SUBSCRIPTION_PORT=8090
+PANEL_DOMAIN=""
+SUBSCRIPTION_PUBLIC_HOST=""
+SUBSCRIPTION_SCHEME="http"
 ADMIN_USER="admin"
 ADMIN_PASS="adminadmin"
 WEB_PATH=""
@@ -234,18 +238,155 @@ prompt_webpanel_config() {
     echo ""
     log_step "Web Panel Configuration"
     echo ""
+
+    while true; do
+        read -r -p "Web Panel Port [8080]: " input_panel_port
+        WEBPANEL_PORT="${input_panel_port:-8080}"
+
+        if [[ "$WEBPANEL_PORT" =~ ^[0-9]+$ ]] \
+            && (( 10#$WEBPANEL_PORT >= 1 )) \
+            && (( 10#$WEBPANEL_PORT <= 65535 ))
+        then
+            if [[ "$WEBPANEL_PORT" == "80" || "$WEBPANEL_PORT" == "443" ]]; then
+                log_warn "Ports 80 and 443 are reserved for domain HTTPS access."
+                continue
+            fi
+
+            if [[ "$PROTOCOL" == "tcp" && "$WEBPANEL_PORT" == "$PORT" ]]; then
+                log_warn "Web Panel Port conflicts with the OpenVPN TCP port ($PORT)."
+                continue
+            fi
+
+            break
+        fi
+
+        log_warn "Invalid Web Panel port. Enter a number from 1 to 65535."
+    done
+
+    while true; do
+        read -r -p "Subscription Port [8090]: " input_sub_port
+        SUBSCRIPTION_PORT="${input_sub_port:-8090}"
+
+        if [[ ! "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]] \
+            || (( 10#$SUBSCRIPTION_PORT < 1 )) \
+            || (( 10#$SUBSCRIPTION_PORT > 65535 ))
+        then
+            log_warn "Invalid Subscription port. Enter a number from 1 to 65535."
+            continue
+        fi
+
+        if [[ "$SUBSCRIPTION_PORT" == "$WEBPANEL_PORT" ]]; then
+            log_warn "Subscription Port must be different from Web Panel Port."
+            continue
+        fi
+
+        if [[ "$PROTOCOL" == "tcp" && "$SUBSCRIPTION_PORT" == "$PORT" ]]; then
+            log_warn "Subscription Port conflicts with the OpenVPN TCP port ($PORT)."
+            continue
+        fi
+
+        break
+    done
+
+    echo ""
+    echo -e "${YELLOW}Optional domain configuration:${NC}"
+    echo -e "${YELLOW}Leave empty to use server IP in Panel and Subscription URLs.${NC}"
+
+    while true; do
+        read -r -p "Panel Domain (optional): " PANEL_DOMAIN
+
+        PANEL_DOMAIN="$(
+            printf '%s' "$PANEL_DOMAIN" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E \
+                -e 's|^https?://||' \
+                -e 's|/.*$||' \
+                -e 's|[[:space:]]||g'
+        )"
+
+        if [[ -z "$PANEL_DOMAIN" ]]; then
+            SUBSCRIPTION_PUBLIC_HOST="$SERVER_IP"
+            SUBSCRIPTION_SCHEME="http"
+            break
+        fi
+
+        if [[ "$PANEL_DOMAIN" =~ ^[a-z0-9.-]+$ ]] \
+            && [[ "$PANEL_DOMAIN" == *.* ]] \
+            && [[ "$PANEL_DOMAIN" != .* ]] \
+            && [[ "$PANEL_DOMAIN" != *. ]]
+        then
+            if [[ "$SUBSCRIPTION_PORT" == "80" ]]; then
+                log_warn "Subscription Port 80 cannot be used in HTTPS domain mode."
+                continue
+            fi
+
+            SUBSCRIPTION_PUBLIC_HOST="$PANEL_DOMAIN"
+            SUBSCRIPTION_SCHEME="https"
+            break
+        fi
+
+        log_warn "Invalid domain. Example: panel.example.com"
+    done
+
+    echo ""
     echo -e "${YELLOW}Enter the web path where the panel should be installed:${NC}"
-    echo -e "${YELLOW}(e.g., 'panel' or 'admin' or leave empty for root)${NC}"
-    echo -e "${YELLOW}This is used to bypass censorship scanning systems.${NC}"
-    read -p "Web Path (press Enter for root '/'): " WEB_PATH
-    WEB_PATH=$(echo "$WEB_PATH" | tr -d '[:space:]')
-    if [[ -z "$WEB_PATH" ]]; then
-        WEB_PATH=""
+    echo -e "${YELLOW}(e.g. panel, admin, or leave empty for root)${NC}"
+
+    read -r -p "Web Path (press Enter for root '/'): " WEB_PATH
+
+    WEB_PATH="$(
+        printf '%s' "$WEB_PATH" \
+        | tr -d '[:space:]' \
+        | sed \
+            -e 's|^/||' \
+            -e 's|/$||'
+    )"
+
+    echo ""
+    while true; do
+        read -r -p "Admin Username [admin]: " input_admin_user
+        ADMIN_USER="${input_admin_user:-admin}"
+
+        if [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]]; then
+            break
+        fi
+
+        log_warn "Invalid username. Use letters, numbers, dot, underscore, @ or dash."
+    done
+
+    while true; do
+        read -r -s -p "Admin Password [adminadmin]: " input_admin_pass
+        echo ""
+
+        ADMIN_PASS="${input_admin_pass:-adminadmin}"
+
+        if [[ "$ADMIN_PASS" =~ [[:space:]] ]]; then
+            log_warn "Password cannot contain whitespace."
+            continue
+        fi
+
+        if [[ ${#ADMIN_PASS} -lt 4 ]]; then
+            log_warn "Password must contain at least 4 characters."
+            continue
+        fi
+
+        break
+    done
+
+    log_info "Web Panel Port: $WEBPANEL_PORT"
+    log_info "Subscription Port: $SUBSCRIPTION_PORT"
+
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        log_info "Panel Domain: $PANEL_DOMAIN"
+        log_info "Subscription Host: $PANEL_DOMAIN"
     else
-        WEB_PATH=$(echo "$WEB_PATH" | sed 's|^/||' | sed 's|/$||')
+        log_info "Domain mode disabled; server IP will be used."
     fi
+
     log_info "Web Path set to: /$WEB_PATH"
+    log_info "Admin Username: $ADMIN_USER"
 }
+
 create_irangate_directories() {
     log_info "Creating IranGate directory structure..."
     mkdir -p /opt/irangate/database
@@ -1043,14 +1184,28 @@ install_webpanel() {
 
     cat > /etc/irangate/webpanel.env << EOF
 WEBPANEL_PORT=$WEBPANEL_PORT
+SUBSCRIPTION_PORT=$SUBSCRIPTION_PORT
+SUBSCRIPTION_PUBLIC_HOST=$SUBSCRIPTION_PUBLIC_HOST
+SUBSCRIPTION_SCHEME=$SUBSCRIPTION_SCHEME
+PANEL_DOMAIN=$PANEL_DOMAIN
 WEBPANEL_BASEPATH=/$WEB_PATH
 WEBPANEL_STATIC_DIR=/opt/irangate/webpanel/frontend
 WEBPANEL_ADMIN_USER=$ADMIN_USER
-WEBPANEL_ADMIN_PASS=$ADMIN_PASS
 WEBPANEL_ADMIN_EMAIL=admin@irangate.local
 JWT_SECRET=$jwt_secret
 EOF
     chmod 600 /etc/irangate/webpanel.env
+
+    log_info "Synchronizing Web Panel admin credentials with admin database..."
+
+    WEBPANEL_ADMIN_USER="$ADMIN_USER" \
+    WEBPANEL_ADMIN_PASS="$ADMIN_PASS" \
+    IRANGATE_DATA_DIR="/opt/irangate" \
+        /usr/local/bin/irangate-webpanel \
+        --sync-admin-from-env
+
+    log_info "Web Panel admin database synchronized successfully"
+
     log_info "Creating Web Panel systemd service..."
     cat > /etc/systemd/system/irangate-webpanel.service << EOF
 [Unit]
@@ -1102,6 +1257,192 @@ EOF
         chmod 644 /etc/irangate/traffic_config.json
     fi
     log_info "IranGate Web Panel installed successfully"
+}
+
+configure_webpanel_access() {
+    log_info "Configuring Web Panel and Subscription public access..."
+
+    mkdir -p \
+        /etc/nginx/conf.d \
+        /var/www/certbot \
+        /etc/letsencrypt/renewal-hooks/deploy
+
+    rm -f \
+        /etc/nginx/conf.d/irangate-subscription.conf \
+        /etc/nginx/conf.d/irangate-panel-domain.conf
+
+    systemctl enable --now nginx
+
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        log_info "Checking DNS resolution for $PANEL_DOMAIN..."
+
+        if ! getent ahosts "$PANEL_DOMAIN" >/dev/null 2>&1; then
+            log_error "Domain does not resolve: $PANEL_DOMAIN"
+            log_error "Point the domain DNS record to this server and run the installer again."
+            return 1
+        fi
+
+        log_info "Domain DNS resolution is available."
+
+        cat > /etc/nginx/conf.d/irangate-panel-domain.conf <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PANEL_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+EOF
+
+        nginx -t
+        systemctl reload nginx
+
+        CERT_DIR="/etc/letsencrypt/live/${PANEL_DOMAIN}"
+
+        if [[ ! -s "$CERT_DIR/fullchain.pem" || ! -s "$CERT_DIR/privkey.pem" ]]; then
+            log_info "Requesting Let's Encrypt certificate for $PANEL_DOMAIN..."
+
+            certbot certonly \
+                --non-interactive \
+                --agree-tos \
+                --register-unsafely-without-email \
+                --preferred-challenges http \
+                --webroot \
+                --webroot-path /var/www/certbot \
+                -d "$PANEL_DOMAIN"
+        else
+            log_info "Existing certificate found for $PANEL_DOMAIN; reusing it."
+        fi
+
+        if [[ ! -s "$CERT_DIR/fullchain.pem" || ! -s "$CERT_DIR/privkey.pem" ]]; then
+            log_error "Certificate files were not created."
+            return 1
+        fi
+
+        cat > /etc/nginx/conf.d/irangate-panel-domain.conf <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PANEL_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${PANEL_DOMAIN};
+
+    ssl_certificate ${CERT_DIR}/fullchain.pem;
+    ssl_certificate_key ${CERT_DIR}/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:${WEBPANEL_PORT};
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+        if [[ "$SUBSCRIPTION_PORT" != "443" ]]; then
+            cat >> /etc/nginx/conf.d/irangate-panel-domain.conf <<EOF
+
+server {
+    listen ${SUBSCRIPTION_PORT} ssl;
+    listen [::]:${SUBSCRIPTION_PORT} ssl;
+    server_name ${PANEL_DOMAIN};
+
+    ssl_certificate ${CERT_DIR}/fullchain.pem;
+    ssl_certificate_key ${CERT_DIR}/privkey.pem;
+
+    location /sub/ {
+        proxy_pass http://127.0.0.1:${WEBPANEL_PORT}/sub/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host:\$server_port;
+        proxy_set_header X-Forwarded-Host \$host:\$server_port;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        return 404;
+    }
+}
+EOF
+        fi
+
+        cat > /etc/letsencrypt/renewal-hooks/deploy/irangate-nginx-reload.sh <<'EOF'
+#!/bin/sh
+nginx -t && systemctl reload nginx
+EOF
+
+        chmod 0755 \
+            /etc/letsencrypt/renewal-hooks/deploy/irangate-nginx-reload.sh
+
+    else
+        cat > /etc/nginx/conf.d/irangate-subscription.conf <<EOF
+server {
+    listen ${SUBSCRIPTION_PORT};
+    listen [::]:${SUBSCRIPTION_PORT};
+    server_name _;
+
+    location /sub/ {
+        proxy_pass http://127.0.0.1:${WEBPANEL_PORT}/sub/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host:${SUBSCRIPTION_PORT};
+        proxy_set_header X-Forwarded-Host \$host:${SUBSCRIPTION_PORT};
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        return 404;
+    }
+}
+EOF
+    fi
+
+    nginx -t
+    systemctl reload nginx
+
+    if command -v ufw >/dev/null 2>&1 \
+        && ufw status 2>/dev/null | grep -q '^Status: active'
+    then
+        if [[ -n "$PANEL_DOMAIN" ]]; then
+            ufw allow 80/tcp >/dev/null
+            ufw allow 443/tcp >/dev/null
+
+            if [[ "$SUBSCRIPTION_PORT" != "443" ]]; then
+                ufw allow "${SUBSCRIPTION_PORT}/tcp" >/dev/null
+            fi
+        else
+            ufw allow "${WEBPANEL_PORT}/tcp" >/dev/null
+            ufw allow "${SUBSCRIPTION_PORT}/tcp" >/dev/null
+        fi
+    fi
+
+    log_info "Web Panel and Subscription access configured successfully."
 }
 
 install_master_postgres_stack() {
@@ -1403,10 +1744,27 @@ show_final_summary() {
     echo -e "  ${GREEN}✓${NC} Status: $(systemctl is-active openvpn@server)"
     echo ""
     echo -e "${YELLOW}Web Panel:${NC}"
-    echo -e "  ${GREEN}✓${NC} URL: ${CYAN}http://$server_ip:$WEBPANEL_PORT/$WEB_PATH/${NC}"
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        echo -e "  ${GREEN}✓${NC} URL: ${CYAN}https://$PANEL_DOMAIN/$WEB_PATH/${NC}"
+    else
+        echo -e "  ${GREEN}✓${NC} URL: ${CYAN}http://$SERVER_IP:$WEBPANEL_PORT/$WEB_PATH/${NC}"
+    fi
     echo -e "  ${GREEN}✓${NC} Admin Username: ${CYAN}$ADMIN_USER${NC}"
     echo -e "  ${GREEN}✓${NC} Admin Password: ${CYAN}$ADMIN_PASS${NC}"
     echo -e "  ${GREEN}✓${NC} Status: $(systemctl is-active irangate-webpanel)"
+    echo ""
+    echo -e "${YELLOW}Subscription Service:${NC}"
+
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        if [[ "$SUBSCRIPTION_PORT" == "443" ]]; then
+            echo -e "  ${GREEN}✓${NC} Base URL: ${CYAN}https://$PANEL_DOMAIN/sub/TOKEN${NC}"
+        else
+            echo -e "  ${GREEN}✓${NC} Base URL: ${CYAN}https://$PANEL_DOMAIN:$SUBSCRIPTION_PORT/sub/TOKEN${NC}"
+        fi
+    else
+        echo -e "  ${GREEN}✓${NC} Base URL: ${CYAN}http://$SERVER_IP:$SUBSCRIPTION_PORT/sub/TOKEN${NC}"
+    fi
+
     echo ""
     echo -e "${YELLOW}First Client:${NC}"
     echo -e "  ${GREEN}✓${NC} Name: ${CYAN}$CLIENT_NAME${NC}"
@@ -1464,6 +1822,7 @@ main() {
     install_openvpn_core
     install_irangate_cli
     install_webpanel
+    configure_webpanel_access
     install_master_postgres_stack
     test_services
     show_final_summary
