@@ -580,9 +580,7 @@ crontab -l \
 
 if [ "$SKIP_BACKUP" -eq 0 ]; then
 
-    if [ ! -x \
-        /usr/local/bin/irangate-backup-v2-export
-    ]; then
+    if [ ! -x /usr/local/bin/irangate-backup-v2-export ]; then
         die \
             "Backup v2 exporter not found. Use --skip-backup only when an external verified backup already exists."
     fi
