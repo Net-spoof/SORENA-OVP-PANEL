@@ -1676,12 +1676,15 @@ func importBackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSuccess(w, "Backup restored successfully", nil)
 }
+
+var processStartedAt = time.Now()
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().Format(time.RFC3339),
 		"version":   "1.0.0",
-		"uptime":    time.Since(time.Now()).String(),
+		"uptime":    time.Since(processStartedAt).Truncate(time.Second).String(),
 	}
 	sendSuccess(w, "Health check passed", health)
 }
