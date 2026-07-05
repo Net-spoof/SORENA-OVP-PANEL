@@ -1474,7 +1474,10 @@ install_master_postgres_stack() {
     systemctl enable postgresql >/dev/null 2>&1 || true
     systemctl start postgresql
 
-    mkdir -p /opt/irangate/traffic
+    mkdir -p \
+        /opt/irangate/traffic \
+        /opt/irangate/traffic/daily
+
     mkdir -p /etc/irangate
 
     if [[ -f "$db_env_file" ]]; then
@@ -1520,6 +1523,18 @@ install_master_postgres_stack() {
             "$db_name"
     fi
 
+    log_info "Normalizing PostgreSQL public schema ownership..."
+
+    (
+        cd /tmp
+
+        runuser -u postgres -- \
+            psql \
+            -d "$db_name" \
+            -v ON_ERROR_STOP=1 \
+            -c "ALTER SCHEMA public OWNER TO $db_user;"
+    )
+
     cat > "$db_env_file" <<EOF
 IRANGATE_DB_HOST=127.0.0.1
 IRANGATE_DB_PORT=5432
@@ -1546,6 +1561,7 @@ EOF
         PGPASSWORD="$db_password" \
             psql \
             -v ON_ERROR_STOP=1 \
+            --single-transaction \
             -h 127.0.0.1 \
             -p 5432 \
             -U "$db_user" \
