@@ -107,7 +107,11 @@ function createSidebar(activePage) {
                         <span class="badge beta">💫 Coming Soon</span>
                     </a>
                     <a href="nodes.html" class="menu-item ${activePage === 'nodes' ? 'active' : ''}" title="Nodes">
-                        <i data-lucide="server" class="w-5 h-5"></i>
+                        <svg class="sidebar-menu-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <rect x="3" y="4" width="18" height="6" rx="2" stroke-width="2"></rect>
+                            <rect x="3" y="14" width="18" height="6" rx="2" stroke-width="2"></rect>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 17h.01"></path>
+                        </svg>
                         <span>Nodes</span>
                     </a>
 

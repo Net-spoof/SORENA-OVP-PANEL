@@ -368,3 +368,12 @@
     }
 }
 
+
+/* NODES_ICON_FIXED_SIZE */
+.menu-item .sidebar-menu-icon {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    flex-shrink: 0;
+    display: block;
+}
