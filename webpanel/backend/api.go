@@ -695,11 +695,12 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type UpdateClientRequest struct {
-		ExpirationDays    *int   `json:"expiration_days,omitempty"`
-		TrafficLimitBytes *int64 `json:"traffic_limit_bytes,omitempty"`
-		ConnectionLimit   *int   `json:"connection_limit,omitempty"`
-		Active            *bool  `json:"active,omitempty"`
-		ResetTraffic      bool   `json:"reset_traffic,omitempty"`
+		ExpirationDays    *int      `json:"expiration_days,omitempty"`
+		TrafficLimitBytes *int64    `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit   *int      `json:"connection_limit,omitempty"`
+		Active            *bool     `json:"active,omitempty"`
+		ResetTraffic      bool      `json:"reset_traffic,omitempty"`
+		Nodes             *[]string `json:"nodes,omitempty"`
 	}
 
 	var req UpdateClientRequest
@@ -720,6 +721,11 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Failed to parse client data", http.StatusInternalServerError)
 		return
 	}
+
+	previousNodeIDs :=
+		nodeIDsFromClientData(
+			clientData,
+		)
 
 	if req.ExpirationDays != nil {
 		if *req.ExpirationDays <= 0 || *req.ExpirationDays > 3650 {
@@ -744,6 +750,76 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		clientData["connection_limit"] = *req.ConnectionLimit
+	}
+
+	if req.Nodes != nil {
+		nf, err := loadNodesFile()
+		if err != nil {
+			sendError(
+				w,
+				"Failed to load available nodes",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		allowedNodes := make(map[string]bool)
+
+		for _, node := range nf.Nodes {
+			id := normalizeNodeID(node.ID)
+
+			if id == "" || !node.Enabled {
+				continue
+			}
+
+			allowedNodes[id] = true
+		}
+
+		selectedNodes := make(
+			[]string,
+			0,
+			len(*req.Nodes),
+		)
+
+		seenNodes := make(map[string]bool)
+
+		for _, rawID := range *req.Nodes {
+			id := normalizeNodeID(rawID)
+
+			if id == "" || !allowedNodes[id] {
+				sendError(
+					w,
+					fmt.Sprintf(
+						"Invalid or disabled node: %s",
+						rawID,
+					),
+					http.StatusBadRequest,
+				)
+				return
+			}
+
+			if seenNodes[id] {
+				continue
+			}
+
+			seenNodes[id] = true
+
+			selectedNodes = append(
+				selectedNodes,
+				id,
+			)
+		}
+
+		if len(selectedNodes) == 0 {
+			sendError(
+				w,
+				"At least one node must be selected",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		clientData["nodes"] = selectedNodes
 	}
 
 	if req.ResetTraffic {
@@ -785,6 +861,63 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Failed to save client data", http.StatusInternalServerError)
 		return
 	}
+
+	if req.Nodes != nil {
+		if err := syncClientNodeACL(
+			name,
+			*req.Nodes,
+		); err != nil {
+
+			rollbackErr :=
+				os.WriteFile(
+					clientPath,
+					data,
+					0644,
+				)
+
+			aclRollbackErr :=
+				syncClientNodeACL(
+					name,
+					previousNodeIDs,
+				)
+
+			log.Printf(
+				"node ACL update failed for %s: %v; file rollback=%v; ACL rollback=%v",
+				name,
+				err,
+				rollbackErr,
+				aclRollbackErr,
+			)
+
+			sendError(
+				w,
+				"Failed to apply node access: "+err.Error(),
+				http.StatusBadGateway,
+			)
+
+			return
+		}
+	}
+
+	clientsCache.mutex.Lock()
+	clientsCache.data = nil
+	clientsCache.timestamp = time.Time{}
+	clientsCache.mutex.Unlock()
+
+	go func() {
+		if err := exec.Command(
+			"systemctl",
+			"start",
+			"irangate-pg-sync-clients.service",
+		).Run(); err != nil {
+
+			log.Printf(
+				"client node PostgreSQL sync trigger failed for %s: %v",
+				name,
+				err,
+			)
+		}
+	}()
 
 	enforceClientAfterEdit(name, req.ResetTraffic)
 
@@ -2154,6 +2287,11 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	downloadURL := "/sub/" + template.URLQueryEscaper(token) + "/download"
 	subURL := buildSubscriptionURL(r, token)
 
+	masterAllowed := clientHasNode(
+		clientData,
+		"local",
+	)
+
 	masterName := "Germany Master"
 	masterFlag := "🇩🇪"
 
@@ -2198,6 +2336,7 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"DownloadURL":     downloadURL,
 		"MasterName":      masterName,
 		"MasterFlag":      masterFlag,
+		"MasterAllowed":   masterAllowed,
 		"NodeDownloads":   subNodes,
 		"SubscriptionURL": subURL,
 	}
@@ -2299,7 +2438,9 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
       </div>
 
       <div class="actions">
+        {{if .MasterAllowed}}
         <a class="btn btn-main" href="{{.DownloadURL}}">دانلود {{.MasterFlag}} {{.MasterName}}</a>
+        {{end}}
         {{range .NodeDownloads}}
         <a class="btn btn-ghost" href="{{.URL}}">دانلود {{.Flag}} {{.Name}}</a>
         {{end}}
@@ -2320,9 +2461,21 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
 func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	token := mux.Vars(r)["token"]
 
-	clientName, _, err := findClientBySubscriptionToken(token)
+	clientName, clientData, err := findClientBySubscriptionToken(token)
 	if err != nil {
 		http.Error(w, "Subscription not found", http.StatusNotFound)
+		return
+	}
+
+	if !clientHasNode(
+		clientData,
+		"local",
+	) {
+		http.Error(
+			w,
+			"Node access denied",
+			http.StatusForbidden,
+		)
 		return
 	}
 

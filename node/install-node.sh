@@ -272,13 +272,21 @@ CLIENT_TOOL_EOF
 }
 
 write_client_connect_guard() {
-  mkdir -p /etc/openvpn/blocked-clients
+  mkdir -p \
+    /etc/openvpn/blocked-clients \
+    /etc/openvpn/node-denied-clients
+
   cat > /etc/openvpn/irangate-client-connect.sh <<'CONNECT_GUARD_EOF'
 #!/bin/sh
 CN="$common_name"
 
 if [ -z "$CN" ]; then
   exit 0
+fi
+
+if [ -f "/etc/openvpn/node-denied-clients/$CN" ]; then
+  echo "IranGate node access denied: $CN" >&2
+  exit 1
 fi
 
 if [ -f "/etc/openvpn/blocked-clients/$CN" ]; then
@@ -533,6 +541,9 @@ PORT = int(os.environ.get("NODE_CONTROL_PORT", "5024"))
 BLOCK_DIR = Path("/etc/openvpn/blocked-clients")
 BLOCK_DIR.mkdir(parents=True, exist_ok=True)
 
+DENY_DIR = Path("/etc/openvpn/node-denied-clients")
+DENY_DIR.mkdir(parents=True, exist_ok=True)
+
 def send_json(h, code, obj):
     b = json.dumps(obj, ensure_ascii=False).encode()
     h.send_response(code)
@@ -573,6 +584,51 @@ class H(BaseHTTPRequestHandler):
 
         if not name:
             return send_json(self, 400, {"success": False, "message": "Invalid name"})
+
+        if u.path == "/deny-node-client":
+            (DENY_DIR / name).write_text("denied\n")
+            kill_client(name)
+
+            return send_json(
+                self,
+                200,
+                {
+                    "success": True,
+                    "message": "node access denied",
+                    "name": name,
+                    "denied": True,
+                },
+            )
+
+        if u.path == "/allow-node-client":
+            try:
+                (DENY_DIR / name).unlink()
+            except FileNotFoundError:
+                pass
+
+            return send_json(
+                self,
+                200,
+                {
+                    "success": True,
+                    "message": "node access allowed",
+                    "name": name,
+                    "denied": False,
+                },
+            )
+
+        if u.path == "/node-client-access":
+            denied = (DENY_DIR / name).exists()
+
+            return send_json(
+                self,
+                200,
+                {
+                    "success": True,
+                    "name": name,
+                    "denied": denied,
+                },
+            )
 
         if u.path == "/block-client":
             (BLOCK_DIR / name).write_text("blocked\n")

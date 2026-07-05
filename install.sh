@@ -1260,6 +1260,47 @@ EOF
         /usr/local/bin/irangate-connection-guard \
         /usr/local/bin/irangate-client-connect-guard
 
+    log_info "Installing persistent OpenVPN quota and node ACL guard..."
+
+    mkdir -p \
+        /etc/openvpn/blocked-clients \
+        /etc/openvpn/node-denied-clients
+
+    cat > /etc/openvpn/irangate-client-connect.sh <<'MASTER_NODE_GUARD_EOF'
+#!/bin/sh
+CN="$common_name"
+
+if [ -z "$CN" ]; then
+  exit 0
+fi
+
+if [ -f "/etc/openvpn/node-denied-clients/$CN" ]; then
+  echo "IranGate node access denied: $CN" >&2
+  exit 1
+fi
+
+if [ -f "/etc/openvpn/blocked-clients/$CN" ]; then
+  echo "IranGate quota block: $CN" >&2
+  exit 1
+fi
+
+exit 0
+MASTER_NODE_GUARD_EOF
+
+    chmod 0755 \
+        /etc/openvpn/irangate-client-connect.sh
+
+    if [[ -f /etc/openvpn/server.conf ]]; then
+        if ! grep -qF \
+            'client-connect /etc/openvpn/irangate-client-connect.sh' \
+            /etc/openvpn/server.conf; then
+
+            printf '%s\n' \
+                'client-connect /etc/openvpn/irangate-client-connect.sh' \
+                >> /etc/openvpn/server.conf
+        fi
+    fi
+
     systemctl daemon-reload
 
     log_info "Restarting OpenVPN after legacy hook cleanup..."

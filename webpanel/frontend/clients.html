@@ -1110,6 +1110,122 @@
         });
 
 
+        async function loadEditClientNodeOptions(client) {
+            const box =
+                document.getElementById(
+                    'editClientNodesBox'
+                );
+
+            box.innerHTML =
+                '<div class="text-xs text-gray-500">Loading nodes...</div>';
+
+            try {
+                const response = await fetch(
+                    '/api/nodes',
+                    {
+                        headers: {
+                            'Authorization':
+                                'Bearer ' +
+                                localStorage.getItem('token')
+                        }
+                    }
+                );
+
+                const result =
+                    await response.json();
+
+                if (!result.success) {
+                    throw new Error(
+                        result.message ||
+                        'Failed to load nodes'
+                    );
+                }
+
+                const nodes = (
+                    Array.isArray(result.data)
+                        ? result.data
+                        : []
+                ).filter(
+                    node => node.enabled
+                );
+
+                const selectedNodes =
+                    new Set(
+                        getClientSelectedNodes(
+                            client
+                        )
+                    );
+
+
+                if (!nodes.length) {
+                    box.innerHTML =
+                        '<div class="text-xs text-red-600">No enabled nodes available</div>';
+
+                    return;
+                }
+
+
+                box.innerHTML = nodes.map(
+                    node => {
+                        const checked =
+                            selectedNodes.has(
+                                node.id
+                            )
+                                ? 'checked'
+                                : '';
+
+                        const flag =
+                            node.flag || '🌐';
+
+                        const location =
+                            node.location
+                                ? ` (${node.location})`
+                                : '';
+
+                        return `
+                            <label class="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    class="edit-client-node-checkbox"
+                                    value="${node.id}"
+                                    ${checked}
+                                >
+
+                                <span>
+                                    ${flag}
+                                    ${node.name || node.id}
+                                    <span class="text-xs text-gray-500">
+                                        ${location}
+                                    </span>
+                                </span>
+                            </label>
+                        `;
+                    }
+                ).join('');
+
+            } catch (error) {
+                console.error(
+                    'Failed to load edit client nodes:',
+                    error
+                );
+
+                box.innerHTML =
+                    '<div class="text-xs text-red-600">Failed to load nodes</div>';
+            }
+        }
+
+
+        function getSelectedEditClientNodes() {
+            return Array.from(
+                document.querySelectorAll(
+                    '.edit-client-node-checkbox:checked'
+                )
+            ).map(
+                checkbox => checkbox.value
+            ).filter(Boolean);
+        }
+
+
         function hideEditModal() {
             document.getElementById('editClientModal').classList.add('hidden');
         }
@@ -1147,7 +1263,7 @@
             return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
         }
 
-        function showEditClient(name) {
+        async function showEditClient(name) {
             const client = allClients.find(c => c.name === name);
             if (!client) {
                 showToast('Client not found', 'error');
@@ -1164,6 +1280,8 @@
             document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
             document.getElementById('editActive').checked = true;
             document.getElementById('editResetTraffic').checked = false;
+
+            await loadEditClientNodeOptions(client);
 
             document.getElementById('editClientModal').classList.remove('hidden');
         }
@@ -1184,6 +1302,17 @@
             const name = document.getElementById('editClientName').value;
             const expirationDays = parseInt(document.getElementById('editExpirationDays').value, 10) || 30;
             const connectionLimit = parseInt(document.getElementById('editConnectionLimit').value, 10) || 1;
+            const selectedNodes =
+                getSelectedEditClientNodes();
+
+            if (!selectedNodes.length) {
+                showToast(
+                    'Select at least one node',
+                    'error'
+                );
+                return;
+            }
+
 
             if (connectionLimit < 1 || connectionLimit > 100) {
                 showToast('Connection limit must be between 1 and 100', 'error');
@@ -1214,7 +1343,8 @@
                         traffic_limit_bytes: editTrafficLimitBytes(),
                         connection_limit: connectionLimit,
                         active: document.getElementById('editActive').checked,
-                        reset_traffic: resetTraffic
+                        reset_traffic: resetTraffic,
+                        nodes: selectedNodes
                     })
                 });
 
@@ -1689,6 +1819,25 @@
                     <label class="block text-sm font-medium text-gray-700 mb-1">Connection Limit</label>
                     <input type="number" id="editConnectionLimit" min="1" max="100"
                            class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Available Nodes
+                    </label>
+
+                    <div
+                        id="editClientNodesBox"
+                        class="border rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto"
+                    >
+                        <div class="text-xs text-gray-500">
+                            Loading nodes...
+                        </div>
+                    </div>
+
+                    <p class="text-xs text-gray-500 mt-1">
+                        Untick a node to remove it from this client's subscription and access list.
+                    </p>
                 </div>
 
                 <label class="flex items-center space-x-2">
