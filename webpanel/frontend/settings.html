@@ -231,6 +231,139 @@
                 </button>
             </form>
         </div>
+
+        <!-- Automatic Backup to Telegram -->
+        <div class="bg-white rounded-lg shadow p-6 mt-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-2">
+                ☁️ Automatic Backup to Telegram
+            </h2>
+
+            <p class="text-sm text-gray-600 mb-5">
+                Creates a complete Backup v2, stores it on the server, and sends the same archive using the Bot Token and Chat ID configured above.
+            </p>
+
+            <form id="telegramBackupForm" class="space-y-4">
+
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        id="telegramBackupEnabled"
+                        class="mr-2"
+                    >
+
+                    <label
+                        for="telegramBackupEnabled"
+                        class="text-sm text-gray-700"
+                    >
+                        Enable automatic backup delivery
+                    </label>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Backup Interval
+                        </label>
+
+                        <input
+                            type="number"
+                            id="telegramBackupIntervalValue"
+                            min="1"
+                            value="6"
+                            class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Interval Unit
+                        </label>
+
+                        <select
+                            id="telegramBackupIntervalUnit"
+                            class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                            <option value="minutes">Minutes</option>
+                            <option value="hours" selected>Hours</option>
+                        </select>
+                    </div>
+
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Keep Backups on Server (Days)
+                    </label>
+
+                    <input
+                        type="number"
+                        id="telegramBackupRetentionDays"
+                        min="1"
+                        max="365"
+                        value="30"
+                        class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+
+                    <p class="text-xs text-gray-500 mt-2">
+                        Old archives are removed according to retention days. A maximum of 30 copies is kept for this schedule.
+                    </p>
+                </div>
+
+                <div class="border rounded-lg p-4 text-sm space-y-2">
+                    <div>
+                        <strong>Status:</strong>
+                        <span id="telegramBackupStatus">Loading...</span>
+                    </div>
+
+                    <div>
+                        <strong>Storage:</strong>
+                        <span id="telegramBackupStorage" class="font-mono text-xs">
+                            /opt/irangate/webpanel/backups/backups/
+                        </span>
+                    </div>
+
+                    <div>
+                        <strong>Last Run:</strong>
+                        <span id="telegramBackupLastRun">—</span>
+                    </div>
+
+                    <div>
+                        <strong>Last Success:</strong>
+                        <span id="telegramBackupLastSuccess">—</span>
+                    </div>
+
+                    <div>
+                        <strong>Next Run:</strong>
+                        <span id="telegramBackupNextRun">—</span>
+                    </div>
+
+                    <div>
+                        <strong>Last Error:</strong>
+                        <span id="telegramBackupLastError">—</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                        type="submit"
+                        class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg"
+                    >
+                        💾 Save Backup Schedule
+                    </button>
+
+                    <button
+                        type="button"
+                        onclick="runTelegramBackupNow()"
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg"
+                    >
+                        📦 Backup & Send Now
+                    </button>
+                </div>
+
+            </form>
+        </div>
+
         </div>
 
         <!-- Backup & Restore -->
@@ -304,13 +437,82 @@
             document.getElementById(`tab-${tabName}`).classList.add('active');
         }
 
+        async function telegramBackupRequest(path, method = 'GET', data = null) {
+            const options = {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                }
+            };
+
+            if (data !== null) {
+                options.headers['Content-Type'] = 'application/json';
+                options.body = JSON.stringify(data);
+            }
+
+            const response = await fetch('/api' + path, options);
+            const result = await response.json();
+
+            return result;
+        }
+
+        function telegramBackupDate(value) {
+            if (!value) return '—';
+
+            try {
+                return new Date(value).toLocaleString();
+            } catch (_) {
+                return value;
+            }
+        }
+
+        function renderTelegramBackupSettings(data) {
+            document.getElementById('telegramBackupEnabled').checked =
+                data.enabled || false;
+
+            document.getElementById('telegramBackupIntervalValue').value =
+                data.interval_value || 6;
+
+            document.getElementById('telegramBackupIntervalUnit').value =
+                data.interval_unit || 'hours';
+
+            document.getElementById('telegramBackupRetentionDays').value =
+                data.retention_days || 30;
+
+            document.getElementById('telegramBackupStorage').textContent =
+                data.storage_path ||
+                '/opt/irangate/webpanel/backups/backups/';
+
+            document.getElementById('telegramBackupLastRun').textContent =
+                telegramBackupDate(data.last_run);
+
+            document.getElementById('telegramBackupLastSuccess').textContent =
+                telegramBackupDate(data.last_success);
+
+            document.getElementById('telegramBackupNextRun').textContent =
+                telegramBackupDate(data.next_run);
+
+            document.getElementById('telegramBackupLastError').textContent =
+                data.last_error || '—';
+
+            let status = data.enabled ? 'Enabled' : 'Disabled';
+
+            if (!data.credentials_present) {
+                status += ' — Bot Token / Chat ID missing';
+            }
+
+            document.getElementById('telegramBackupStatus').textContent =
+                status;
+        }
+
         // Load settings
         async function loadSettings() {
             try {
-                const [serverSettings, telegramSettings, serverStatus] = await Promise.all([
+                const [serverSettings, telegramSettings, serverStatus, telegramBackupSettings] = await Promise.all([
                     api.getServerSettings(),
                     api.getTelegramSettings(),
-                    api.getServerStatus()
+                    api.getServerStatus(),
+                    telegramBackupRequest('/settings/telegram-backup')
                 ]);
 
                 if (serverSettings.success) {
@@ -323,6 +525,12 @@
                     document.getElementById('botToken').value = data.bot_token || '';
                     document.getElementById('chatID').value = data.chat_id || '';
                     document.getElementById('telegramEnabled').checked = data.enabled || false;
+                }
+
+                if (telegramBackupSettings.success) {
+                    renderTelegramBackupSettings(
+                        telegramBackupSettings.data
+                    );
                 }
 
                 if (serverStatus.success) {
@@ -393,13 +601,31 @@
             const settings = {
                 bot_token: document.getElementById('botToken').value,
                 chat_id: document.getElementById('chatID').value,
-                enabled: document.getElementById('telegramEnabled').checked
+                enabled: document.getElementById('telegramEnabled').checked,
+                expiring_days: 7
             };
 
             try {
                 const result = await api.updateTelegramSettings(settings);
                 if (result.success) {
                     showToast('Telegram settings saved!', 'success');
+
+                    // Refresh backup credential state immediately.
+                    try {
+                        const backupStatus =
+                            await telegramBackupRequest(
+                                '/settings/telegram-backup'
+                            );
+
+                        if (backupStatus.success) {
+                            renderTelegramBackupSettings(
+                                backupStatus.data
+                            );
+                        }
+                    } catch (_) {
+                        // Telegram settings were saved successfully.
+                        // Backup status will refresh on page reload.
+                    }
                 } else {
                     showToast(result.message || 'Failed to save settings', 'error');
                 }
@@ -407,6 +633,204 @@
                 showToast('Failed to save Telegram settings', 'error');
             }
         });
+
+
+        // Save Telegram Backup schedule
+        document.getElementById('telegramBackupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const enabled =
+                document.getElementById(
+                    'telegramBackupEnabled'
+                ).checked;
+
+            const intervalValue = parseInt(
+                document.getElementById(
+                    'telegramBackupIntervalValue'
+                ).value,
+                10
+            );
+
+            const intervalUnit =
+                document.getElementById(
+                    'telegramBackupIntervalUnit'
+                ).value;
+
+            const retentionDays = parseInt(
+                document.getElementById(
+                    'telegramBackupRetentionDays'
+                ).value,
+                10
+            );
+
+            const payload = {
+                enabled: enabled,
+                interval_value:
+                    Number.isFinite(intervalValue)
+                        ? intervalValue
+                        : 1,
+
+                interval_unit:
+                    intervalUnit,
+
+                retention_days:
+                    Number.isFinite(retentionDays)
+                        ? retentionDays
+                        : 30
+            };
+
+            try {
+                const result =
+                    await telegramBackupRequest(
+                        '/settings/telegram-backup',
+                        'PUT',
+                        payload
+                    );
+
+                if (!result.success) {
+                    showToast(
+                        result.message ||
+                        'Failed to save backup schedule',
+                        'error'
+                    );
+
+                    return;
+                }
+
+                renderTelegramBackupSettings(
+                    result.data
+                );
+
+                showToast(
+                    'Backup schedule saved!',
+                    'success'
+                );
+
+            } catch (error) {
+                console.error(
+                    'Telegram backup schedule save error:',
+                    error
+                );
+
+                showToast(
+                    'Failed to save backup schedule',
+                    'error'
+                );
+            }
+        });
+
+
+        async function runTelegramBackupNow() {
+            const button = event?.currentTarget || null;
+
+            if (!confirm(
+                'Create a complete Backup v2, store it on the server, and send it to Telegram now?'
+            )) {
+                return;
+            }
+
+            if (button) {
+                button.disabled = true;
+                button.dataset.originalText =
+                    button.textContent;
+
+                button.textContent =
+                    '⏳ Creating and sending backup...';
+            }
+
+            try {
+                const result =
+                    await telegramBackupRequest(
+                        '/settings/telegram-backup/run',
+                        'POST'
+                    );
+
+                if (!result.success) {
+                    showToast(
+                        result.message ||
+                        'Failed to start Telegram backup',
+                        'error'
+                    );
+
+                    return;
+                }
+
+                showToast(
+                    'Backup started. Waiting for completion...',
+                    'success'
+                );
+
+                let completed = false;
+
+                for (let attempt = 0; attempt < 40; attempt++) {
+                    await new Promise(
+                        resolve => setTimeout(resolve, 3000)
+                    );
+
+                    const status =
+                        await telegramBackupRequest(
+                            '/settings/telegram-backup'
+                        );
+
+                    if (!status.success) {
+                        continue;
+                    }
+
+                    renderTelegramBackupSettings(
+                        status.data
+                    );
+
+                    if (status.data.last_error) {
+                        showToast(
+                            'Telegram backup failed: ' +
+                            status.data.last_error,
+                            'error'
+                        );
+
+                        completed = true;
+                        break;
+                    }
+
+                    if (status.data.last_success) {
+                        showToast(
+                            'Backup saved and sent to Telegram successfully!',
+                            'success'
+                        );
+
+                        completed = true;
+                        break;
+                    }
+                }
+
+                if (!completed) {
+                    showToast(
+                        'Backup is still processing. Status will update after refresh.',
+                        'info'
+                    );
+                }
+
+            } catch (error) {
+                console.error(
+                    'Telegram backup run error:',
+                    error
+                );
+
+                showToast(
+                    'Failed to start Telegram backup',
+                    'error'
+                );
+
+            } finally {
+                if (button) {
+                    button.disabled = false;
+
+                    button.textContent =
+                        button.dataset.originalText ||
+                        '📦 Backup & Send Now';
+                }
+            }
+        }
+
 
         // Export backup
         async function exportBackup() {
