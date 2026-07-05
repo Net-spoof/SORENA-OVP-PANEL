@@ -272,26 +272,53 @@ class API {
 
     // Backup
     async exportBackup() {
-        // Create a blob URL with proper authorization
         const response = await fetch(`${API_BASE}/backup/export`, {
             method: 'GET',
             headers: this.getHeaders()
         });
-        
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `irangate-backup-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-        } else {
-            const error = await response.json();
-            throw new Error(error.message || 'Backup export failed');
+
+        if (!response.ok) {
+            let message = 'Backup export failed';
+
+            try {
+                const error = await response.json();
+                message = error.message || message;
+            } catch (_) {
+                // Keep generic error message.
+            }
+
+            throw new Error(message);
         }
+
+        const blob = await response.blob();
+
+        const disposition =
+            response.headers.get('Content-Disposition') || '';
+
+        const match =
+            disposition.match(/filename="?([^";]+)"?/i);
+
+        const filename = match
+            ? match[1]
+            : `irangate-backup-v2-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+
+        const url = window.URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+
+        a.href = url;
+        a.download = filename;
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        window.URL.revokeObjectURL(url);
+
+        return {
+            success: true,
+            filename
+        };
     }
 
     async importBackup(file) {

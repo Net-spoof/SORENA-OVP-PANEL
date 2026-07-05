@@ -2530,7 +2530,7 @@ func main() {
 	api.HandleFunc("/logs/search", searchLogsHandler).Methods("GET", "POST")
 	api.HandleFunc("/logs/tail", tailLogsHandler).Methods("GET")
 	api.HandleFunc("/logs/stream", streamLogsHandler).Methods("GET")
-	api.HandleFunc("/backup/export", exportBackupHandler).Methods("GET")
+	api.HandleFunc("/backup/export", exportBackupV2Handler).Methods("GET")
 	api.HandleFunc("/backup/import", importBackupHandler).Methods("POST")
 	api.HandleFunc("/users", getUsersHandler).Methods("GET")
 	api.HandleFunc("/users", createUserHandler).Methods("POST")

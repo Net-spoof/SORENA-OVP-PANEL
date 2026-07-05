@@ -42,6 +42,19 @@ state = load_json(STATE_FILE, {"last": {}, "totals": {}})
 state.setdefault("last", {})
 state.setdefault("totals", {})
 
+# Remove invalid synthetic client state left by older parsers.
+for section in ("last", "totals"):
+    bucket = state.get(section)
+
+    if not isinstance(bucket, dict):
+        continue
+
+    for key in list(bucket):
+        client_name = str(key).rsplit(":", 1)[-1].strip()
+
+        if not client_name or client_name.upper() == "UNDEF":
+            del bucket[key]
+
 out = []
 now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 now_ts = int(time.time())
@@ -64,8 +77,14 @@ for node in nodes:
         continue
 
     for c in clients:
-        name = c.get("client_name") or c.get("common_name")
-        if not name:
+        name = str(
+            c.get("client_name")
+            or c.get("common_name")
+            or ""
+        ).strip()
+
+        if not name or name.upper() == "UNDEF":
+            print(f"{node_id}: skip invalid client name={name!r}")
             continue
 
         rx = int(c.get("bytes_received") or 0)

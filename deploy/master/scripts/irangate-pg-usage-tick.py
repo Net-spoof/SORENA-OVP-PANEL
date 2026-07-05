@@ -131,8 +131,18 @@ with conn.cursor() as cur:
         cur.execute("DELETE FROM active_sessions WHERE source_id = %s", (snapshot_source,))
 
     for x in items:
-        name = name_of(x)
-        if not name:
+        raw_name = name_of(x)
+        name = str(raw_name or "").strip()
+
+        if not name or name.upper() == "UNDEF":
+            if args.verbose:
+                print(
+                    "SKIP_INVALID_CLIENT",
+                    "source=",
+                    x.get("_source_id"),
+                    "name=",
+                    repr(name),
+                )
             continue
 
         source = str(x["_source_id"])
