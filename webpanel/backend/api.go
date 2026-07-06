@@ -2381,33 +2381,22 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		statusText = "سرویس تمام شده"
 	}
 
+	presence := globalPresenceForClient(
+		clientName,
+		clientData,
+	)
+
+	isOnline := presence.Online
+
 	onlineText := "آفلاین"
-	if data, err := os.ReadFile("/etc/openvpn/openvpn-status.log"); err == nil {
-		inClients := false
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-
-			if strings.HasPrefix(line, "Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since") {
-				inClients = true
-				continue
-			}
-
-			if strings.HasPrefix(line, "ROUTING TABLE") {
-				inClients = false
-				continue
-			}
-
-			if !inClients || line == "" {
-				continue
-			}
-
-			parts := strings.Split(line, ",")
-			if len(parts) > 0 && parts[0] == clientName {
-				onlineText = "آنلاین"
-				break
-			}
-		}
+	if isOnline {
+		onlineText = "آنلاین"
 	}
+
+	lastConnectionText :=
+		formatSubscriptionLastConnection(
+			presence.LastSeen,
+		)
 
 	daysLeft := subDaysLeft(clientData)
 	daysLeft = strings.ReplaceAll(daysLeft, " days", " روز")
@@ -2479,21 +2468,24 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := map[string]interface{}{
-		"ClientName":      clientName,
-		"Status":          statusText,
-		"OnlineStatus":    onlineText,
-		"Limit":           limitText,
-		"Used":            subFormatBytes(used),
-		"Left":            leftText,
-		"DaysLeft":        daysLeft,
-		"ProgressPercent": fmt.Sprintf("%.2f", progressPercent),
-		"ProgressText":    progressText,
-		"DownloadURL":     downloadURL,
-		"MasterName":      masterName,
-		"MasterFlag":      masterFlag,
-		"MasterAllowed":   masterAllowed,
-		"NodeDownloads":   subNodes,
-		"SubscriptionURL": subURL,
+		"ClientName":         clientName,
+		"Status":             statusText,
+		"OnlineStatus":       onlineText,
+		"IsOnline":           isOnline,
+		"ShowLastConnection": !isOnline,
+		"LastConnection":     lastConnectionText,
+		"Limit":              limitText,
+		"Used":               subFormatBytes(used),
+		"Left":               leftText,
+		"DaysLeft":           daysLeft,
+		"ProgressPercent":    fmt.Sprintf("%.2f", progressPercent),
+		"ProgressText":       progressText,
+		"DownloadURL":        downloadURL,
+		"MasterName":         masterName,
+		"MasterFlag":         masterFlag,
+		"MasterAllowed":      masterAllowed,
+		"NodeDownloads":      subNodes,
+		"SubscriptionURL":    subURL,
 	}
 
 	tpl := template.Must(template.New("sub").Parse(`<!doctype html>
@@ -2506,7 +2498,9 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 *{box-sizing:border-box}
 body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(circle at top left,#3b0764 0,#020617 34%,#020617 100%);color:#e5e7eb;min-height:100vh}
 .top{height:48px;background:rgba(15,23,42,.72);border-bottom:1px solid rgba(148,163,184,.12);display:flex;align-items:center;justify-content:flex-start;padding:0 24px}
-.dot{width:22px;height:22px;border-radius:50%;background:#2dd4bf;box-shadow:0 0 18px rgba(45,212,191,.8);border:6px solid rgba(15,23,42,.85)}
+.dot{width:22px;height:22px;border-radius:50%;border:6px solid rgba(15,23,42,.85)}
+.dot.online{background:#22c55e;box-shadow:0 0 18px rgba(34,197,94,.85)}
+.dot.offline{background:#ef4444;box-shadow:0 0 18px rgba(239,68,68,.85)}
 .wrap{max-width:1120px;margin:24px auto;padding:0 16px}
 .card{background:rgba(15,23,42,.78);border:1px solid rgba(148,163,184,.16);border-radius:18px;box-shadow:0 22px 70px rgba(0,0,0,.38);padding:16px}
 .profile{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}
@@ -2540,7 +2534,7 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
 </style>
 </head>
 <body>
-<div class="top"><div class="dot"></div></div>
+<div class="top"><div class="dot {{if .IsOnline}}online{{else}}offline{{end}}"></div></div>
 
 <div class="wrap">
   <div class="card">
@@ -2588,7 +2582,8 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
         <div class="meta">
           حجم کل: {{.Limit}}<br>
           مصرف‌شده: {{.Used}}<br>
-          باقی‌مانده: {{.Left}}
+          باقی‌مانده: {{.Left}}{{if .ShowLastConnection}}<br>
+          آخرین اتصال: {{.LastConnection}}{{end}}
         </div>
       </div>
 

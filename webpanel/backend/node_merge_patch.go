@@ -40,6 +40,14 @@ func getClientsWithNodeStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	mergeGlobalUsageIntoPayload(payload, global)
 
+	presence := loadGlobalPresence()
+	payload["global_presence_count"] = len(presence)
+
+	mergeGlobalPresenceIntoPayload(
+		payload,
+		presence,
+	)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(payload)
