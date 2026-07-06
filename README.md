@@ -1,3 +1,32 @@
+<!-- REZA-FORK-QUICKSTART-START -->
+
+## 🚀 نصب سریع نسخه فورک
+
+```bash
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x install.sh uninstall.sh
+sudo ./install.sh
+```
+
+## 🗑️ حذف امن پنل
+
+مشاهده برنامه حذف بدون اعمال تغییر:
+
+```bash
+sudo ./uninstall.sh --dry-run
+```
+
+حذف کامل و امن:
+
+```bash
+sudo ./uninstall.sh --yes
+```
+
+حذف‌کننده امن، قبل از حذف یک Backup v2 نهایی ایجاد می‌کند و Source Repository، بکاپ‌های خارجی داخل `/root`، گواهی‌های Let's Encrypt، سرویس PostgreSQL و دیتابیس‌های نامرتبط، Nginx، UFW، Fail2ban و Docker containers را حفظ می‌کند.
+
+<!-- REZA-FORK-QUICKSTART-END -->
+
 # IranGate-OV 🚀
 
 **Professional OpenVPN Gateway Management System with AI Assistant & Web Panel**
@@ -31,8 +60,8 @@
 ## Installation
 
 ```bash
-git clone https://github.com/AmiriDev-ORG/IranGate-OV.git
-cd IranGate-OV
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
 chmod +x install.sh
 sudo ./install.sh
 ```
