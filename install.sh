@@ -1378,6 +1378,9 @@ server {
     listen [::]:443 ssl;
     server_name ${PANEL_DOMAIN};
 
+    # Match the WebPanel Backup v2 upload limit.
+    client_max_body_size 512m;
+
     ssl_certificate ${CERT_DIR}/fullchain.pem;
     ssl_certificate_key ${CERT_DIR}/privkey.pem;
 
@@ -1891,11 +1894,27 @@ show_final_summary() {
     echo -e "  ${GREEN}✓${NC} Status: $(systemctl is-active openvpn@server)"
     echo ""
     echo -e "${YELLOW}Web Panel:${NC}"
+
+    local clean_web_path="${WEB_PATH#/}"
+    clean_web_path="${clean_web_path%/}"
+
+    local panel_url=""
+
     if [[ -n "$PANEL_DOMAIN" ]]; then
-        echo -e "  ${GREEN}✓${NC} URL: ${CYAN}https://$PANEL_DOMAIN/$WEB_PATH/${NC}"
+        if [[ -n "$clean_web_path" ]]; then
+            panel_url="https://$PANEL_DOMAIN/$clean_web_path/"
+        else
+            panel_url="https://$PANEL_DOMAIN/"
+        fi
     else
-        echo -e "  ${GREEN}✓${NC} URL: ${CYAN}http://$SERVER_IP:$WEBPANEL_PORT/$WEB_PATH/${NC}"
+        if [[ -n "$clean_web_path" ]]; then
+            panel_url="http://$SERVER_IP:$WEBPANEL_PORT/$clean_web_path/"
+        else
+            panel_url="http://$SERVER_IP:$WEBPANEL_PORT/"
+        fi
     fi
+
+    echo -e "  ${GREEN}✓${NC} URL: ${CYAN}${panel_url}${NC}"
     echo -e "  ${GREEN}✓${NC} Admin Username: ${CYAN}$ADMIN_USER${NC}"
     echo -e "  ${GREEN}✓${NC} Admin Password: ${CYAN}$ADMIN_PASS${NC}"
     echo -e "  ${GREEN}✓${NC} Status: $(systemctl is-active irangate-webpanel)"
