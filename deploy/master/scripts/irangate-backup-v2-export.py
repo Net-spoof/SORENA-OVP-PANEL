@@ -427,7 +427,69 @@ def create_archive(
     archive_path.chmod(0o600)
 
 
+
+def ensure_runtime_state_files() -> None:
+    defaults = [
+        (
+            Path(
+                "/opt/irangate/webpanel/nodes.json"
+            ),
+            {
+                "nodes": [],
+            },
+            0o600,
+        ),
+        (
+            Path(
+                "/opt/irangate/traffic/"
+                "cumulative_totals.json"
+            ),
+            [],
+            0o644,
+        ),
+    ]
+
+    for path, default_value, mode in defaults:
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        if (
+            not path.is_file()
+            or path.stat().st_size == 0
+        ):
+            path.write_text(
+                json.dumps(
+                    default_value,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            path.chmod(mode)
+
+        try:
+            with path.open(
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                json.load(handle)
+
+        except Exception as exc:
+            raise RuntimeError(
+                "invalid runtime JSON state: "
+                + str(path)
+                + ": "
+                + str(exc)
+            ) from exc
+
+
+
 def main() -> int:
+    ensure_runtime_state_files()
     BACKUP_ROOT.mkdir(
         parents=True,
         exist_ok=True,

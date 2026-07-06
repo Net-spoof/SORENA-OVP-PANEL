@@ -155,11 +155,12 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if !strings.HasSuffix(name, ".tar.gz") &&
-		!strings.HasSuffix(name, ".tgz") {
+		!strings.HasSuffix(name, ".tgz") &&
+		!strings.HasSuffix(name, ".gz") {
 
 		sendError(
 			w,
-			"Backup v2 file must use .tar.gz or .tgz",
+			"Backup v2 file must use .tar.gz, .tgz, or .gz",
 			http.StatusBadRequest,
 		)
 
@@ -244,8 +245,8 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 
 	cmd := exec.Command(
 		"/usr/local/bin/irangate-backup-v2-import",
-		tempPath,
 		mode,
+		tempPath,
 	)
 
 	var stderr bytes.Buffer

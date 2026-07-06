@@ -1579,6 +1579,104 @@ EOF
             "/usr/local/bin/$(basename "$script")"
     done
 
+    log_info "Installing Backup v2 command runtimes..."
+
+    install -m 0755 \
+        "$deploy_dir/scripts/irangate-backup-v2-export.py" \
+        /usr/local/bin/irangate-backup-v2-export
+
+    install -m 0755 \
+        "$deploy_dir/scripts/irangate-backup-v2-import.py" \
+        /usr/local/bin/irangate-backup-v2-import
+
+    for runtime in \
+        /usr/local/bin/irangate-backup-v2-export \
+        /usr/local/bin/irangate-backup-v2-import
+    do
+        if [[ ! -x "$runtime" ]]; then
+            log_error "Required Backup v2 runtime is missing: $runtime"
+            return 1
+        fi
+    done
+
+    log_info "Initializing Backup v2 runtime state..."
+
+    install -d -m 0700 \
+        /opt/irangate/backups/v2
+
+    install -d -m 0755 \
+        /opt/irangate/traffic \
+        /opt/irangate/webpanel
+
+    if [[ ! -s /opt/irangate/webpanel/nodes.json ]]; then
+        cat > /opt/irangate/webpanel/nodes.json <<'IRANGATE_NODES_JSON_EOF'
+{
+  "nodes": []
+}
+IRANGATE_NODES_JSON_EOF
+
+        chmod 0600 \
+            /opt/irangate/webpanel/nodes.json
+    fi
+
+    if [[ ! -s /opt/irangate/traffic/cumulative_totals.json ]]; then
+        printf '%s\n' '[]' \
+            > /opt/irangate/traffic/cumulative_totals.json
+
+        chmod 0644 \
+            /opt/irangate/traffic/cumulative_totals.json
+    fi
+
+    if ! python3 - <<'IRANGATE_RUNTIME_JSON_CHECK'
+import json
+from pathlib import Path
+
+paths = [
+    Path("/opt/irangate/webpanel/nodes.json"),
+    Path("/opt/irangate/traffic/cumulative_totals.json"),
+]
+
+for path in paths:
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        json.load(handle)
+IRANGATE_RUNTIME_JSON_CHECK
+    then
+        log_error "Backup v2 runtime JSON initialization failed"
+        return 1
+    fi
+
+    log_info "Ensuring OpenVPN CRL exists..."
+
+    crl_file="/etc/openvpn/easy-rsa/pki/crl.pem"
+    easyrsa_dir="/etc/openvpn/easy-rsa"
+
+    if [[ ! -s "$crl_file" ]]; then
+        if [[ ! -x "$easyrsa_dir/easyrsa" ]]; then
+            log_error "EasyRSA runtime missing; cannot generate CRL"
+            return 1
+        fi
+
+        if ! (
+            cd "$easyrsa_dir"
+            EASYRSA_CRL_DAYS=180 ./easyrsa gen-crl
+        ); then
+            log_error "Failed to generate OpenVPN CRL"
+            return 1
+        fi
+    fi
+
+    if ! openssl crl \
+        -in "$crl_file" \
+        -noout \
+        >/dev/null 2>&1
+    then
+        log_error "OpenVPN CRL validation failed"
+        return 1
+    fi
+
     log_info "Installing master systemd units..."
 
     for unit in "$deploy_dir"/systemd/*.service; do

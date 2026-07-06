@@ -1133,6 +1133,129 @@ def restore_filesystem(
         ),
     )
 
+    normalize_restored_openvpn_runtime()
+
+
+def normalize_restored_openvpn_runtime() -> None:
+    log(
+        "normalizing restored OpenVPN runtime"
+    )
+
+    config = Path(
+        "/etc/openvpn/server.conf"
+    )
+
+    hook = Path(
+        "/etc/openvpn/"
+        "irangate-client-connect.sh"
+    )
+
+    blocked_dir = Path(
+        "/etc/openvpn/blocked-clients"
+    )
+
+    node_denied_dir = Path(
+        "/etc/openvpn/node-denied-clients"
+    )
+
+    if not config.is_file():
+        fail(
+            "restored OpenVPN server.conf missing"
+        )
+
+    blocked_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    node_denied_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    hook.write_text(
+        '#!/bin/sh\n'
+        'CN="$common_name"\n'
+        '\n'
+        'if [ -z "$CN" ]; then\n'
+        '  exit 0\n'
+        'fi\n'
+        '\n'
+        'if [ -f "/etc/openvpn/node-denied-clients/$CN" ]; then\n'
+        '  echo "IranGate node access denied: $CN" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        '\n'
+        'if [ -f "/etc/openvpn/blocked-clients/$CN" ]; then\n'
+        '  echo "IranGate quota block: $CN" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        '\n'
+        'exit 0\n',
+        encoding="utf-8",
+    )
+
+    hook.chmod(0o755)
+
+    legacy_directive = (
+        "client-connect "
+        "/usr/local/bin/"
+        "irangate-client-connect-guard"
+    )
+
+    current_directive = (
+        "client-connect "
+        "/etc/openvpn/"
+        "irangate-client-connect.sh"
+    )
+
+    normalized: list[str] = []
+
+    for raw_line in config.read_text(
+        encoding="utf-8"
+    ).splitlines():
+
+        stripped = raw_line.strip()
+
+        if stripped in {
+            legacy_directive,
+            current_directive,
+        }:
+            continue
+
+        normalized.append(raw_line)
+
+    has_script_security = any(
+        line.strip().startswith(
+            "script-security "
+        )
+        for line in normalized
+    )
+
+    if not has_script_security:
+        normalized.append(
+            "script-security 2"
+        )
+
+    normalized.append(
+        current_directive
+    )
+
+    config.write_text(
+        "\n".join(normalized)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    legacy_runtime = Path(
+        "/usr/local/bin/"
+        "irangate-client-connect-guard"
+    )
+
+    legacy_runtime.unlink(
+        missing_ok=True
+    )
+
 
 def post_restore_check() -> dict:
     db = db_settings()

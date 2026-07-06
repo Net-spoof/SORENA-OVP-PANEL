@@ -916,8 +916,8 @@ func validateBackupV2(
 ) error {
 	cmd := exec.Command(
 		scheduledBackupValidator,
-		path,
 		"--validate-only",
+		path,
 	)
 
 	output, err := cmd.CombinedOutput()
