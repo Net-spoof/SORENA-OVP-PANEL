@@ -426,7 +426,168 @@ func globalPresenceForClient(
 		}
 	}
 
+	historySeen :=
+		latestTrafficHistoryPresenceTime(
+			name,
+		)
+
+	if historySeen.After(
+		result.LastSeen,
+	) {
+		result.LastSeen =
+			historySeen
+	}
+
 	return result
+}
+
+func latestTrafficHistoryPresenceTime(
+	name string,
+) time.Time {
+
+	name = strings.TrimSpace(name)
+
+	if name == "" {
+		return time.Time{}
+	}
+
+	database :=
+		NewTrafficDatabase()
+
+	now := time.Now()
+	weekAgo :=
+		now.AddDate(
+			0,
+			0,
+			-7,
+		)
+
+	history, err :=
+		database.GetClientTrafficHistory(
+			name,
+			weekAgo,
+			now,
+		)
+
+	if err != nil ||
+		len(history) == 0 {
+
+		return time.Time{}
+	}
+
+	var latest time.Time
+
+	for _, record := range history {
+		if record.Timestamp.After(
+			latest,
+		) {
+			latest =
+				record.Timestamp
+		}
+	}
+
+	if latest.IsZero() {
+		return time.Time{}
+	}
+
+	return latest.UTC()
+}
+
+func gregorianToJalali(
+	gy int,
+	gm int,
+	gd int,
+) (
+	int,
+	int,
+	int,
+) {
+
+	gregorianMonthDays := []int{
+		0,
+		31,
+		59,
+		90,
+		120,
+		151,
+		181,
+		212,
+		243,
+		273,
+		304,
+		334,
+	}
+
+	jy := 0
+
+	if gy > 1600 {
+		jy = 979
+		gy -= 1600
+	} else {
+		jy = 0
+		gy -= 621
+	}
+
+	gy2 := gy
+
+	if gm > 2 {
+		gy2++
+	}
+
+	days :=
+		365*gy +
+			(gy2+3)/4 -
+			(gy2+99)/100 +
+			(gy2+399)/400 -
+			80 +
+			gd +
+			gregorianMonthDays[gm-1]
+
+	jy += 33 * (days / 12053)
+	days %= 12053
+
+	jy += 4 * (days / 1461)
+	days %= 1461
+
+	if days > 365 {
+		jy += (days - 1) / 365
+		days = (days - 1) % 365
+	}
+
+	var jm int
+	var jd int
+
+	if days < 186 {
+		jm = 1 + days/31
+		jd = 1 + days%31
+	} else {
+		jm = 7 + (days-186)/30
+		jd = 1 + (days-186)%30
+	}
+
+	return jy, jm, jd
+}
+
+func toPersianDigits(
+	value string,
+) string {
+
+	replacer := strings.NewReplacer(
+		"0", "۰",
+		"1", "۱",
+		"2", "۲",
+		"3", "۳",
+		"4", "۴",
+		"5", "۵",
+		"6", "۶",
+		"7", "۷",
+		"8", "۸",
+		"9", "۹",
+	)
+
+	return replacer.Replace(
+		value,
+	)
 }
 
 func formatSubscriptionLastConnection(
@@ -437,8 +598,47 @@ func formatSubscriptionLastConnection(
 		return "نامشخص"
 	}
 
-	return t.UTC().Format(
-		"2006-01-02 15:04:05 UTC",
+	iranLocation, err :=
+		time.LoadLocation(
+			"Asia/Tehran",
+		)
+
+	if err != nil {
+		iranLocation =
+			time.FixedZone(
+				"IRST",
+				3*60*60+
+					30*60,
+			)
+	}
+
+	iranTime :=
+		t.In(
+			iranLocation,
+		)
+
+	gy, gm, gd :=
+		iranTime.Date()
+
+	jy, jm, jd :=
+		gregorianToJalali(
+			gy,
+			int(gm),
+			gd,
+		)
+
+	formatted := fmt.Sprintf(
+		"%04d/%02d/%02d - %02d:%02d:%02d",
+		jy,
+		jm,
+		jd,
+		iranTime.Hour(),
+		iranTime.Minute(),
+		iranTime.Second(),
+	)
+
+	return toPersianDigits(
+		formatted,
 	)
 }
 
