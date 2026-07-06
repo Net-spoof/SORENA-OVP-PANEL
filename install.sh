@@ -481,20 +481,43 @@ install_dependencies() {
     fi
 }
 install_golang() {
-    if command -v go &> /dev/null; then
-        log_info "Go is already installed: $(go version | cut -d ' ' -f 3)"
-        export PATH=$PATH:/usr/local/go/bin
-        return 0
+    local required_go_version="1.24.0"
+
+    # Prefer the modern Go toolchain installed in /usr/local/go.
+    if [[ -x /usr/local/go/bin/go ]]; then
+        export PATH="/usr/local/go/bin:$PATH"
     fi
-    log_info "Installing Go..."
-    GO_VERSION="1.21.5"
+
+    if command -v go &> /dev/null; then
+        local current_go_version
+
+        current_go_version="$(
+            go version |
+            awk '{print $3}' |
+            sed 's/^go//'
+        )"
+
+        if printf '%s\n%s\n' \
+            "$required_go_version" \
+            "$current_go_version" |
+            sort -V -C
+        then
+            log_info "Go is already installed and compatible: go${current_go_version}"
+            return
+        fi
+
+        log_warn "Installed Go go${current_go_version} is older than required go${required_go_version}; upgrading..."
+    fi
+
+    GO_VERSION="$required_go_version"
     GO_ARCH="amd64"
     wget -q -O /tmp/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz \
         https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz
+    rm -rf /usr/local/go
     tar -C /usr/local -xzf /tmp/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz
     rm /tmp/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz
-    export PATH=$PATH:/usr/local/go/bin
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+    export PATH="/usr/local/go/bin:$PATH"
+    echo 'export PATH="/usr/local/go/bin:$PATH"' >> /etc/profile
     if command -v go &> /dev/null; then
         log_info "Go installed successfully: $(go version | cut -d ' ' -f 3)"
     else
@@ -1020,7 +1043,7 @@ install_irangate_cli() {
         log_error "Failed to change directory to $SCRIPT_DIR"
         exit 1
     }
-    export PATH=$PATH:/usr/local/go/bin
+    export PATH="/usr/local/go/bin:$PATH"
     
     # Check if go.mod exists
     if [[ ! -f "go.mod" ]]; then
@@ -1033,7 +1056,7 @@ install_irangate_cli() {
     if ! command -v go &> /dev/null; then
         log_error "Go is not in PATH. Trying to source /etc/profile..."
         source /etc/profile 2>/dev/null || true
-        export PATH=$PATH:/usr/local/go/bin
+        export PATH="/usr/local/go/bin:$PATH"
         if ! command -v go &> /dev/null; then
             log_error "Go is still not available. Please check Go installation."
             exit 1
@@ -1055,8 +1078,12 @@ install_irangate_cli() {
     # Try downloading with better error handling
     log_info "Running go mod download..."
     local download_output
-    download_output=$(go mod download 2>&1)
-    local download_status=$?
+    local download_status
+    if download_output=$(go mod download 2>&1); then
+        download_status=0
+    else
+        download_status=$?
+    fi
     
     if [[ $download_status -eq 0 ]]; then
         log_info "Go dependencies downloaded successfully"
@@ -1076,8 +1103,11 @@ install_irangate_cli() {
             log_warn "Cannot reach Go proxy. Trying direct mode..."
             export GOPROXY=direct
             log_info "Retrying with GOPROXY=direct..."
-            download_output=$(go mod download 2>&1)
-            download_status=$?
+            if download_output=$(go mod download 2>&1); then
+                download_status=0
+            else
+                download_status=$?
+            fi
         fi
         
         # Try go mod tidy to fix issues
@@ -1086,8 +1116,11 @@ install_irangate_cli() {
         
         # Try download again after tidy
         log_info "Retrying go mod download after tidy..."
-        download_output=$(go mod download 2>&1)
-        download_status=$?
+        if download_output=$(go mod download 2>&1); then
+            download_status=0
+        else
+            download_status=$?
+        fi
         
         if [[ $download_status -ne 0 ]]; then
             log_error "Failed to download Go dependencies after retries"
@@ -1142,7 +1175,7 @@ install_webpanel() {
             log_error "Failed to change directory to $SCRIPT_DIR/webpanel/backend"
             exit 1
         }
-        export PATH=$PATH:/usr/local/go/bin
+        export PATH="/usr/local/go/bin:$PATH"
         
         # Check if go.mod exists
         if [[ ! -f "go.mod" ]]; then
