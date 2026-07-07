@@ -21,6 +21,8 @@ sudo ./install.sh
 
 After installation, the Master server can be managed using IranGate CLI and Web Panel.
 
+> **GitHub authentication note:** If Git asks for credentials while cloning or pulling this repository, enter your GitHub username and the access token configured for this repository.
+
 ---
 
 ## 🌐 GOST UDP Tunnel Manager
@@ -45,7 +47,10 @@ The tunnel manager supports:
 Run the following command on **both Iran and foreign servers**:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/scripts/irangate-gost-tunnel-manager.sh)
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x scripts/irangate-gost-tunnel-manager.sh
+sudo bash scripts/irangate-gost-tunnel-manager.sh
 ```
 
 The main menu will appear:
@@ -69,7 +74,10 @@ The main menu will appear:
 Run the tunnel manager on the Iran server:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/scripts/irangate-gost-tunnel-manager.sh)
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x scripts/irangate-gost-tunnel-manager.sh
+sudo bash scripts/irangate-gost-tunnel-manager.sh
 ```
 
 Then select:
@@ -141,9 +149,10 @@ Iran:445/UDP
 Run the following commands on each external OpenVPN Node:
 
 ```bash
-wget -4 -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
-chmod +x install-node.sh
-bash install-node.sh
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x node/install-node.sh
+sudo bash node/install-node.sh
 ```
 
 After installation, manage the Node with:
@@ -189,7 +198,10 @@ remote 79.175.133.27 443
 After installing OpenVPN on the foreign Master or Node server, run:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/scripts/irangate-gost-tunnel-manager.sh)
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x scripts/irangate-gost-tunnel-manager.sh
+sudo bash scripts/irangate-gost-tunnel-manager.sh
 ```
 
 Then select:
@@ -299,10 +311,13 @@ remote 79.175.133.27 443
 
 ## 🛠️ Tunnel Management
 
-Open the manager:
+If the repository is already cloned on the server, update it and open the manager with:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/scripts/irangate-gost-tunnel-manager.sh)
+cd ~/IranGate-OV-Reza
+git pull --ff-only origin CyrusTheGreat
+chmod +x scripts/irangate-gost-tunnel-manager.sh
+sudo bash scripts/irangate-gost-tunnel-manager.sh
 ```
 
 Select:
@@ -384,7 +399,7 @@ After installation, the manager can be opened with:
 irangate-gost
 ```
 
-This avoids downloading the script again for every operation.
+After this step, the manager can be opened from any directory with `irangate-gost`, without cloning or downloading the repository again.
 
 ---
 
@@ -483,15 +498,19 @@ sudo ./install.sh
 ### External Node
 
 ```bash
-wget -4 -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
-chmod +x install-node.sh
-bash install-node.sh
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x node/install-node.sh
+sudo bash node/install-node.sh
 ```
 
 ### GOST Tunnel Manager
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/scripts/irangate-gost-tunnel-manager.sh)
+git clone -b CyrusTheGreat --single-branch https://github.com/Reza-lgif/IranGate-OV-Reza.git
+cd IranGate-OV-Reza
+chmod +x scripts/irangate-gost-tunnel-manager.sh
+sudo bash scripts/irangate-gost-tunnel-manager.sh
 ```
 
 ---
