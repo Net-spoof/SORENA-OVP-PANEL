@@ -134,36 +134,47 @@ set -euo pipefail
 
 ACTION="${1:-start}"
 
-IFACE="$(ip route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+VPN_NET="10.88.0.0/24"
 
-if [ -z "$IFACE" ]; then
+WAN_IF="$(
+  ip route get 1.1.1.1 |
+  awk '{
+    for (i=1; i<=NF; i++) {
+      if ($i == "dev") {
+        print $(i+1)
+        exit
+      }
+    }
+  }'
+)"
+
+if [ -z "$WAN_IF" ]; then
   echo "Unable to detect default network interface" >&2
   exit 1
 fi
 
 case "$ACTION" in
   start)
-    iptables -t nat \
-      -C POSTROUTING \
-      -s 10.88.0.0/24 \
-      -o "$IFACE" \
-      -j MASQUERADE \
-      2>/dev/null \
-    || iptables -t nat \
-      -A POSTROUTING \
-      -s 10.88.0.0/24 \
-      -o "$IFACE" \
-      -j MASQUERADE
+
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+    # NAT: VPN clients -> Internet
+    iptables -t nat       -C POSTROUTING       -s "$VPN_NET"       -o "$WAN_IF"       -j MASQUERADE       2>/dev/null     || iptables -t nat       -A POSTROUTING       -s "$VPN_NET"       -o "$WAN_IF"       -j MASQUERADE
+
+    # Forward VPN traffic toward Internet
+    iptables       -C FORWARD       -s "$VPN_NET"       -o "$WAN_IF"       -j ACCEPT       2>/dev/null     || iptables       -I FORWARD 1       -s "$VPN_NET"       -o "$WAN_IF"       -j ACCEPT
+
+    # Allow return traffic to VPN clients
+    iptables       -C FORWARD       -i "$WAN_IF"       -d "$VPN_NET"       -m conntrack       --ctstate ESTABLISHED,RELATED       -j ACCEPT       2>/dev/null     || iptables       -I FORWARD 2       -i "$WAN_IF"       -d "$VPN_NET"       -m conntrack       --ctstate ESTABLISHED,RELATED       -j ACCEPT
     ;;
 
   stop)
-    iptables -t nat \
-      -D POSTROUTING \
-      -s 10.88.0.0/24 \
-      -o "$IFACE" \
-      -j MASQUERADE \
-      2>/dev/null \
-    || true
+
+    iptables       -D FORWARD       -s "$VPN_NET"       -o "$WAN_IF"       -j ACCEPT       2>/dev/null     || true
+
+    iptables       -D FORWARD       -i "$WAN_IF"       -d "$VPN_NET"       -m conntrack       --ctstate ESTABLISHED,RELATED       -j ACCEPT       2>/dev/null     || true
+
+    iptables -t nat       -D POSTROUTING       -s "$VPN_NET"       -o "$WAN_IF"       -j MASQUERADE       2>/dev/null     || true
     ;;
 
   *)
