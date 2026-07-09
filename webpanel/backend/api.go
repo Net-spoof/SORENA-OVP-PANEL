@@ -2737,12 +2737,11 @@ func main() {
 	}
 	staticDir := readEnvOrDefault("WEBPANEL_STATIC_DIR", "/opt/irangate/webpanel/frontend")
 	rootRouter := mux.NewRouter()
-	var r *mux.Router
-	if basePath == "/" {
-		r = rootRouter
-	} else {
-		r = rootRouter.PathPrefix(basePath).Subrouter()
-	}
+
+	// API, subscription and WebSocket routes must always remain
+	// available from the server root. WEBPANEL_BASEPATH controls
+	// only where the frontend UI is served.
+	r := rootRouter
 	r.HandleFunc("/ws", wsHandler)
 	r.HandleFunc("/sub/{token}", subscriptionPageHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")

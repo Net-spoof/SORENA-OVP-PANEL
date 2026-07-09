@@ -488,141 +488,758 @@ change_panel_port() {
 
     [[ "$new_port" =~ ^[0-9]+$ ]] || {
         echo "Invalid port."
-        return
+        return 1
     }
 
     (( new_port >= 1 && new_port <= 65535 )) || {
         echo "Invalid port range."
-        return
+        return 1
     }
+
+    if [[ "$new_port" == "$old_port" ]]; then
+        echo -e "${GREEN}Panel port is already ${new_port}.${NC}"
+        return 0
+    fi
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${new_port}$"
+    then
+        echo -e "${RED}TCP port ${new_port} is already in use.${NC}"
+        return 1
+    fi
 
     set_env WEBPANEL_PORT "$new_port"
 
-    systemctl restart irangate-webpanel
+    if ! systemctl restart irangate-webpanel; then
+        echo -e "${RED}Web panel restart failed. Rolling back.${NC}"
 
-    if ! render_nginx; then
-        echo -e "${RED}Nginx update failed.${NC}"
         set_env WEBPANEL_PORT "$old_port"
-        systemctl restart irangate-webpanel
-        render_nginx || true
-        return
+        systemctl restart irangate-webpanel || true
+
+        return 1
     fi
 
+    sleep 1
+
+    if ! systemctl is-active --quiet irangate-webpanel; then
+        echo -e "${RED}Web panel is not active. Rolling back.${NC}"
+
+        set_env WEBPANEL_PORT "$old_port"
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    if ! ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${new_port}$"
+    then
+        echo -e "${RED}Panel did not listen on port ${new_port}. Rolling back.${NC}"
+
+        set_env WEBPANEL_PORT "$old_port"
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    if ! render_nginx; then
+        echo -e "${RED}Nginx update failed. Rolling back.${NC}"
+
+        set_env WEBPANEL_PORT "$old_port"
+        systemctl restart irangate-webpanel || true
+        render_nginx || true
+
+        return 1
+    fi
+
+    echo
     echo -e "${GREEN}Panel port changed successfully.${NC}"
+    echo -e "Old Port: ${old_port}"
+    echo -e "New Port: ${new_port}"
+    echo -e "Web Panel: $(systemctl is-active irangate-webpanel)"
 }
 
 change_panel_domain() {
     local old_domain
     local new_domain
+    local base_path
+    local http_code
 
     old_domain="$(get_env PANEL_DOMAIN)"
 
     echo "Current Panel Domain: ${old_domain:-Not configured}"
     read -r -p "New Panel Domain: " new_domain
 
+    new_domain="$(
+        printf '%s' "$new_domain" \
+        | sed -E \
+            's/^[[:space:]]+//;
+             s/[[:space:]]+$//;
+             s/\.$//'
+    )"
+
+    new_domain="$(
+        printf '%s' "$new_domain" \
+        | tr '[:upper:]' '[:lower:]'
+    )"
+
     [[ -n "$new_domain" ]] || {
         echo "Domain cannot be empty."
-        return
+        return 1
     }
 
-    ensure_certificate "$new_domain" || return
+    if [[ \
+        "$new_domain" == *"://"* || \
+        "$new_domain" == *"/"* || \
+        "$new_domain" == *":"* \
+    ]]; then
+        echo -e "${RED}Enter only the domain name, without scheme, path, or port.${NC}"
+        return 1
+    fi
+
+    if ! python3 - "$new_domain" <<'PYDOMAIN'
+import re
+import sys
+
+domain = sys.argv[1]
+
+pattern = re.compile(
+    r"^(?=.{1,253}$)"
+    r"(?:"
+    r"[A-Za-z0-9]"
+    r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"\."
+    r")+"
+    r"[A-Za-z0-9]"
+    r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"$"
+)
+
+raise SystemExit(
+    0 if pattern.fullmatch(domain) else 1
+)
+PYDOMAIN
+    then
+        echo -e "${RED}Invalid domain name.${NC}"
+        return 1
+    fi
+
+    if [[ "$new_domain" == "$old_domain" ]]; then
+        echo -e "${GREEN}Panel domain is already ${new_domain}.${NC}"
+        return 0
+    fi
+
+    echo
+    echo -e "${CYAN}Preparing certificate for ${new_domain}...${NC}"
+
+    ensure_certificate "$new_domain" || {
+        echo -e "${RED}Certificate preparation failed. No changes applied.${NC}"
+        return 1
+    }
 
     set_env PANEL_DOMAIN "$new_domain"
 
     if ! render_nginx; then
+        echo -e "${RED}Nginx update failed. Rolling back panel domain.${NC}"
+
         set_env PANEL_DOMAIN "$old_domain"
         render_nginx || true
-        return
+
+        return 1
     fi
 
-    systemctl restart irangate-webpanel
+    if ! systemctl is-active --quiet nginx; then
+        echo -e "${RED}Nginx is not active. Rolling back panel domain.${NC}"
 
+        set_env PANEL_DOMAIN "$old_domain"
+        render_nginx || true
+
+        return 1
+    fi
+
+    base_path="$(get_env WEBPANEL_BASEPATH)"
+    base_path="${base_path:-/}"
+
+    http_code="$(
+        curl \
+            -k \
+            -sS \
+            --max-time 10 \
+            --resolve "${new_domain}:443:127.0.0.1" \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "https://${new_domain}${base_path}" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ ! "$http_code" =~ ^[23][0-9][0-9]$ ]]; then
+        echo -e "${RED}Panel HTTPS health check failed with HTTP ${http_code:-000}.${NC}"
+        echo -e "${YELLOW}Rolling back panel domain.${NC}"
+
+        set_env PANEL_DOMAIN "$old_domain"
+
+        if ! render_nginx; then
+            echo -e "${RED}WARNING: automatic Nginx rollback failed.${NC}"
+        fi
+
+        return 1
+    fi
+
+    echo
     echo -e "${GREEN}Panel domain changed successfully.${NC}"
+    echo -e "Old Domain: ${old_domain:-Not configured}"
+    echo -e "New Domain: ${new_domain}"
+    echo -e "HTTPS Check: HTTP ${http_code}"
+    echo -e "Nginx: $(systemctl is-active nginx)"
 }
 
 change_base_path() {
+    local old_path
     local path
+    local panel_port
+    local http_code
 
+    old_path="$(get_env WEBPANEL_BASEPATH)"
+    old_path="${old_path:-/}"
+
+    echo "Current Panel Base Path: $old_path"
     read -r -p "New Panel Base Path (example: /panel/): " path
+
+    path="$(
+        printf '%s' "$path" \
+        | sed -E \
+            's/^[[:space:]]+//;
+             s/[[:space:]]+$//'
+    )"
 
     [[ -n "$path" ]] || path="/"
 
-    [[ "$path" == /* ]] || path="/$path"
+    [[ "$path" == /* ]] || {
+        path="/${path}"
+    }
 
-    if [[ "$path" != "/" && "$path" != */ ]]; then
+    if [[ "$path" != "/" ]]; then
+        path="$(
+            printf '%s' "$path" \
+            | sed -E \
+                's:/+:/:g;
+                 s:/*$::'
+        )"
+
         path="${path}/"
     fi
 
+    if [[ "$path" == *"?"* || "$path" == *"#"* ]]; then
+        echo -e "${RED}Base path cannot contain ? or #.${NC}"
+        return 1
+    fi
+
+    if [[ "$path" =~ [[:space:]] ]]; then
+        echo -e "${RED}Base path cannot contain spaces.${NC}"
+        return 1
+    fi
+
+    if [[ "$path" == *".."* ]]; then
+        echo -e "${RED}Base path cannot contain .. segments.${NC}"
+        return 1
+    fi
+
+    if [[ "$path" == "$old_path" ]]; then
+        echo -e "${GREEN}Panel base path is already ${path}.${NC}"
+        return 0
+    fi
+
+    panel_port="$(get_env WEBPANEL_PORT)"
+    panel_port="${panel_port:-8080}"
+
     set_env WEBPANEL_BASEPATH "$path"
 
-    systemctl restart irangate-webpanel
+    if ! systemctl restart irangate-webpanel; then
+        echo -e "${RED}Web panel restart failed. Rolling back base path.${NC}"
 
-    echo -e "${GREEN}Panel base path changed to ${path}.${NC}"
+        set_env WEBPANEL_BASEPATH "$old_path"
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    sleep 1
+
+    if ! systemctl is-active --quiet irangate-webpanel; then
+        echo -e "${RED}Web panel is not active. Rolling back base path.${NC}"
+
+        set_env WEBPANEL_BASEPATH "$old_path"
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    http_code="$(
+        curl \
+            -sS \
+            --max-time 10 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "http://127.0.0.1:${panel_port}${path}" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ ! "$http_code" =~ ^[23][0-9][0-9]$ ]]; then
+        echo -e "${RED}Panel base path health check failed with HTTP ${http_code:-000}.${NC}"
+        echo -e "${YELLOW}Rolling back base path.${NC}"
+
+        set_env WEBPANEL_BASEPATH "$old_path"
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    echo
+    echo -e "${GREEN}Panel base path changed successfully.${NC}"
+    echo -e "Old Path: ${old_path}"
+    echo -e "New Path: ${path}"
+    echo -e "Health Check: HTTP ${http_code}"
+    echo -e "Web Panel: $(systemctl is-active irangate-webpanel)"
 }
 
 change_sub_domain() {
     local old_host
     local host
     local scheme
+    local port
+    local token
+    local check_path
+    local http_code
 
     old_host="$(get_env SUBSCRIPTION_PUBLIC_HOST)"
+
     scheme="$(get_env SUBSCRIPTION_SCHEME)"
     scheme="${scheme:-http}"
+
+    port="$(get_env SUBSCRIPTION_PORT)"
+    port="${port:-8081}"
 
     echo "Current Subscription Domain: ${old_host:-Not configured}"
     read -r -p "New Subscription Domain: " host
 
+    host="$(
+        printf '%s' "$host" \
+        | sed -E \
+            's/^[[:space:]]+//;
+             s/[[:space:]]+$//;
+             s/\.$//'
+    )"
+
+    host="$(
+        printf '%s' "$host" \
+        | tr '[:upper:]' '[:lower:]'
+    )"
+
     [[ -n "$host" ]] || {
         echo "Domain cannot be empty."
-        return
+        return 1
     }
 
+    if [[ \
+        "$host" == *"://"* || \
+        "$host" == *"/"* || \
+        "$host" == *":"* \
+    ]]; then
+        echo -e "${RED}Enter only the domain name, without scheme, path, or port.${NC}"
+        return 1
+    fi
+
+    if ! python3 - "$host" <<'PYDOMAIN'
+import re
+import sys
+
+domain = sys.argv[1]
+
+pattern = re.compile(
+    r"^(?=.{1,253}$)"
+    r"(?:"
+    r"[A-Za-z0-9]"
+    r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"\."
+    r")+"
+    r"[A-Za-z0-9]"
+    r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"$"
+)
+
+raise SystemExit(
+    0 if pattern.fullmatch(domain) else 1
+)
+PYDOMAIN
+    then
+        echo -e "${RED}Invalid domain name.${NC}"
+        return 1
+    fi
+
+    if [[ "$host" == "$old_host" ]]; then
+        echo -e "${GREEN}Subscription domain is already ${host}.${NC}"
+        return 0
+    fi
+
     if [[ "$scheme" == "https" ]]; then
-        ensure_certificate "$host" || return
+        echo
+        echo -e "${CYAN}Preparing certificate for ${host}...${NC}"
+
+        ensure_certificate "$host" || {
+            echo -e "${RED}Certificate preparation failed. No changes applied.${NC}"
+            return 1
+        }
     fi
 
     set_env SUBSCRIPTION_PUBLIC_HOST "$host"
 
     if ! render_nginx; then
+        echo -e "${RED}Nginx update failed. Rolling back subscription domain.${NC}"
+
         set_env SUBSCRIPTION_PUBLIC_HOST "$old_host"
         render_nginx || true
-        return
+
+        return 1
     fi
 
-    systemctl restart irangate-webpanel
+    if ! systemctl restart irangate-webpanel; then
+        echo -e "${RED}Web panel restart failed. Rolling back subscription domain.${NC}"
 
+        set_env SUBSCRIPTION_PUBLIC_HOST "$old_host"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    sleep 1
+
+    if ! systemctl is-active --quiet irangate-webpanel ||
+       ! systemctl is-active --quiet nginx
+    then
+        echo -e "${RED}Service health check failed. Rolling back subscription domain.${NC}"
+
+        set_env SUBSCRIPTION_PUBLIC_HOST "$old_host"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    token="$(
+        python3 <<'PYTOKEN'
+import json
+from pathlib import Path
+
+def walk(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key in (
+                "subscription_token",
+                "sub_token",
+            ):
+                if isinstance(value, str) and len(value) > 8:
+                    print(value)
+                    raise SystemExit(0)
+
+            walk(value)
+
+    elif isinstance(obj, list):
+        for value in obj:
+            walk(value)
+
+
+for path in Path("/opt/irangate").rglob("*.json"):
+    try:
+        walk(
+            json.loads(
+                path.read_text()
+            )
+        )
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+PYTOKEN
+    )"
+
+    if [[ -n "$token" ]]; then
+        check_path="/sub/${token}"
+    else
+        check_path="/sub/__irangate_healthcheck_invalid__"
+    fi
+
+    http_code="$(
+        curl \
+            -k \
+            -sS \
+            --max-time 10 \
+            --resolve "${host}:${port}:127.0.0.1" \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "${scheme}://${host}:${port}${check_path}" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ -n "$token" ]]; then
+        if [[ "$http_code" != "200" ]]; then
+            echo -e "${RED}Subscription health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription domain.${NC}"
+
+            set_env SUBSCRIPTION_PUBLIC_HOST "$old_host"
+            render_nginx || true
+            systemctl restart irangate-webpanel || true
+
+            return 1
+        fi
+    else
+        if [[ ! "$http_code" =~ ^[234][0-9][0-9]$ ]]; then
+            echo -e "${RED}Subscription listener health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription domain.${NC}"
+
+            set_env SUBSCRIPTION_PUBLIC_HOST "$old_host"
+            render_nginx || true
+            systemctl restart irangate-webpanel || true
+
+            return 1
+        fi
+    fi
+
+    echo
     echo -e "${GREEN}Subscription domain changed successfully.${NC}"
+    echo -e "Old Domain: ${old_host:-Not configured}"
+    echo -e "New Domain: ${host}"
+    echo -e "Scheme: ${scheme}"
+    echo -e "Port: ${port}"
+    echo -e "Subscription Check: HTTP ${http_code}"
+    echo -e "Web Panel: $(systemctl is-active irangate-webpanel)"
+    echo -e "Nginx: $(systemctl is-active nginx)"
 }
 
 change_sub_port() {
     local old_port
     local port
+    local scheme
+    local host
+    local panel_domain
+    local shared_mode
+    local token
+    local check_path
+    local suffix
+    local http_code
+    local main_pid
+    local process_port
 
     old_port="$(get_env SUBSCRIPTION_PORT)"
     old_port="${old_port:-8081}"
+
+    scheme="$(get_env SUBSCRIPTION_SCHEME)"
+    scheme="${scheme:-http}"
+
+    host="$(get_env SUBSCRIPTION_PUBLIC_HOST)"
+    panel_domain="$(get_env PANEL_DOMAIN)"
 
     echo "Current Subscription Port: $old_port"
     read -r -p "New Subscription Port: " port
 
     [[ "$port" =~ ^[0-9]+$ ]] || {
         echo "Invalid port."
-        return
+        return 1
     }
 
     (( port >= 1 && port <= 65535 )) || {
         echo "Invalid port range."
-        return
+        return 1
     }
+
+    if [[ "$port" == "$old_port" ]]; then
+        echo -e "${GREEN}Subscription port is already ${port}.${NC}"
+        return 0
+    fi
+
+    shared_mode=false
+
+    if [[ \
+        "$scheme" == "https" && \
+        "$port" == "443" && \
+        -n "$panel_domain" && \
+        "$host" == "$panel_domain" \
+    ]]; then
+        shared_mode=true
+    fi
+
+    if [[ \
+        "$scheme" == "http" && \
+        "$port" == "80" && \
+        -n "$panel_domain" && \
+        "$host" == "$panel_domain" \
+    ]]; then
+        shared_mode=true
+    fi
+
+    if [[ "$shared_mode" != true ]]; then
+        if ss -ltnH 2>/dev/null \
+            | awk '{print $4}' \
+            | grep -Eq "[:.]${port}$"
+        then
+            echo -e "${RED}TCP port ${port} is already in use.${NC}"
+            return 1
+        fi
+    fi
 
     set_env SUBSCRIPTION_PORT "$port"
 
     if ! render_nginx; then
+        echo -e "${RED}Nginx update failed. Rolling back subscription port.${NC}"
+
         set_env SUBSCRIPTION_PORT "$old_port"
         render_nginx || true
-        return
+
+        return 1
     fi
 
-    systemctl restart irangate-webpanel
+    if ! systemctl restart irangate-webpanel; then
+        echo -e "${RED}Web panel restart failed. Rolling back subscription port.${NC}"
+
+        set_env SUBSCRIPTION_PORT "$old_port"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    sleep 1
+
+    if ! systemctl is-active --quiet nginx ||
+       ! systemctl is-active --quiet irangate-webpanel
+    then
+        echo -e "${RED}Service health check failed. Rolling back subscription port.${NC}"
+
+        set_env SUBSCRIPTION_PORT "$old_port"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    main_pid="$(
+        systemctl show             -p MainPID             --value             irangate-webpanel
+    )"
+
+    process_port="$(
+        tr '\0' '\n'             < "/proc/${main_pid}/environ"             2>/dev/null         | sed -n             's/^SUBSCRIPTION_PORT=//p'         | head -n1
+    )"
+
+    if [[ "$process_port" != "$port" ]]; then
+        echo -e "${RED}Web panel process did not load SUBSCRIPTION_PORT=${port}.${NC}"
+        echo -e "${YELLOW}Rolling back subscription port.${NC}"
+
+        set_env SUBSCRIPTION_PORT "$old_port"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    if [[ "$shared_mode" != true ]]; then
+        if ! ss -ltnH 2>/dev/null \
+            | awk '{print $4}' \
+            | grep -Eq "[:.]${port}$"
+        then
+            echo -e "${RED}Nginx did not listen on port ${port}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription port.${NC}"
+
+            set_env SUBSCRIPTION_PORT "$old_port"
+            render_nginx || true
+
+            return 1
+        fi
+    fi
+
+    token="$(
+        python3 <<'PYTOKEN'
+import json
+from pathlib import Path
+
+
+def walk(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key in (
+                "subscription_token",
+                "sub_token",
+            ):
+                if isinstance(value, str) and len(value) > 8:
+                    print(value)
+                    raise SystemExit(0)
+
+            walk(value)
+
+    elif isinstance(obj, list):
+        for value in obj:
+            walk(value)
+
+
+for path in Path("/opt/irangate").rglob("*.json"):
+    try:
+        walk(
+            json.loads(
+                path.read_text()
+            )
+        )
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+PYTOKEN
+    )"
+
+    if [[ -n "$token" ]]; then
+        check_path="/sub/${token}"
+    else
+        check_path="/sub/__irangate_healthcheck_invalid__"
+    fi
+
+    suffix="$(default_port_suffix "$scheme" "$port")"
+
+    http_code="$(
+        curl \
+            -k \
+            -sS \
+            --max-time 10 \
+            --resolve "${host}:${port}:127.0.0.1" \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "${scheme}://${host}${suffix}${check_path}" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ -n "$token" ]]; then
+        if [[ "$http_code" != "200" ]]; then
+            echo -e "${RED}Subscription health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription port.${NC}"
+
+            set_env SUBSCRIPTION_PORT "$old_port"
+            render_nginx || true
+
+            return 1
+        fi
+    else
+        if [[ ! "$http_code" =~ ^[234][0-9][0-9]$ ]]; then
+            echo -e "${RED}Subscription listener health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription port.${NC}"
+
+            set_env SUBSCRIPTION_PORT "$old_port"
+            render_nginx || true
+
+            return 1
+        fi
+    fi
 
     if command -v ufw >/dev/null 2>&1 &&
        ufw status 2>/dev/null | grep -q '^Status: active'
@@ -630,7 +1247,13 @@ change_sub_port() {
         ufw allow "${port}/tcp" >/dev/null || true
     fi
 
+    echo
     echo -e "${GREEN}Subscription port changed successfully.${NC}"
+    echo -e "Old Port: ${old_port}"
+    echo -e "New Port: ${port}"
+    echo -e "Scheme: ${scheme}"
+    echo -e "Subscription Check: HTTP ${http_code}"
+    echo -e "Nginx: $(systemctl is-active nginx)"
 }
 
 change_sub_scheme() {
@@ -638,9 +1261,21 @@ change_sub_scheme() {
     local choice
     local scheme
     local host
+    local port
+    local token
+    local check_path
+    local suffix
+    local http_code
+    local main_pid
+    local process_scheme
 
     current="$(get_env SUBSCRIPTION_SCHEME)"
     current="${current:-http}"
+
+    port="$(get_env SUBSCRIPTION_PORT)"
+    port="${port:-8081}"
+
+    host="$(get_env SUBSCRIPTION_PUBLIC_HOST)"
 
     echo "Current Subscription Scheme: $current"
     echo
@@ -650,77 +1285,684 @@ change_sub_scheme() {
     read -r -p "Select Scheme: " choice
 
     case "$choice" in
-        1) scheme="http" ;;
-        2) scheme="https" ;;
+        1)
+            scheme="http"
+            ;;
+        2)
+            scheme="https"
+            ;;
         *)
             echo "Invalid option."
-            return
+            return 1
             ;;
     esac
 
-    host="$(get_env SUBSCRIPTION_PUBLIC_HOST)"
+    if [[ "$scheme" == "$current" ]]; then
+        echo -e "${GREEN}Subscription scheme is already ${scheme}.${NC}"
+        return 0
+    fi
 
     if [[ "$scheme" == "https" ]]; then
         [[ -n "$host" ]] || {
-            echo "Subscription domain must be configured before enabling HTTPS."
-            return
+            echo -e "${RED}Subscription domain must be configured before enabling HTTPS.${NC}"
+            return 1
         }
 
-        ensure_certificate "$host" || return
+        echo
+        echo -e "${CYAN}Preparing certificate for ${host}...${NC}"
+
+        ensure_certificate "$host" || {
+            echo -e "${RED}Certificate preparation failed. No changes applied.${NC}"
+            return 1
+        }
     fi
 
     set_env SUBSCRIPTION_SCHEME "$scheme"
 
-    render_nginx || return
+    if ! render_nginx; then
+        echo -e "${RED}Nginx update failed. Rolling back subscription scheme.${NC}"
 
-    systemctl restart irangate-webpanel
+        set_env SUBSCRIPTION_SCHEME "$current"
+        render_nginx || true
 
+        return 1
+    fi
+
+    if ! systemctl restart irangate-webpanel; then
+        echo -e "${RED}Web panel restart failed. Rolling back subscription scheme.${NC}"
+
+        set_env SUBSCRIPTION_SCHEME "$current"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    sleep 1
+
+    if ! systemctl is-active --quiet nginx ||
+       ! systemctl is-active --quiet irangate-webpanel
+    then
+        echo -e "${RED}Service health check failed. Rolling back subscription scheme.${NC}"
+
+        set_env SUBSCRIPTION_SCHEME "$current"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    main_pid="$(
+        systemctl show \
+            -p MainPID \
+            --value \
+            irangate-webpanel
+    )"
+
+    process_scheme="$(
+        tr '\0' '\n' \
+            < "/proc/${main_pid}/environ" \
+            2>/dev/null \
+        | sed -n \
+            's/^SUBSCRIPTION_SCHEME=//p' \
+        | head -n1
+    )"
+
+    if [[ "$process_scheme" != "$scheme" ]]; then
+        echo -e "${RED}Web panel process did not load SUBSCRIPTION_SCHEME=${scheme}.${NC}"
+        echo -e "${YELLOW}Rolling back subscription scheme.${NC}"
+
+        set_env SUBSCRIPTION_SCHEME "$current"
+        render_nginx || true
+        systemctl restart irangate-webpanel || true
+
+        return 1
+    fi
+
+    token="$(
+        python3 <<'PYTOKEN'
+import json
+from pathlib import Path
+
+
+def walk(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+
+            if key in (
+                "subscription_token",
+                "sub_token",
+            ):
+                if isinstance(value, str) and len(value) > 8:
+                    print(value)
+                    raise SystemExit(0)
+
+            walk(value)
+
+    elif isinstance(obj, list):
+        for value in obj:
+            walk(value)
+
+
+for path in Path("/opt/irangate").rglob("*.json"):
+
+    try:
+        data = json.loads(
+            path.read_text()
+        )
+
+        walk(data)
+
+    except SystemExit:
+        raise
+
+    except Exception:
+        pass
+PYTOKEN
+    )"
+
+    if [[ -n "$token" ]]; then
+        check_path="/sub/${token}"
+    else
+        check_path="/sub/__irangate_healthcheck_invalid__"
+    fi
+
+    suffix="$(default_port_suffix "$scheme" "$port")"
+
+    http_code="$(
+        curl \
+            -k \
+            -sS \
+            --max-time 10 \
+            --resolve "${host}:${port}:127.0.0.1" \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "${scheme}://${host}${suffix}${check_path}" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ -n "$token" ]]; then
+
+        if [[ "$http_code" != "200" ]]; then
+            echo -e "${RED}Subscription health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription scheme.${NC}"
+
+            set_env SUBSCRIPTION_SCHEME "$current"
+            render_nginx || true
+            systemctl restart irangate-webpanel || true
+
+            return 1
+        fi
+
+    else
+
+        if [[ ! "$http_code" =~ ^[234][0-9][0-9]$ ]]; then
+            echo -e "${RED}Subscription listener health check failed with HTTP ${http_code:-000}.${NC}"
+            echo -e "${YELLOW}Rolling back subscription scheme.${NC}"
+
+            set_env SUBSCRIPTION_SCHEME "$current"
+            render_nginx || true
+            systemctl restart irangate-webpanel || true
+
+            return 1
+        fi
+    fi
+
+    echo
     echo -e "${GREEN}Subscription scheme changed successfully.${NC}"
+    echo -e "Old Scheme: ${current}"
+    echo -e "New Scheme: ${scheme}"
+    echo -e "Host: ${host}"
+    echo -e "Port: ${port}"
+    echo -e "Subscription Check: HTTP ${http_code}"
+    echo -e "Process Scheme: ${process_scheme}"
+    echo -e "Web Panel: $(systemctl is-active irangate-webpanel)"
+    echo -e "Nginx: $(systemctl is-active nginx)"
 }
 
 change_openvpn_port() {
     local current
     local port
+    local sync_output
 
-    current="$(awk '/^port /{print $2; exit}' /etc/openvpn/server.conf)"
+    current="$(
+        awk '/^port[[:space:]]+/{print $2; exit}' \
+            /etc/openvpn/server.conf
+    )"
+
+    current="${current:-Unknown}"
 
     echo "Current OpenVPN Port: $current"
     read -r -p "New OpenVPN UDP Port: " port
 
     [[ "$port" =~ ^[0-9]+$ ]] || {
         echo "Invalid port."
-        return
+        return 1
     }
 
     (( port >= 1 && port <= 65535 )) || {
         echo "Invalid port range."
-        return
+        return 1
     }
 
-    sed -i \
-        -E "s/^port[[:space:]]+[0-9]+/port ${port}/" \
-        /etc/openvpn/server.conf
+    sync_output="$(
+        python3 - "$port" <<'PYPORT'
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-    for dir in \
-        /etc/openvpn/client \
-        /opt/irangate/clients
-    do
-        [[ -d "$dir" ]] || continue
 
-        find "$dir" \
-            -maxdepth 1 \
-            -type f \
-            -name '*.ovpn' \
-            -print0 \
-        | while IFS= read -r -d '' file
-        do
-            sed -i \
-                -E "s/^(remote[[:space:]]+[^[:space:]]+)[[:space:]]+[0-9]+/\1 ${port}/" \
-                "$file"
-        done
-    done
+port = int(sys.argv[1])
 
-    systemctl restart openvpn@server
+if not 1 <= port <= 65535:
+    raise SystemExit(
+        "Invalid port range"
+    )
+
+
+now = datetime.now(
+    timezone.utc
+).isoformat()
+
+
+# --------------------------------------------------
+# Paths
+# --------------------------------------------------
+
+server_conf_path = Path(
+    "/etc/openvpn/server.conf"
+)
+
+server_config_path = Path(
+    "/opt/irangate/server_config.json"
+)
+
+db_settings_path = Path(
+    "/opt/irangate/database/settings.json"
+)
+
+webpanel_server_path = Path(
+    "/opt/irangate/webpanel/server.json"
+)
+
+
+json_paths = [
+    server_config_path,
+    db_settings_path,
+    webpanel_server_path,
+]
+
+
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def load_json(
+    path: Path,
+) -> dict:
+
+    if not path.exists():
+        return {}
+
+    data = json.loads(
+        path.read_text()
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        raise RuntimeError(
+            f"{path} is not a JSON object"
+        )
+
+    return data
+
+
+def atomic_write_bytes(
+    path: Path,
+    content: bytes,
+    default_mode: int,
+) -> None:
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    mode = default_mode
+
+    if path.exists():
+        mode = (
+            path.stat().st_mode
+            & 0o777
+        )
+
+    temp = path.with_name(
+        f".{path.name}.tmp-{os.getpid()}"
+    )
+
+    temp.write_bytes(
+        content
+    )
+
+    os.chmod(
+        temp,
+        mode,
+    )
+
+    os.replace(
+        temp,
+        path,
+    )
+
+
+def atomic_write_text(
+    path: Path,
+    text: str,
+    default_mode: int,
+) -> None:
+
+    atomic_write_bytes(
+        path,
+        text.encode(),
+        default_mode,
+    )
+
+
+def atomic_json_write(
+    path: Path,
+    data: dict,
+    default_mode: int,
+) -> None:
+
+    text = (
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+    atomic_write_text(
+        path,
+        text,
+        default_mode,
+    )
+
+
+# --------------------------------------------------
+# Validate required state
+# --------------------------------------------------
+
+if not server_conf_path.exists():
+    raise RuntimeError(
+        "/etc/openvpn/server.conf not found"
+    )
+
+
+# --------------------------------------------------
+# Collect OVPN configs
+# --------------------------------------------------
+
+ovpn_files = []
+
+for directory in (
+    Path("/etc/openvpn/client"),
+    Path("/opt/irangate/clients"),
+):
+
+    if not directory.is_dir():
+        continue
+
+    ovpn_files.extend(
+        sorted(
+            directory.glob("*.ovpn")
+        )
+    )
+
+
+# --------------------------------------------------
+# Snapshot everything for rollback
+# --------------------------------------------------
+
+all_paths = (
+    [server_conf_path]
+    + json_paths
+    + ovpn_files
+)
+
+
+snapshots = {}
+
+for item in all_paths:
+
+    if item.exists():
+
+        snapshots[item] = (
+            item.read_bytes(),
+            item.stat().st_mode
+            & 0o777,
+        )
+
+    else:
+
+        snapshots[item] = None
+
+
+try:
+
+    # ----------------------------------------------
+    # OpenVPN server.conf
+    # ----------------------------------------------
+
+    server_conf_text = (
+        server_conf_path.read_text()
+    )
+
+    server_conf_new, count = re.subn(
+        r"(?m)^[ \t]*port[ \t]+\d+[ \t]*$",
+        f"port {port}",
+        server_conf_text,
+        count=1,
+    )
+
+    if count != 1:
+        raise RuntimeError(
+            "OpenVPN port directive not found"
+        )
+
+
+    # ----------------------------------------------
+    # Read persistent JSON state
+    # ----------------------------------------------
+
+    server_config = load_json(
+        server_config_path
+    )
+
+    db_settings = load_json(
+        db_settings_path
+    )
+
+    webpanel_server = load_json(
+        webpanel_server_path
+    )
+
+
+    # ----------------------------------------------
+    # Synchronize port state
+    # ----------------------------------------------
+
+    server_config[
+        "server_port"
+    ] = port
+
+    server_config[
+        "last_updated"
+    ] = now
+
+
+    db_settings[
+        "server_port"
+    ] = port
+
+    db_settings[
+        "last_updated"
+    ] = now
+
+
+    webpanel_server[
+        "server_port"
+    ] = port
+
+    webpanel_server[
+        "last_updated"
+    ] = now
+
+
+    # ----------------------------------------------
+    # Atomic writes
+    # ----------------------------------------------
+
+    atomic_write_text(
+        server_conf_path,
+        server_conf_new,
+        0o600,
+    )
+
+    atomic_json_write(
+        server_config_path,
+        server_config,
+        0o644,
+    )
+
+    atomic_json_write(
+        db_settings_path,
+        db_settings,
+        0o644,
+    )
+
+    atomic_json_write(
+        webpanel_server_path,
+        webpanel_server,
+        0o600,
+    )
+
+
+    # ----------------------------------------------
+    # Rewrite existing OVPN files
+    # ----------------------------------------------
+
+    changed_count = 0
+
+    remote_re = re.compile(
+        r"(?m)^"
+        r"([ \t]*remote[ \t]+\S+[ \t]+)"
+        r"\d+"
+        r"(\b[^\n]*)$"
+    )
+
+
+    for config_path in ovpn_files:
+
+        old_text = (
+            config_path.read_text()
+        )
+
+        new_text, count = (
+            remote_re.subn(
+                lambda match: (
+                    match.group(1)
+                    + str(port)
+                    + match.group(2)
+                ),
+                old_text,
+            )
+        )
+
+        if count <= 0:
+            continue
+
+        atomic_write_text(
+            config_path,
+            new_text,
+            0o600,
+        )
+
+        changed_count += 1
+
+
+    # ----------------------------------------------
+    # Restart and health check
+    # ----------------------------------------------
+
+    subprocess.run(
+        [
+            "systemctl",
+            "restart",
+            "openvpn@server",
+        ],
+        check=True,
+    )
+
+    subprocess.run(
+        [
+            "systemctl",
+            "is-active",
+            "--quiet",
+            "openvpn@server",
+        ],
+        check=True,
+    )
+
+
+except Exception:
+
+    # ----------------------------------------------
+    # Full rollback
+    # ----------------------------------------------
+
+    for item, snapshot in (
+        snapshots.items()
+    ):
+
+        if snapshot is None:
+
+            try:
+                item.unlink()
+            except FileNotFoundError:
+                pass
+
+            continue
+
+
+        content, mode = snapshot
+
+        item.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        temp = item.with_name(
+            f".{item.name}.rollback-{os.getpid()}"
+        )
+
+        temp.write_bytes(
+            content
+        )
+
+        os.chmod(
+            temp,
+            mode,
+        )
+
+        os.replace(
+            temp,
+            item,
+        )
+
+
+    subprocess.run(
+        [
+            "systemctl",
+            "restart",
+            "openvpn@server",
+        ],
+        check=False,
+    )
+
+    raise
+
+
+print(
+    f"Persistent Port: {port}"
+)
+
+print(
+    f"Existing configs updated: {changed_count}"
+)
+
+print(
+    "JSON state synchronized: 3 files"
+)
+
+print(
+    "OpenVPN service: active"
+)
+PYPORT
+    )" || {
+        echo -e "${RED}Failed to change OpenVPN port. Changes rolled back.${NC}"
+        return 1
+    }
+
+    echo "$sync_output"
 
     if command -v ufw >/dev/null 2>&1 &&
        ufw status 2>/dev/null | grep -q '^Status: active'
@@ -728,7 +1970,8 @@ change_openvpn_port() {
         ufw allow "${port}/udp" >/dev/null || true
     fi
 
-    echo -e "${GREEN}OpenVPN port changed successfully.${NC}"
+    echo
+    echo -e "${GREEN}OpenVPN port changed and synchronized successfully.${NC}"
 }
 
 change_openvpn_host() {
@@ -1168,116 +2411,1046 @@ PYHOST
 }
 
 service_status() {
+    local panel_port
+    local sub_port
+    local sub_scheme
+    local sub_host
+    local ovpn_port
+    local api_code
+    local overall_ok=true
+
+    panel_port="$(get_env WEBPANEL_PORT)"
+    panel_port="${panel_port:-8080}"
+
+    sub_port="$(get_env SUBSCRIPTION_PORT)"
+    sub_port="${sub_port:-8081}"
+
+    sub_scheme="$(get_env SUBSCRIPTION_SCHEME)"
+    sub_scheme="${sub_scheme:-http}"
+
+    sub_host="$(get_env SUBSCRIPTION_PUBLIC_HOST)"
+    sub_host="${sub_host:-Not configured}"
+
+    ovpn_port="$(
+        awk \
+            '/^port[[:space:]]+/{print $2; exit}' \
+            /etc/openvpn/server.conf \
+            2>/dev/null
+    )"
+
     echo
-    systemctl status irangate-webpanel --no-pager -l || true
+    echo -e "${BLUE}==================================================${NC}"
+    echo -e "${CYAN}              IranGate Service Status${NC}"
+    echo -e "${BLUE}==================================================${NC}"
     echo
-    systemctl status openvpn@server --no-pager -l || true
+
+    printf '%-24s %-12s %-12s\n' \
+        "SERVICE" \
+        "ACTIVE" \
+        "ENABLED"
+
+    printf '%-24s %-12s %-12s\n' \
+        "------------------------" \
+        "------------" \
+        "------------"
+
+    for unit in \
+        irangate-webpanel \
+        openvpn@server \
+        nginx \
+        postgresql
+    do
+        active="$(
+            systemctl is-active "$unit" 2>/dev/null \
+            || true
+        )"
+
+        enabled="$(
+            systemctl is-enabled "$unit" 2>/dev/null \
+            || true
+        )"
+
+        printf '%-24s %-12s %-12s\n' \
+            "$unit" \
+            "${active:-unknown}" \
+            "${enabled:-unknown}"
+
+        if [[ "$active" != "active" ]]; then
+            overall_ok=false
+        fi
+    done
+
     echo
-    systemctl status nginx --no-pager -l || true
+    echo -e "${CYAN}Runtime Checks${NC}"
     echo
-    systemctl status postgresql --no-pager -l || true
+
+    api_code="$(
+        curl \
+            -sS \
+            --max-time 5 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "http://127.0.0.1:${panel_port}/api/health" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ "$api_code" == "200" ]]; then
+        echo -e "Web Panel API:        ${GREEN}OK (HTTP 200)${NC}"
+    else
+        echo -e "Web Panel API:        ${RED}FAILED (HTTP ${api_code:-000})${NC}"
+        overall_ok=false
+    fi
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${panel_port}$"
+    then
+        echo -e "Panel TCP ${panel_port}:        ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Panel TCP ${panel_port}:        ${RED}NOT LISTENING${NC}"
+        overall_ok=false
+    fi
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${sub_port}$"
+    then
+        echo -e "Subscription TCP ${sub_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Subscription TCP ${sub_port}: ${RED}NOT LISTENING${NC}"
+        overall_ok=false
+    fi
+
+    if [[ -n "$ovpn_port" ]] &&
+       ss -lunH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${ovpn_port}$"
+    then
+        echo -e "OpenVPN UDP ${ovpn_port}:       ${GREEN}LISTENING${NC}"
+    else
+        echo -e "OpenVPN UDP ${ovpn_port:-Unknown}:       ${RED}NOT LISTENING${NC}"
+        overall_ok=false
+    fi
+
+    if nginx -t >/dev/null 2>&1; then
+        echo -e "Nginx Config:         ${GREEN}VALID${NC}"
+    else
+        echo -e "Nginx Config:         ${RED}INVALID${NC}"
+        overall_ok=false
+    fi
+
+    if command -v pg_isready >/dev/null 2>&1; then
+        if runuser -u postgres -- pg_isready -q -d postgres; then
+            echo -e "PostgreSQL Ready:     ${GREEN}YES${NC}"
+        else
+            echo -e "PostgreSQL Ready:     ${RED}NO${NC}"
+            overall_ok=false
+        fi
+    else
+        echo -e "PostgreSQL Ready:     ${YELLOW}pg_isready unavailable${NC}"
+    fi
+
+    echo
+    echo -e "${CYAN}Current Endpoints${NC}"
+    echo
+    echo "Panel Internal Port:  ${panel_port}"
+    echo "Subscription Host:    ${sub_host}"
+    echo "Subscription Scheme:  ${sub_scheme}"
+    echo "Subscription Port:    ${sub_port}"
+    echo "OpenVPN UDP Port:      ${ovpn_port:-Unknown}"
+
+    echo
+    echo -e "${BLUE}==================================================${NC}"
+
+    if [[ "$overall_ok" == true ]]; then
+        echo -e "${GREEN}Overall Status: HEALTHY ✅${NC}"
+    else
+        echo -e "${RED}Overall Status: DEGRADED ❌${NC}"
+    fi
+
+    echo -e "${BLUE}==================================================${NC}"
 }
 
 restart_services() {
-    systemctl restart irangate-webpanel
-    systemctl restart openvpn@server
-    systemctl reload nginx
+    local panel_port
+    local sub_port
+    local ovpn_port
+    local api_code
+    local failed=false
 
-    echo -e "${GREEN}Core services restarted successfully.${NC}"
-}
+    panel_port="$(get_env WEBPANEL_PORT)"
+    panel_port="${panel_port:-8080}"
 
-view_logs() {
+    sub_port="$(get_env SUBSCRIPTION_PORT)"
+    sub_port="${sub_port:-8081}"
+
+    ovpn_port="$(
+        awk \
+            '/^port[[:space:]]+/{print $2; exit}' \
+            /etc/openvpn/server.conf \
+            2>/dev/null
+    )"
+
     echo
-    echo "1) Web Panel Logs"
-    echo "2) OpenVPN Logs"
-    echo "3) Nginx Error Log"
-    echo "4) Installation Log"
-    echo "0) Back"
+    echo -e "${CYAN}Restarting IranGate services...${NC}"
     echo
 
-    local choice
-    read -r -p "Select Log: " choice
+    # ------------------------------------------------
+    # Validate Nginx before touching services
+    # ------------------------------------------------
 
-    case "$choice" in
-        1)
-            journalctl \
-                -u irangate-webpanel \
-                --no-pager \
-                -n 150
-            ;;
-        2)
-            tail -n 150 \
-                /etc/openvpn/logs/openvpn.log
-            ;;
-        3)
-            tail -n 150 \
-                /var/log/nginx/error.log
-            ;;
-        4)
-            tail -n 200 \
-                /var/log/irangate-install.log
-            ;;
-        0)
-            return
-            ;;
-        *)
-            echo "Invalid option."
-            ;;
-    esac
-}
+    echo -n "Checking Nginx configuration... "
 
-create_backup() {
-    if [[ ! -x /usr/local/bin/irangate-backup-v2-export ]]; then
-        echo -e "${RED}Backup exporter not found.${NC}"
+    if nginx -t >/dev/null 2>&1; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        echo -e "${RED}Restart aborted because Nginx configuration is invalid.${NC}"
         return 1
     fi
 
-    echo -e "${CYAN}Creating full IranGate backup...${NC}"
 
-    /usr/local/bin/irangate-backup-v2-export
+    # ------------------------------------------------
+    # PostgreSQL
+    # ------------------------------------------------
+
+    echo -n "Restarting PostgreSQL... "
+
+    if systemctl restart postgresql; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # OpenVPN
+    # ------------------------------------------------
+
+    echo -n "Restarting OpenVPN... "
+
+    if systemctl restart openvpn@server; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Web Panel
+    # ------------------------------------------------
+
+    echo -n "Restarting Web Panel... "
+
+    if systemctl restart irangate-webpanel; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Nginx
+    # ------------------------------------------------
+
+    echo -n "Reloading Nginx... "
+
+    if systemctl reload nginx; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        failed=true
+    fi
+
+
+    echo
+    echo -e "${CYAN}Waiting for services...${NC}"
+
+    sleep 3
+
+
+    # ------------------------------------------------
+    # Active state checks
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Service Checks${NC}"
+    echo
+
+    for unit in \
+        postgresql \
+        openvpn@server \
+        irangate-webpanel \
+        nginx
+    do
+        if systemctl is-active --quiet "$unit"; then
+            echo -e "${unit}: ${GREEN}active${NC}"
+        else
+            echo -e "${unit}: ${RED}failed/inactive${NC}"
+            failed=true
+        fi
+    done
+
+
+    # ------------------------------------------------
+    # PostgreSQL readiness
+    # ------------------------------------------------
+
+    if command -v pg_isready >/dev/null 2>&1; then
+
+        if runuser -u postgres -- pg_isready -q -d postgres; then
+            echo -e "PostgreSQL Ready: ${GREEN}YES${NC}"
+        else
+            echo -e "PostgreSQL Ready: ${RED}NO${NC}"
+            failed=true
+        fi
+    fi
+
+
+    # ------------------------------------------------
+    # Panel API health
+    # ------------------------------------------------
+
+    api_code="$(
+        curl \
+            -sS \
+            --max-time 5 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "http://127.0.0.1:${panel_port}/api/health" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ "$api_code" == "200" ]]; then
+        echo -e "Web Panel API: ${GREEN}HTTP 200${NC}"
+    else
+        echo -e "Web Panel API: ${RED}HTTP ${api_code:-000}${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Panel TCP listener
+    # ------------------------------------------------
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${panel_port}$"
+    then
+        echo -e "Panel TCP ${panel_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Panel TCP ${panel_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Subscription TCP listener
+    # ------------------------------------------------
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${sub_port}$"
+    then
+        echo -e "Subscription TCP ${sub_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Subscription TCP ${sub_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # OpenVPN UDP listener
+    # ------------------------------------------------
+
+    if [[ -n "$ovpn_port" ]] &&
+       ss -lunH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${ovpn_port}$"
+    then
+        echo -e "OpenVPN UDP ${ovpn_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "OpenVPN UDP ${ovpn_port:-Unknown}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Final result
+    # ------------------------------------------------
+
+    echo
+    echo -e "${BLUE}==================================================${NC}"
+
+    if [[ "$failed" == false ]]; then
+        echo -e "${GREEN}All core services restarted successfully ✅${NC}"
+        echo -e "${BLUE}==================================================${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}One or more service checks failed ❌${NC}"
+    echo -e "${BLUE}==================================================${NC}"
+
+    echo
+    echo "Use option 10 for full status or option 12 for logs."
+
+    return 1
+}
+
+view_logs() {
+    local choice
+    local pg_log
+
+    while true
+    do
+        clear
+
+        echo -e "${BLUE}==================================================${NC}"
+        echo -e "${CYAN}                IranGate Logs${NC}"
+        echo -e "${BLUE}==================================================${NC}"
+        echo
+        echo "  1) Web Panel Logs"
+        echo "  2) OpenVPN Logs"
+        echo "  3) OpenVPN Status"
+        echo
+        echo "  4) Nginx Error Logs"
+        echo "  5) Nginx Access Logs"
+        echo
+        echo "  6) PostgreSQL Logs"
+        echo "  7) All Service Warnings / Errors"
+        echo "  8) Installation Log"
+        echo
+        echo "  9) Live Web Panel Logs"
+        echo " 10) Live OpenVPN Logs"
+        echo
+        echo "  0) Back"
+        echo
+        echo -e "${BLUE}==================================================${NC}"
+
+        read -r -p "Select Log: " choice
+
+        echo
+
+        case "$choice" in
+            1)
+                journalctl \
+                    -u irangate-webpanel \
+                    --no-pager \
+                    -n 200
+                ;;
+
+            2)
+                if [[ -f /etc/openvpn/logs/openvpn.log ]]; then
+                    tail \
+                        -n 200 \
+                        /etc/openvpn/logs/openvpn.log
+                else
+                    echo -e "${YELLOW}OpenVPN file log not found. Showing journal instead.${NC}"
+
+                    journalctl \
+                        -u openvpn@server \
+                        --no-pager \
+                        -n 200
+                fi
+                ;;
+
+            3)
+                if [[ -f /etc/openvpn/openvpn-status.log ]]; then
+                    cat \
+                        /etc/openvpn/openvpn-status.log
+                else
+                    echo -e "${RED}OpenVPN status file not found.${NC}"
+                fi
+                ;;
+
+            4)
+                if [[ -f /var/log/nginx/error.log ]]; then
+                    tail \
+                        -n 200 \
+                        /var/log/nginx/error.log
+                else
+                    journalctl \
+                        -u nginx \
+                        --no-pager \
+                        -n 200
+                fi
+                ;;
+
+            5)
+                if [[ -f /var/log/nginx/access.log ]]; then
+                    tail \
+                        -n 200 \
+                        /var/log/nginx/access.log
+                else
+                    echo -e "${RED}Nginx access log not found.${NC}"
+                fi
+                ;;
+
+            6)
+                pg_log="$(
+                    find \
+                        /var/log/postgresql \
+                        -maxdepth 2 \
+                        -type f \
+                        -name '*.log' \
+                        -printf '%T@ %p\n' \
+                        2>/dev/null \
+                    | sort -nr \
+                    | head -n1 \
+                    | cut -d' ' -f2-
+                )"
+
+                if [[ -n "$pg_log" && -f "$pg_log" ]]; then
+                    echo -e "${CYAN}File: ${pg_log}${NC}"
+                    echo
+
+                    tail \
+                        -n 200 \
+                        "$pg_log"
+                else
+                    journalctl \
+                        -u postgresql \
+                        --no-pager \
+                        -n 200
+                fi
+                ;;
+
+            7)
+                journalctl \
+                    -u irangate-webpanel \
+                    -u openvpn@server \
+                    -u nginx \
+                    -u postgresql \
+                    -p warning \
+                    --no-pager \
+                    -n 300
+                ;;
+
+            8)
+                if [[ -f /var/log/irangate-install.log ]]; then
+                    tail \
+                        -n 250 \
+                        /var/log/irangate-install.log
+                else
+                    echo -e "${RED}Installation log not found.${NC}"
+                fi
+                ;;
+
+            9)
+                echo -e "${CYAN}Live Web Panel logs. Press Ctrl+C to stop.${NC}"
+                echo
+
+                journalctl \
+                    -u irangate-webpanel \
+                    -f \
+                    -n 50
+                ;;
+
+            10)
+                echo -e "${CYAN}Live OpenVPN logs. Press Ctrl+C to stop.${NC}"
+                echo
+
+                if [[ -f /etc/openvpn/logs/openvpn.log ]]; then
+                    tail \
+                        -n 50 \
+                        -f \
+                        /etc/openvpn/logs/openvpn.log
+                else
+                    journalctl \
+                        -u openvpn@server \
+                        -f \
+                        -n 50
+                fi
+                ;;
+
+            0)
+                return 0
+                ;;
+
+            *)
+                echo -e "${RED}Invalid option.${NC}"
+                sleep 1
+                continue
+                ;;
+        esac
+
+        echo
+        read -r -p "Press Enter to return to Logs menu..." _
+    done
+}
+
+create_backup() {
+    local exporter
+    local importer
+    local output_file
+    local archive
+    local archive_size
+
+    exporter="/usr/local/bin/irangate-backup-v2-export"
+    importer="/usr/local/bin/irangate-backup-v2-import"
+
+    if [[ ! -x "$exporter" ]]; then
+        echo -e "${RED}Backup exporter not found or not executable.${NC}"
+        return 1
+    fi
+
+    if [[ ! -x "$importer" ]]; then
+        echo -e "${RED}Backup importer not found or not executable.${NC}"
+        return 1
+    fi
+
+    output_file="$(
+        mktemp \
+            /tmp/irangate-backup-export.XXXXXX
+    )" || {
+        echo -e "${RED}Failed to create temporary output file.${NC}"
+        return 1
+    }
+
+    echo
+    echo -e "${CYAN}Creating full IranGate Backup v2...${NC}"
+    echo
+
+    if ! "$exporter" >"$output_file" 2>&1; then
+        cat "$output_file"
+        rm -f "$output_file"
+
+        echo
+        echo -e "${RED}Backup creation failed ❌${NC}"
+
+        return 1
+    fi
+
+    cat "$output_file"
+
+    archive="$(
+        tail \
+            -n1 \
+            "$output_file" \
+        | tr -d '\r'
+    )"
+
+    rm -f "$output_file"
+
+    if [[ -z "$archive" || ! -f "$archive" ]]; then
+        echo
+        echo -e "${RED}Backup exporter completed but archive path is invalid.${NC}"
+        return 1
+    fi
+
+    archive_size="$(
+        du \
+            -h \
+            "$archive" \
+        | awk '{print $1}'
+    )"
+
+    echo
+    echo -e "${CYAN}Backup Archive${NC}"
+    echo
+    echo "Path: $archive"
+    echo "Size: ${archive_size:-Unknown}"
+
+    echo
+    echo -e "${CYAN}Validating backup archive...${NC}"
+    echo
+
+    if ! "$importer" \
+        --validate-only \
+        "$archive"
+    then
+        echo
+        echo -e "${RED}Backup validation failed ❌${NC}"
+        echo "Archive was created but did not pass validation:"
+        echo "$archive"
+
+        return 1
+    fi
+
+    echo
+    echo -e "${BLUE}==================================================${NC}"
+    echo -e "${GREEN}Backup created and validated successfully ✅${NC}"
+    echo -e "${BLUE}==================================================${NC}"
+    echo
+    echo "Archive: $archive"
+    echo "Size: ${archive_size:-Unknown}"
+
+    return 0
 }
 
 restore_backup() {
+    local importer
+    local choice
     local archive
+    local confirm
+    local restore_output
+    local safety_archive
+    local panel_port
+    local sub_port
+    local ovpn_port
+    local api_code
+    local failed=false
+    local i
 
-    echo
-    echo "Available backups:"
-    find /opt/irangate/backups \
-        -type f \
-        -name '*.tar.gz' \
-        2>/dev/null \
+    local -a backups=()
+
+    importer="/usr/local/bin/irangate-backup-v2-import"
+
+    if [[ ! -x "$importer" ]]; then
+        echo -e "${RED}Backup importer not found or not executable.${NC}"
+        return 1
+    fi
+
+    mapfile -t backups < <(
+        find \
+            /opt/irangate/backups \
+            -type f \
+            -name '*.tar.gz' \
+            -printf '%T@|%p\n' \
+            2>/dev/null \
         | sort \
-        | tail -20
+            -t'|' \
+            -k1,1nr \
+        | head -20 \
+        | cut -d'|' -f2-
+    )
+
+    if (( ${#backups[@]} == 0 )); then
+        echo -e "${RED}No backup archives found.${NC}"
+        return 1
+    fi
 
     echo
-    read -r -p "Backup archive path: " archive
+    echo -e "${BLUE}==================================================${NC}"
+    echo -e "${CYAN}              Restore IranGate Backup${NC}"
+    echo -e "${BLUE}==================================================${NC}"
+    echo
 
-    [[ -f "$archive" ]] || {
-        echo -e "${RED}Backup archive not found.${NC}"
-        return
-    }
+    for i in "${!backups[@]}"
+    do
+        archive="${backups[$i]}"
 
-    echo -e "${CYAN}Validating backup...${NC}"
+        printf '%2d) %s\n' \
+            "$((i + 1))" \
+            "$(basename "$archive")"
 
-    /usr/local/bin/irangate-backup-v2-import \
-        --validate-only \
-        "$archive" || return
+        printf '    Size: %s | Date: %s\n' \
+            "$(du -h "$archive" | awk '{print $1}')" \
+            "$(stat -c '%y' "$archive" | cut -d'.' -f1)"
+    done
 
     echo
-    read -r -p "Restore this backup? Type RESTORE: " confirm
+    echo " 0) Cancel"
+    echo
 
-    [[ "$confirm" == "RESTORE" ]] || {
+    read -r -p "Select Backup: " choice
+
+    if [[ "$choice" == "0" ]]; then
         echo "Restore cancelled."
-        return
+        return 0
+    fi
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Invalid selection.${NC}"
+        return 1
+    fi
+
+    if (( choice < 1 || choice > ${#backups[@]} )); then
+        echo -e "${RED}Backup number is out of range.${NC}"
+        return 1
+    fi
+
+    archive="${backups[$((choice - 1))]}"
+
+    echo
+    echo -e "${CYAN}Selected Backup${NC}"
+    echo
+    echo "Archive: $archive"
+    echo "Size: $(du -h "$archive" | awk '{print $1}')"
+
+    echo
+    echo -e "${CYAN}Validating selected backup...${NC}"
+    echo
+
+    if ! "$importer" \
+        --validate-only \
+        "$archive"
+    then
+        echo
+        echo -e "${RED}Selected backup validation failed ❌${NC}"
+        echo "Restore aborted."
+
+        return 1
+    fi
+
+    echo
+    echo -e "${YELLOW}WARNING: This operation will replace the current IranGate state.${NC}"
+    echo
+    read -r -p "Type RESTORE to continue: " confirm
+
+    if [[ "$confirm" != "RESTORE" ]]; then
+        echo "Restore cancelled."
+        return 0
+    fi
+
+
+    # ------------------------------------------------
+    # Restore
+    #
+    # The Backup v2 importer creates and validates its
+    # own automatic pre-restore safety backup.
+    # ------------------------------------------------
+
+    restore_output="$(
+        mktemp \
+            /tmp/irangate-restore-output.XXXXXX
+    )" || {
+        echo -e "${RED}Failed to create temporary restore output file.${NC}"
+        return 1
     }
 
-    /usr/local/bin/irangate-backup-v2-import \
-        --restore \
-        "$archive"
+    echo
+    echo -e "${CYAN}Restoring selected backup...${NC}"
+    echo
 
-    systemctl restart irangate-webpanel || true
-    systemctl restart openvpn@server || true
-    systemctl reload nginx || true
+    if ! "$importer" \
+        --restore \
+        "$archive" \
+        >"$restore_output" 2>&1
+    then
+        cat "$restore_output"
+
+        safety_archive="$(
+            sed -n \
+                's/^[[:space:]]*"safety_backup":[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$restore_output" \
+            | tail -n1
+        )"
+
+        rm -f "$restore_output"
+
+        echo
+        echo -e "${RED}Restore command failed ❌${NC}"
+
+        if [[ -n "$safety_archive" ]]; then
+            echo
+            echo "Importer Safety Backup:"
+            echo "$safety_archive"
+        fi
+
+        return 1
+    fi
+
+    cat "$restore_output"
+
+    safety_archive="$(
+        sed -n \
+            's/^[[:space:]]*"safety_backup":[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$restore_output" \
+        | tail -n1
+    )"
+
+    rm -f "$restore_output"
+
+
+    # ------------------------------------------------
+    # Rebuild runtime configuration
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Rebuilding Nginx configuration...${NC}"
+
+    if ! render_nginx; then
+        echo -e "${RED}Nginx configuration rebuild failed.${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Restart services
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Restarting restored services...${NC}"
+    echo
+
+    for unit in \
+        postgresql \
+        openvpn@server \
+        irangate-webpanel
+    do
+        echo -n "Restarting ${unit}... "
+
+        if systemctl restart "$unit"; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+            failed=true
+        fi
+    done
+
+    echo -n "Reloading nginx... "
+
+    if systemctl reload nginx; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        failed=true
+    fi
+
+    echo
+    echo -e "${CYAN}Waiting for restored services...${NC}"
+
+    sleep 4
+
+
+    # ------------------------------------------------
+    # Read restored runtime values
+    # ------------------------------------------------
+
+    panel_port="$(get_env WEBPANEL_PORT)"
+    panel_port="${panel_port:-8080}"
+
+    sub_port="$(get_env SUBSCRIPTION_PORT)"
+    sub_port="${sub_port:-8081}"
+
+    ovpn_port="$(
+        awk \
+            '/^port[[:space:]]+/{print $2; exit}' \
+            /etc/openvpn/server.conf \
+            2>/dev/null
+    )"
+
+
+    # ------------------------------------------------
+    # Health checks
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Post-Restore Health Checks${NC}"
+    echo
+
+    for unit in \
+        postgresql \
+        openvpn@server \
+        irangate-webpanel \
+        nginx
+    do
+        if systemctl is-active --quiet "$unit"; then
+            echo -e "${unit}: ${GREEN}active${NC}"
+        else
+            echo -e "${unit}: ${RED}failed/inactive${NC}"
+            failed=true
+        fi
+    done
+
+    if command -v pg_isready >/dev/null 2>&1; then
+
+        if runuser -u postgres -- \
+            pg_isready -q -d postgres
+        then
+            echo -e "PostgreSQL Ready: ${GREEN}YES${NC}"
+        else
+            echo -e "PostgreSQL Ready: ${RED}NO${NC}"
+            failed=true
+        fi
+    fi
+
+    api_code="$(
+        curl \
+            -sS \
+            --max-time 8 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "http://127.0.0.1:${panel_port}/api/health" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ "$api_code" == "200" ]]; then
+        echo -e "Web Panel API: ${GREEN}HTTP 200${NC}"
+    else
+        echo -e "Web Panel API: ${RED}HTTP ${api_code:-000}${NC}"
+        failed=true
+    fi
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${panel_port}$"
+    then
+        echo -e "Panel TCP ${panel_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Panel TCP ${panel_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${sub_port}$"
+    then
+        echo -e "Subscription TCP ${sub_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Subscription TCP ${sub_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+    if [[ -n "$ovpn_port" ]] &&
+       ss -lunH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${ovpn_port}$"
+    then
+        echo -e "OpenVPN UDP ${ovpn_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "OpenVPN UDP ${ovpn_port:-Unknown}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+    if nginx -t >/dev/null 2>&1; then
+        echo -e "Nginx Config: ${GREEN}VALID${NC}"
+    else
+        echo -e "Nginx Config: ${RED}INVALID${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Final result
+    # ------------------------------------------------
+
+    echo
+    echo -e "${BLUE}==================================================${NC}"
+
+    if [[ "$failed" == false ]]; then
+        echo -e "${GREEN}Backup restored successfully ✅${NC}"
+        echo -e "${BLUE}==================================================${NC}"
+        echo
+        echo "Restored Archive:"
+        echo "$archive"
+        echo
+        if [[ -n "$safety_archive" ]]; then
+            echo "Importer Safety Backup:"
+            echo "$safety_archive"
+        fi
+
+        return 0
+    fi
+
+    echo -e "${RED}Restore completed but health checks detected problems ❌${NC}"
+    echo -e "${BLUE}==================================================${NC}"
+    echo
+    if [[ -n "$safety_archive" ]]; then
+        echo "Importer Safety Backup:"
+        echo "$safety_archive"
+    fi
+    echo
+    echo "Use Service Status and Logs before taking further action."
+
+    return 1
 }
 
 update_panel() {
@@ -1285,49 +3458,144 @@ update_panel() {
     local branch
     local old_commit
     local new_commit
-    local backup_path=""
+    local confirm
+
+    local exporter
+    local importer
+
+    local backup_output
+    local backup_path
+
+    local worktree
+    local rollback_dir
+
+    local cli_build
+    local panel_build
+
+    local panel_port
+    local sub_port
+    local ovpn_port
+    local api_code
+
+    local failed=false
+    local runtime_script
+    local target
+
+    local -a deploy_targets=()
+    local -a existing_targets=()
+
+    exporter="/usr/local/bin/irangate-backup-v2-export"
+    importer="/usr/local/bin/irangate-backup-v2-import"
+
+
+    # ------------------------------------------------
+    # Detect repository
+    # ------------------------------------------------
 
     repo="$(detect_repo)" || {
         echo -e "${RED}IranGate source repository not found.${NC}"
-        return
+        return 1
     }
 
-    cd "$repo" || return
+    cd "$repo" || return 1
 
     branch="$(git branch --show-current)"
 
-    [[ -n "$branch" ]] || {
+    if [[ -z "$branch" ]]; then
         echo -e "${RED}Detached HEAD is not supported for update.${NC}"
-        return
-    }
-
-    if ! git diff --quiet ||
-       ! git diff --cached --quiet
-    then
-        echo -e "${YELLOW}Tracked local changes detected.${NC}"
-        echo "Commit or revert them before updating."
-        git status --short
-        return
+        return 1
     fi
 
-    echo -e "${CYAN}Checking for updates...${NC}"
 
-    git fetch origin "$branch" || return
+    # ------------------------------------------------
+    # Require clean repository
+    # ------------------------------------------------
+
+    if [[ -n "$(
+        git status \
+            --porcelain \
+            --untracked-files=all
+    )" ]]
+    then
+        echo -e "${YELLOW}Local repository changes detected.${NC}"
+        echo
+        echo "Commit, stash, or remove them before updating."
+        echo
+
+        git status --short
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Persist detected repository
+    # ------------------------------------------------
+
+    if [[ -n "${SOURCE_FILE:-}" ]]; then
+        mkdir -p \
+            "$(dirname "$SOURCE_FILE")"
+
+        printf '%s\n' \
+            "$repo" \
+            > "$SOURCE_FILE"
+    fi
+
+
+    # ------------------------------------------------
+    # Fetch remote state
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Checking for IranGate updates...${NC}"
+    echo
+
+    if ! git fetch \
+        --prune \
+        origin \
+        "$branch"
+    then
+        echo -e "${RED}Git fetch failed.${NC}"
+        return 1
+    fi
 
     old_commit="$(git rev-parse HEAD)"
     new_commit="$(git rev-parse "origin/$branch")"
 
-    echo
+    echo "Branch:  $branch"
     echo "Current: $old_commit"
     echo "Latest:  $new_commit"
     echo
 
     if [[ "$old_commit" == "$new_commit" ]]; then
-        echo -e "${GREEN}IranGate is already up to date.${NC}"
-        return
+        echo -e "${GREEN}IranGate is already up to date ✅${NC}"
+        return 0
     fi
 
-    echo "New commits:"
+
+    # ------------------------------------------------
+    # Fast-forward safety check
+    # ------------------------------------------------
+
+    if ! git merge-base \
+        --is-ancestor \
+        "$old_commit" \
+        "$new_commit"
+    then
+        echo -e "${RED}Remote branch is not a fast-forward update.${NC}"
+        echo "Update aborted to protect the installation."
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Show commits
+    # ------------------------------------------------
+
+    echo -e "${CYAN}New commits:${NC}"
+    echo
+
     git log \
         --oneline \
         --no-decorate \
@@ -1337,122 +3605,758 @@ update_panel() {
     echo
     read -r -p "Continue update? [y/N]: " confirm
 
-    [[ "$confirm" =~ ^[Yy]$ ]] || {
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         echo "Update cancelled."
-        return
+        return 0
+    fi
+
+
+    # ------------------------------------------------
+    # Validate backup commands
+    # ------------------------------------------------
+
+    if [[ ! -x "$exporter" ]]; then
+        echo -e "${RED}Backup exporter not found.${NC}"
+        return 1
+    fi
+
+    if [[ ! -x "$importer" ]]; then
+        echo -e "${RED}Backup importer not found.${NC}"
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Create pre-update backup
+    # ------------------------------------------------
+
+    backup_output="$(
+        mktemp \
+            /tmp/irangate-update-backup.XXXXXX
+    )" || {
+        echo -e "${RED}Failed to create temporary backup output.${NC}"
+        return 1
     }
 
-    echo -e "${CYAN}Creating automatic backup...${NC}"
+    echo
+    echo -e "${CYAN}Creating pre-update Backup v2...${NC}"
+    echo
+
+    if ! "$exporter" \
+        >"$backup_output" 2>&1
+    then
+        cat "$backup_output"
+        rm -f "$backup_output"
+
+        echo
+        echo -e "${RED}Backup failed. Update aborted.${NC}"
+
+        return 1
+    fi
+
+    cat "$backup_output"
 
     backup_path="$(
-        /usr/local/bin/irangate-backup-v2-export \
-        | tail -n1
-    )" || {
-        echo -e "${RED}Backup failed. Update aborted.${NC}"
-        return
-    }
+        tail \
+            -n1 \
+            "$backup_output" \
+        | tr -d '\r'
+    )"
 
+    rm -f "$backup_output"
+
+    if [[ -z "$backup_path" ||
+          ! -f "$backup_path" ]]
+    then
+        echo -e "${RED}Backup archive path is invalid.${NC}"
+        echo "Update aborted."
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Validate pre-update backup
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Validating pre-update backup...${NC}"
+    echo
+
+    if ! "$importer" \
+        --validate-only \
+        "$backup_path"
+    then
+        echo
+        echo -e "${RED}Backup validation failed. Update aborted.${NC}"
+
+        return 1
+    fi
+
+    echo
+    echo -e "${GREEN}Pre-update backup ready ✅${NC}"
     echo "Backup: $backup_path"
 
-    git pull \
-        --ff-only \
-        origin \
-        "$branch" || return
 
-    echo -e "${CYAN}Building IranGate CLI...${NC}"
+    # ------------------------------------------------
+    # Prepare isolated Git worktree
+    # ------------------------------------------------
+
+    worktree="$(
+        mktemp \
+            -d \
+            /tmp/irangate-update-worktree.XXXXXX
+    )" || {
+        echo -e "${RED}Failed to create temporary worktree directory.${NC}"
+        return 1
+    }
+
+    rm -rf "$worktree"
+
+    echo
+    echo -e "${CYAN}Preparing isolated update source...${NC}"
+
+    if ! git worktree add \
+        --detach \
+        "$worktree" \
+        "$new_commit" \
+        >/dev/null
+    then
+        rm -rf "$worktree"
+
+        echo -e "${RED}Failed to prepare update worktree.${NC}"
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Validate manager script
+    # ------------------------------------------------
+
+    if [[ -f "$worktree/scripts/ovp-panel" ]]; then
+
+        if ! bash -n \
+            "$worktree/scripts/ovp-panel"
+        then
+            echo -e "${RED}Updated manager script has syntax errors.${NC}"
+
+            git worktree remove \
+                --force \
+                "$worktree" \
+                >/dev/null 2>&1 \
+                || true
+
+            return 1
+        fi
+    fi
+
+
+    # ------------------------------------------------
+    # Build new binaries before touching live system
+    # ------------------------------------------------
 
     export PATH="/usr/local/go/bin:$PATH"
 
-    go build \
-        -o /tmp/irangate-update \
-        ./main.go || {
-            echo -e "${RED}CLI build failed. Rolling back source.${NC}"
-            git reset --hard "$old_commit"
-            return
-        }
+    cli_build="$(
+        mktemp \
+            /tmp/irangate-cli-update.XXXXXX
+    )"
 
-    echo -e "${CYAN}Building Web Panel...${NC}"
+    panel_build="$(
+        mktemp \
+            /tmp/irangate-panel-update.XXXXXX
+    )"
 
-    (
-        cd webpanel/backend &&
+    rm -f \
+        "$cli_build" \
+        "$panel_build"
+
+    echo
+    echo -e "${CYAN}Building IranGate CLI...${NC}"
+
+    if ! (
+        cd "$worktree" &&
         go build \
-            -o /tmp/irangate-webpanel-update \
-            .
-    ) || {
-        echo -e "${RED}Web Panel build failed. Rolling back source.${NC}"
-        git reset --hard "$old_commit"
-        return
-    }
+            -o "$cli_build" \
+            ./main.go
+    )
+    then
+        echo -e "${RED}CLI build failed. Live system was not changed.${NC}"
 
-    systemctl stop irangate-webpanel
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
 
-    install \
-        -m 0755 \
-        /tmp/irangate-update \
-        /usr/local/bin/irangate
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
 
-    install \
-        -m 0755 \
-        /tmp/irangate-webpanel-update \
-        /usr/local/bin/irangate-webpanel
-
-    mkdir -p /opt/irangate/webpanel/frontend
-
-    cp -a \
-        webpanel/frontend/. \
-        /opt/irangate/webpanel/frontend/
-
-    if [[ -f scripts/ovp-panel ]]; then
-        install \
-            -m 0755 \
-            scripts/ovp-panel \
-            /usr/local/bin/ovp-panel
+        return 1
     fi
 
-    # Deploy updated master runtime scripts.
-    if [[ -d deploy/master/scripts ]]; then
-        for runtime_script in deploy/master/scripts/*
+    echo -e "${GREEN}CLI build OK ✅${NC}"
+
+
+    echo
+    echo -e "${CYAN}Building Web Panel...${NC}"
+
+    if ! (
+        cd "$worktree/webpanel/backend" &&
+        go build \
+            -o "$panel_build" \
+            .
+    )
+    then
+        echo -e "${RED}Web Panel build failed. Live system was not changed.${NC}"
+
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
+
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
+
+        return 1
+    fi
+
+    echo -e "${GREEN}Web Panel build OK ✅${NC}"
+
+
+    # ------------------------------------------------
+    # Build target list for rollback snapshot
+    # ------------------------------------------------
+
+    deploy_targets+=(
+        "/usr/local/bin/irangate"
+        "/usr/local/bin/irangate-webpanel"
+        "/usr/local/bin/ovp-panel"
+        "/opt/irangate/webpanel/frontend"
+    )
+
+    if [[ -d "$worktree/deploy/master/scripts" ]]; then
+
+        for runtime_script in \
+            "$worktree"/deploy/master/scripts/*
+        do
+            [[ -f "$runtime_script" ]] || continue
+
+            deploy_targets+=(
+                "/usr/local/bin/$(basename "$runtime_script")"
+            )
+        done
+    fi
+
+    if [[ -f "$worktree/deploy/master/scripts/irangate-backup-v2-import.py" ]]; then
+        deploy_targets+=(
+            "/usr/local/bin/irangate-backup-v2-import"
+        )
+    fi
+
+    if [[ -f "$worktree/deploy/master/scripts/irangate-backup-v2-export.py" ]]; then
+        deploy_targets+=(
+            "/usr/local/bin/irangate-backup-v2-export"
+        )
+    fi
+
+
+    # ------------------------------------------------
+    # Snapshot current live files
+    # ------------------------------------------------
+
+    rollback_dir="$(
+        mktemp \
+            -d \
+            /tmp/irangate-update-rollback.XXXXXX
+    )" || {
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
+
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
+
+        echo -e "${RED}Failed to create rollback directory.${NC}"
+
+        return 1
+    }
+
+    printf '%s\n' \
+        "${deploy_targets[@]}" \
+        > "$rollback_dir/targets.list"
+
+    for target in "${deploy_targets[@]}"
+    do
+        if [[ -e "$target" || -L "$target" ]]; then
+            existing_targets+=(
+                "$target"
+            )
+        fi
+    done
+
+    if (( ${#existing_targets[@]} > 0 )); then
+
+        if ! tar \
+            -czpPf \
+            "$rollback_dir/live-files.tar.gz" \
+            "${existing_targets[@]}"
+        then
+            echo -e "${RED}Failed to create live rollback snapshot.${NC}"
+
+            git worktree remove \
+                --force \
+                "$worktree" \
+                >/dev/null 2>&1 \
+                || true
+
+            rm -rf "$rollback_dir"
+
+            rm -f \
+                "$cli_build" \
+                "$panel_build"
+
+            return 1
+        fi
+    fi
+
+
+    # ------------------------------------------------
+    # Fast-forward repository
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Fast-forwarding source repository...${NC}"
+
+    if ! git merge \
+        --ff-only \
+        "$new_commit"
+    then
+        echo -e "${RED}Source fast-forward failed.${NC}"
+
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
+
+        rm -rf "$rollback_dir"
+
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Stop Web Panel before binary replacement
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Stopping Web Panel for deployment...${NC}"
+
+    if ! systemctl stop irangate-webpanel; then
+        echo -e "${RED}Unable to stop Web Panel. Rolling back source.${NC}"
+
+        git reset \
+            --hard \
+            "$old_commit"
+
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
+
+        rm -rf "$rollback_dir"
+
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
+
+        return 1
+    fi
+
+
+    # ------------------------------------------------
+    # Deploy new core binaries
+    # ------------------------------------------------
+
+    echo
+    echo -e "${CYAN}Deploying updated binaries...${NC}"
+
+    install \
+        -m 0755 \
+        "$cli_build" \
+        /usr/local/bin/irangate \
+        || failed=true
+
+    install \
+        -m 0755 \
+        "$panel_build" \
+        /usr/local/bin/irangate-webpanel \
+        || failed=true
+
+
+    # ------------------------------------------------
+    # Deploy frontend
+    # ------------------------------------------------
+
+    if [[ "$failed" == false ]]; then
+
+        rm -rf \
+            /opt/irangate/webpanel/frontend
+
+        mkdir -p \
+            /opt/irangate/webpanel/frontend
+
+        cp -a \
+            "$worktree/webpanel/frontend/." \
+            /opt/irangate/webpanel/frontend/ \
+            || failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Deploy ovp-panel
+    # ------------------------------------------------
+
+    if [[ "$failed" == false &&
+          -f "$worktree/scripts/ovp-panel" ]]
+    then
+        install \
+            -m 0755 \
+            "$worktree/scripts/ovp-panel" \
+            /usr/local/bin/ovp-panel \
+            || failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Deploy runtime scripts
+    # ------------------------------------------------
+
+    if [[ "$failed" == false &&
+          -d "$worktree/deploy/master/scripts" ]]
+    then
+
+        for runtime_script in \
+            "$worktree"/deploy/master/scripts/*
         do
             [[ -f "$runtime_script" ]] || continue
 
             install \
                 -m 0755 \
                 "$runtime_script" \
-                "/usr/local/bin/$(basename "$runtime_script")"
+                "/usr/local/bin/$(basename "$runtime_script")" \
+                || {
+                    failed=true
+                    break
+                }
         done
+    fi
 
-        # Runtime commands used by Web Panel and ovp-panel
-        # intentionally use extensionless executable names.
-        if [[ -f deploy/master/scripts/irangate-backup-v2-import.py ]]; then
-            install \
-                -m 0755 \
-                deploy/master/scripts/irangate-backup-v2-import.py \
-                /usr/local/bin/irangate-backup-v2-import
-        fi
 
-        if [[ -f deploy/master/scripts/irangate-backup-v2-export.py ]]; then
-            install \
-                -m 0755 \
-                deploy/master/scripts/irangate-backup-v2-export.py \
-                /usr/local/bin/irangate-backup-v2-export
+    # ------------------------------------------------
+    # Deploy extensionless backup commands
+    # ------------------------------------------------
+
+    if [[ "$failed" == false &&
+          -f "$worktree/deploy/master/scripts/irangate-backup-v2-import.py" ]]
+    then
+        install \
+            -m 0755 \
+            "$worktree/deploy/master/scripts/irangate-backup-v2-import.py" \
+            /usr/local/bin/irangate-backup-v2-import \
+            || failed=true
+    fi
+
+    if [[ "$failed" == false &&
+          -f "$worktree/deploy/master/scripts/irangate-backup-v2-export.py" ]]
+    then
+        install \
+            -m 0755 \
+            "$worktree/deploy/master/scripts/irangate-backup-v2-export.py" \
+            /usr/local/bin/irangate-backup-v2-export \
+            || failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Rebuild Nginx using deployed manager
+    # ------------------------------------------------
+
+    if [[ "$failed" == false ]]; then
+
+        echo
+        echo -e "${CYAN}Rebuilding Nginx configuration...${NC}"
+
+        if ! /usr/local/bin/ovp-panel \
+            --rebuild-nginx
+        then
+            failed=true
         fi
     fi
 
-    systemctl start irangate-webpanel
 
-    sleep 3
+    # ------------------------------------------------
+    # Start Web Panel
+    # ------------------------------------------------
 
-    if ! systemctl is-active --quiet irangate-webpanel; then
-        echo -e "${RED}Updated panel failed health check.${NC}"
-        echo "Source commit remains updated, but service is unhealthy."
-        systemctl status irangate-webpanel --no-pager -l || true
-        return
+    if [[ "$failed" == false ]]; then
+
+        echo
+        echo -e "${CYAN}Starting updated Web Panel...${NC}"
+
+        if ! systemctl start irangate-webpanel; then
+            failed=true
+        fi
     fi
+
+    sleep 4
+
+
+    # ------------------------------------------------
+    # Read runtime ports
+    # ------------------------------------------------
+
+    panel_port="$(get_env WEBPANEL_PORT)"
+    panel_port="${panel_port:-8080}"
+
+    sub_port="$(get_env SUBSCRIPTION_PORT)"
+    sub_port="${sub_port:-8081}"
+
+    ovpn_port="$(
+        awk \
+            '/^port[[:space:]]+/{print $2; exit}' \
+            /etc/openvpn/server.conf \
+            2>/dev/null
+    )"
+
+
+    # ------------------------------------------------
+    # Post-update health checks
+    # ------------------------------------------------
 
     echo
-    echo -e "${GREEN}Update completed successfully.${NC}"
-    echo "Old: $old_commit"
-    echo "New: $(git rev-parse HEAD)"
+    echo -e "${CYAN}Post-Update Health Checks${NC}"
+    echo
+
+    for unit in \
+        postgresql \
+        openvpn@server \
+        irangate-webpanel \
+        nginx
+    do
+        if systemctl is-active --quiet "$unit"; then
+            echo -e "${unit}: ${GREEN}active${NC}"
+        else
+            echo -e "${unit}: ${RED}failed/inactive${NC}"
+            failed=true
+        fi
+    done
+
+
+    if command -v pg_isready >/dev/null 2>&1; then
+
+        if runuser -u postgres -- \
+            pg_isready \
+                -q \
+                -d postgres
+        then
+            echo -e "PostgreSQL Ready: ${GREEN}YES${NC}"
+        else
+            echo -e "PostgreSQL Ready: ${RED}NO${NC}"
+            failed=true
+        fi
+    fi
+
+
+    api_code="$(
+        curl \
+            -sS \
+            --max-time 8 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            "http://127.0.0.1:${panel_port}/api/health" \
+            2>/dev/null \
+        || true
+    )"
+
+    if [[ "$api_code" == "200" ]]; then
+        echo -e "Web Panel API: ${GREEN}HTTP 200${NC}"
+    else
+        echo -e "Web Panel API: ${RED}HTTP ${api_code:-000}${NC}"
+        failed=true
+    fi
+
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${panel_port}$"
+    then
+        echo -e "Panel TCP ${panel_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Panel TCP ${panel_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    if ss -ltnH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${sub_port}$"
+    then
+        echo -e "Subscription TCP ${sub_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "Subscription TCP ${sub_port}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    if [[ -n "$ovpn_port" ]] &&
+       ss -lunH 2>/dev/null \
+        | awk '{print $4}' \
+        | grep -Eq "[:.]${ovpn_port}$"
+    then
+        echo -e "OpenVPN UDP ${ovpn_port}: ${GREEN}LISTENING${NC}"
+    else
+        echo -e "OpenVPN UDP ${ovpn_port:-Unknown}: ${RED}NOT LISTENING${NC}"
+        failed=true
+    fi
+
+
+    if nginx -t >/dev/null 2>&1; then
+        echo -e "Nginx Config: ${GREEN}VALID${NC}"
+    else
+        echo -e "Nginx Config: ${RED}INVALID${NC}"
+        failed=true
+    fi
+
+
+    # ------------------------------------------------
+    # Successful update
+    # ------------------------------------------------
+
+    if [[ "$failed" == false ]]; then
+
+        git worktree remove \
+            --force \
+            "$worktree" \
+            >/dev/null 2>&1 \
+            || true
+
+        rm -rf \
+            "$rollback_dir"
+
+        rm -f \
+            "$cli_build" \
+            "$panel_build"
+
+        echo
+        echo -e "${BLUE}==================================================${NC}"
+        echo -e "${GREEN}Update completed successfully ✅${NC}"
+        echo -e "${BLUE}==================================================${NC}"
+        echo
+        echo "Branch: $branch"
+        echo "Old Commit: $old_commit"
+        echo "New Commit: $(git rev-parse HEAD)"
+        echo "Safety Backup: $backup_path"
+
+        return 0
+    fi
+
+
+    # ------------------------------------------------
+    # Rollback
+    # ------------------------------------------------
+
+    echo
+    echo -e "${RED}Update health check failed. Starting rollback...${NC}"
+    echo
+
+    systemctl stop \
+        irangate-webpanel \
+        >/dev/null 2>&1 \
+        || true
+
+
+    while IFS= read -r target
+    do
+        [[ -n "$target" ]] || continue
+
+        rm -rf \
+            "$target"
+    done < "$rollback_dir/targets.list"
+
+
+    if [[ -f "$rollback_dir/live-files.tar.gz" ]]; then
+        tar \
+            -xzpPf \
+            "$rollback_dir/live-files.tar.gz" \
+            || true
+    fi
+
+
+    git reset \
+        --hard \
+        "$old_commit"
+
+
+    if [[ -x /usr/local/bin/ovp-panel ]]; then
+        /usr/local/bin/ovp-panel \
+            --rebuild-nginx \
+            || true
+    fi
+
+
+    systemctl restart \
+        openvpn@server \
+        >/dev/null 2>&1 \
+        || true
+
+    systemctl restart \
+        irangate-webpanel \
+        >/dev/null 2>&1 \
+        || true
+
+    nginx -t >/dev/null 2>&1 &&
+        systemctl reload nginx \
+            >/dev/null 2>&1 \
+            || true
+
+
+    git worktree remove \
+        --force \
+        "$worktree" \
+        >/dev/null 2>&1 \
+        || true
+
+    rm -rf \
+        "$rollback_dir"
+
+    rm -f \
+        "$cli_build" \
+        "$panel_build"
+
+
+    echo
+    echo -e "${BLUE}==================================================${NC}"
+    echo -e "${RED}Update failed and live files were rolled back ❌${NC}"
+    echo -e "${BLUE}==================================================${NC}"
+    echo
+    echo "Restored Commit: $(git rev-parse HEAD)"
+    echo "Pre-Update Backup: $backup_path"
+
+    return 1
 }
 
 full_uninstall() {
