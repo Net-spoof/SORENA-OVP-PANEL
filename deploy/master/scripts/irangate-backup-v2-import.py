@@ -1117,8 +1117,25 @@ def restore_filesystem(
 
 
     log(
-        "destination webpanel.env preserved intentionally"
+        "restoring webpanel.env"
     )
+
+    restore_optional_file(
+        root
+        / "config"
+        / "webpanel.env",
+        Path(
+            "/etc/irangate/webpanel.env"
+        ),
+        remove_if_missing=False,
+    )
+
+    webpanel_env = Path(
+        "/etc/irangate/webpanel.env"
+    )
+
+    if webpanel_env.is_file():
+        webpanel_env.chmod(0o600)
 
 
     log(
@@ -1357,6 +1374,48 @@ FROM clients;
     }
 
 
+def rebuild_restored_web_access() -> None:
+    log(
+        "rebuilding Nginx from restored webpanel.env"
+    )
+
+    manager = Path(
+        "/usr/local/bin/ovp-panel"
+    )
+
+    if not manager.is_file():
+        fail(
+            "ovp-panel manager not found; "
+            "cannot rebuild restored web access"
+        )
+
+    result = subprocess.run(
+        [
+            str(manager),
+            "--rebuild-nginx",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    if result.stdout.strip():
+        log(
+            result.stdout.strip()
+        )
+
+    if result.returncode != 0:
+        if result.stderr.strip():
+            log(
+                result.stderr.strip()
+            )
+
+        fail(
+            "failed to rebuild Nginx configuration "
+            "from restored webpanel.env"
+        )
+
+
 def restore_from_archive_root(
     root: Path,
 ) -> dict:
@@ -1368,6 +1427,8 @@ def restore_from_archive_root(
     restore_filesystem(
         root
     )
+
+    rebuild_restored_web_access()
 
     return post_restore_check()
 

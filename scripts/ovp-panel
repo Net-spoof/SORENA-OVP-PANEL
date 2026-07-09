@@ -1005,6 +1005,35 @@ update_panel() {
             /usr/local/bin/ovp-panel
     fi
 
+    # Deploy updated master runtime scripts.
+    if [[ -d deploy/master/scripts ]]; then
+        for runtime_script in deploy/master/scripts/*
+        do
+            [[ -f "$runtime_script" ]] || continue
+
+            install \
+                -m 0755 \
+                "$runtime_script" \
+                "/usr/local/bin/$(basename "$runtime_script")"
+        done
+
+        # Runtime commands used by Web Panel and ovp-panel
+        # intentionally use extensionless executable names.
+        if [[ -f deploy/master/scripts/irangate-backup-v2-import.py ]]; then
+            install \
+                -m 0755 \
+                deploy/master/scripts/irangate-backup-v2-import.py \
+                /usr/local/bin/irangate-backup-v2-import
+        fi
+
+        if [[ -f deploy/master/scripts/irangate-backup-v2-export.py ]]; then
+            install \
+                -m 0755 \
+                deploy/master/scripts/irangate-backup-v2-export.py \
+                /usr/local/bin/irangate-backup-v2-export
+        fi
+    fi
+
     systemctl start irangate-webpanel
 
     sleep 3
@@ -1209,4 +1238,26 @@ menu() {
 }
 
 require_root
-menu
+
+case "${1:-}" in
+    --rebuild-nginx)
+        echo -e "${CYAN}Rebuilding Nginx configuration from webpanel.env...${NC}"
+
+        if render_nginx; then
+            echo -e "${GREEN}Nginx configuration rebuilt successfully.${NC}"
+            exit 0
+        fi
+
+        echo -e "${RED}Failed to rebuild Nginx configuration.${NC}"
+        exit 1
+        ;;
+
+    "")
+        menu
+        ;;
+
+    *)
+        echo "Usage: ovp-panel [--rebuild-nginx]"
+        exit 2
+        ;;
+esac
