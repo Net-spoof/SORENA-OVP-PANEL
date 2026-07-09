@@ -5,16 +5,19 @@ set -euo pipefail
 # Without this systemd drop-in, OpenVPN may fail with:
 # "Socket bind failed ... Permission denied (errno=13)" on ports below 1024.
 ensure_openvpn_privileged_port_capability() {
-    mkdir -p /etc/systemd/system/openvpn@server.service.d
+    log_info "Normalizing OpenVPN systemd capabilities..."
 
-    cat > /etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf <<'EOF'
-[Service]
-CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SETPCAP CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-EOF
+    local legacy_dropin="/etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf"
+
+    # The main OpenVPN unit contains the complete tested capability set.
+    # Remove old drop-ins because they break OpenVPN privilege transition.
+    if [[ -f "$legacy_dropin" ]]; then
+        rm -f "$legacy_dropin"
+    fi
 
     systemctl daemon-reload
 }
+
 
 
 RED='\033[0;31m'
@@ -1864,17 +1867,14 @@ fix_openvpn_runtime() {
     log_info "Applying OpenVPN runtime compatibility fixes..."
 
     local unit_file="/etc/systemd/system/openvpn@server.service"
-    local capability_dir="/etc/systemd/system/openvpn@server.service.d"
-    local capability_dropin="$capability_dir/cap-net-bind.conf"
+    local legacy_dropin="/etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf"
 
-    # Normalize the OpenVPN capability drop-in for both fresh and old installations.
-    mkdir -p "$capability_dir"
-
-    cat > "$capability_dropin" <<'OPENVPN_CAPS_EOF'
-[Service]
-CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SETPCAP CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-OPENVPN_CAPS_EOF
+    # Remove legacy capability drop-ins.
+    # The main unit contains the complete tested capability set.
+    if [[ -f "$legacy_dropin" ]]; then
+        log_warn "Removing legacy OpenVPN capability drop-in..."
+        rm -f "$legacy_dropin"
+    fi
 
     # Patch the main OpenVPN systemd unit with the full tested capability set.
     if [[ -f "$unit_file" ]]; then

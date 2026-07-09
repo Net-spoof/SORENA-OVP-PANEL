@@ -130,11 +130,7 @@ maybe_fix_openvpn_low_port(){
   systemctl list-unit-files openvpn@server.service >/dev/null 2>&1 || { warn "openvpn@server not detected; capability fix skipped."; return; }
   confirm "OpenVPN target is privileged port $port. Apply CAP_NET_BIND_SERVICE fix?" || return
   mkdir -p /etc/systemd/system/openvpn@server.service.d
-  cat >/etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf <<'CAPEOF'
-[Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-CAPEOF
+  rm -f /etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf
   systemctl daemon-reload
   systemctl reset-failed openvpn@server >/dev/null 2>&1 || true
   systemctl restart openvpn@server
