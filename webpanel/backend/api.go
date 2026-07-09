@@ -2398,6 +2398,11 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 			presence.LastSeen,
 		)
 
+	connectionLimit := subInt64(clientData["connection_limit"])
+	if connectionLimit <= 0 {
+		connectionLimit = 1
+	}
+
 	daysLeft := subDaysLeft(clientData)
 	daysLeft = strings.ReplaceAll(daysLeft, " days", " روز")
 	daysLeft = strings.ReplaceAll(daysLeft, " day", " روز")
@@ -2469,6 +2474,7 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 
 	pageData := map[string]interface{}{
 		"ClientName":         clientName,
+		"UserCount":          connectionLimit,
 		"Status":             statusText,
 		"OnlineStatus":       onlineText,
 		"IsOnline":           isOnline,
@@ -2580,6 +2586,7 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
       <div>
         <div class="config-name"><span class="badge">OVPN</span> کانفیگ اختصاصی {{.ClientName}}</div>
         <div class="meta">
+          تعداد کاربر: {{.UserCount}} کاربر<br>
           حجم کل: {{.Limit}}<br>
           مصرف‌شده: {{.Used}}<br>
           باقی‌مانده: {{.Left}}{{if .ShowLastConnection}}<br>

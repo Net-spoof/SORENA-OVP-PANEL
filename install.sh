@@ -1827,6 +1827,39 @@ MASTER_NODE_GUARD_EOF
 }
 
 
+
+install_panel_manager() {
+    log_info "Installing ovp-panel management command..."
+
+    local manager_source="$SCRIPT_DIR/scripts/ovp-panel"
+
+    if [[ ! -f "$manager_source" ]]; then
+        log_error "ovp-panel source not found: $manager_source"
+        return 1
+    fi
+
+    install \
+        -m 0755 \
+        "$manager_source" \
+        /usr/local/bin/ovp-panel
+
+    mkdir -p /etc/irangate
+
+    printf '%s\n' \
+        "$SCRIPT_DIR" \
+        > /etc/irangate/source_dir
+
+    chmod 600 /etc/irangate/source_dir
+
+    if ! command -v ovp-panel >/dev/null 2>&1; then
+        log_error "ovp-panel command installation failed"
+        return 1
+    fi
+
+    log_info "ovp-panel installed successfully"
+}
+
+
 fix_openvpn_runtime() {
     log_info "Applying OpenVPN runtime compatibility fixes..."
 
@@ -2106,6 +2139,7 @@ main() {
     install_webpanel
     configure_webpanel_access
     install_master_postgres_stack
+    install_panel_manager
     fix_openvpn_runtime
 
     if ! test_services; then
