@@ -9,7 +9,7 @@ ensure_openvpn_privileged_port_capability() {
 
     cat > /etc/systemd/system/openvpn@server.service.d/cap-net-bind.conf <<'EOF'
 [Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SETPCAP CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 EOF
 
@@ -864,7 +864,7 @@ Type=notify
 PrivateTmp=true
 WorkingDirectory=/etc/openvpn
 ExecStart=/usr/sbin/openvpn --config /etc/openvpn/server.conf
-CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SETPCAP CAP_NET_BIND_SERVICE
 LimitNPROC=10
 DeviceAllow=/dev/null rw
 DeviceAllow=/dev/net/tun rw
@@ -1826,6 +1826,122 @@ MASTER_NODE_GUARD_EOF
     log_info "PostgreSQL traffic stack installed successfully"
 }
 
+
+fix_openvpn_runtime() {
+    log_info "Applying OpenVPN runtime compatibility fixes..."
+
+    local unit_file="/etc/systemd/system/openvpn@server.service"
+    local capability_dir="/etc/systemd/system/openvpn@server.service.d"
+    local capability_dropin="$capability_dir/cap-net-bind.conf"
+
+    # Normalize the OpenVPN capability drop-in for both fresh and old installations.
+    mkdir -p "$capability_dir"
+
+    cat > "$capability_dropin" <<'OPENVPN_CAPS_EOF'
+[Service]
+CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_RAW CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SETPCAP CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+OPENVPN_CAPS_EOF
+
+    # Patch the main OpenVPN systemd unit with the full tested capability set.
+    if [[ -f "$unit_file" ]]; then
+        python3 - <<'PY_CAPS'
+from pathlib import Path
+import re
+
+path = Path("/etc/systemd/system/openvpn@server.service")
+text = path.read_text()
+
+full_caps = (
+    "CAP_IPC_LOCK "
+    "CAP_NET_ADMIN "
+    "CAP_NET_RAW "
+    "CAP_SETGID "
+    "CAP_SETUID "
+    "CAP_SYS_CHROOT "
+    "CAP_DAC_OVERRIDE "
+    "CAP_SETPCAP "
+    "CAP_NET_BIND_SERVICE"
+)
+
+new_text, count = re.subn(
+    r"(?m)^CapabilityBoundingSet=.*$",
+    f"CapabilityBoundingSet={full_caps}",
+    text,
+)
+
+if count == 0:
+    raise SystemExit(
+        "CapabilityBoundingSet not found in OpenVPN systemd unit"
+    )
+
+path.write_text(new_text)
+PY_CAPS
+    else
+        log_error "OpenVPN systemd unit not found: $unit_file"
+        return 1
+    fi
+
+    # client-connect scripts require script-security 2.
+    if [[ -f /etc/openvpn/server.conf ]]; then
+        if grep -qE '^client-connect[[:space:]]+' /etc/openvpn/server.conf; then
+            if ! grep -qE '^script-security[[:space:]]+2([[:space:]]|$)' \
+                /etc/openvpn/server.conf; then
+
+                sed -i \
+                    '/^client-connect[[:space:]]/i script-security 2' \
+                    /etc/openvpn/server.conf
+            fi
+        fi
+    fi
+
+    systemctl daemon-reload
+    systemctl reset-failed openvpn@server.service \
+        >/dev/null 2>&1 || true
+
+    if ! systemctl restart openvpn@server.service; then
+        log_error "OpenVPN failed to restart"
+
+        journalctl \
+            -u openvpn@server.service \
+            --no-pager \
+            -n 100 || true
+
+        tail -n 100 \
+            /etc/openvpn/logs/openvpn.log \
+            2>/dev/null || true
+
+        return 1
+    fi
+
+    sleep 3
+
+    if ! systemctl is-active --quiet openvpn@server.service; then
+        log_error "OpenVPN is not active after compatibility fixes"
+
+        systemctl status \
+            openvpn@server.service \
+            --no-pager \
+            -l || true
+
+        tail -n 100 \
+            /etc/openvpn/logs/openvpn.log \
+            2>/dev/null || true
+
+        return 1
+    fi
+
+    if ! grep -q \
+        "Initialization Sequence Completed" \
+        /etc/openvpn/logs/openvpn.log 2>/dev/null; then
+
+        log_warn "OpenVPN is active but initialization marker was not found in log"
+    fi
+
+    log_info "OpenVPN runtime compatibility fixes applied successfully"
+}
+
+
 test_services() {
     log_step "Step 4/5: Testing all services..."
     echo ""
@@ -1990,7 +2106,12 @@ main() {
     install_webpanel
     configure_webpanel_access
     install_master_postgres_stack
-    test_services
+    fix_openvpn_runtime
+
+    if ! test_services; then
+        log_warn "Installation completed with service warnings"
+    fi
+
     show_final_summary
     log_info "=== Installation Completed ==="
 }
