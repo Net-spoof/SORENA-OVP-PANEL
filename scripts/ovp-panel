@@ -733,34 +733,438 @@ change_openvpn_port() {
 
 change_openvpn_host() {
     local host
+    local sync_output
 
     read -r -p "New OpenVPN Public IP or Domain: " host
 
+    host="$(
+        printf '%s' "$host" \
+        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+    )"
+
     [[ -n "$host" ]] || {
         echo "Host cannot be empty."
-        return
+        return 1
     }
 
-    for dir in \
-        /etc/openvpn/client \
-        /opt/irangate/clients
-    do
-        [[ -d "$dir" ]] || continue
+    if [[ "$host" == *"://"* ]]; then
+        echo -e "${RED}Enter only IP or Domain, without http:// or https://.${NC}"
+        return 1
+    fi
 
-        find "$dir" \
-            -maxdepth 1 \
-            -type f \
-            -name '*.ovpn' \
-            -print0 \
-        | while IFS= read -r -d '' file
-        do
-            sed -i \
-                -E "s/^(remote[[:space:]]+)[^[:space:]]+/\1${host}/" \
-                "$file"
-        done
-    done
+    sync_output="$(
+        python3 - "$host" <<'PYHOST'
+import ipaddress
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-    echo -e "${GREEN}OpenVPN public host updated in existing client configs.${NC}"
+
+host = sys.argv[1].strip()
+
+
+# --------------------------------------------------
+# Validate host
+# --------------------------------------------------
+
+try:
+    ipaddress.ip_address(host)
+    is_ip = True
+except ValueError:
+    is_ip = False
+
+
+if not is_ip:
+    domain_re = re.compile(
+        r"^(?=.{1,253}$)"
+        r"(?:"
+        r"[A-Za-z0-9]"
+        r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+        r"\."
+        r")*"
+        r"[A-Za-z0-9]"
+        r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+        r"$"
+    )
+
+    if not domain_re.match(host):
+        raise SystemExit(
+            "Invalid IP or Domain"
+        )
+
+
+now = datetime.now(timezone.utc).isoformat()
+
+
+# --------------------------------------------------
+# Paths
+# --------------------------------------------------
+
+server_config_path = Path(
+    "/opt/irangate/server_config.json"
+)
+
+db_settings_path = Path(
+    "/opt/irangate/database/settings.json"
+)
+
+webpanel_server_path = Path(
+    "/opt/irangate/webpanel/server.json"
+)
+
+
+json_paths = [
+    server_config_path,
+    db_settings_path,
+    webpanel_server_path,
+]
+
+
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+
+    data = json.loads(
+        path.read_text()
+    )
+
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"{path} is not a JSON object"
+        )
+
+    return data
+
+
+def atomic_json_write(
+    path: Path,
+    data: dict,
+    default_mode: int,
+) -> None:
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    mode = default_mode
+
+    if path.exists():
+        mode = path.stat().st_mode & 0o777
+
+    temp = path.with_name(
+        f".{path.name}.tmp-{os.getpid()}"
+    )
+
+    temp.write_text(
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+    os.chmod(
+        temp,
+        mode,
+    )
+
+    os.replace(
+        temp,
+        path,
+    )
+
+
+# --------------------------------------------------
+# Read all state before mutation
+# --------------------------------------------------
+
+server_config = load_json(
+    server_config_path
+)
+
+db_settings = load_json(
+    db_settings_path
+)
+
+webpanel_server = load_json(
+    webpanel_server_path
+)
+
+
+# --------------------------------------------------
+# Update server_config.json
+# --------------------------------------------------
+
+server_config["auto_detect_ip"] = False
+server_config["last_updated"] = now
+
+detected = server_config.get(
+    "detected_ips"
+)
+
+if not isinstance(detected, dict):
+    detected = {}
+
+server_config["detected_ips"] = detected
+
+
+settings = server_config.get(
+    "settings"
+)
+
+if not isinstance(settings, dict):
+    settings = {}
+
+server_config["settings"] = settings
+
+settings["fallback_to_ip"] = True
+
+
+if is_ip:
+    server_config["server_ip"] = host
+    server_config["server_domain"] = ""
+
+    detected["primary"] = host
+    detected["manual"] = host
+
+    settings["use_domain"] = False
+    settings["force_manual_ip"] = True
+
+else:
+    server_config["server_domain"] = host
+
+    settings["use_domain"] = True
+    settings["force_manual_ip"] = bool(
+        str(
+            server_config.get(
+                "server_ip",
+                "",
+            )
+        ).strip()
+    )
+
+
+# --------------------------------------------------
+# Update database/settings.json
+# --------------------------------------------------
+
+if is_ip:
+    db_settings["server_ip"] = host
+    db_settings["server_domain"] = ""
+    db_settings["use_domain"] = False
+
+else:
+    db_settings["server_domain"] = host
+    db_settings["use_domain"] = True
+
+db_settings["auto_detect_ip"] = False
+db_settings["last_updated"] = now
+
+
+# --------------------------------------------------
+# Update webpanel/server.json
+# --------------------------------------------------
+
+if is_ip:
+    webpanel_server["server_ip"] = host
+    webpanel_server["server_domain"] = ""
+
+else:
+    webpanel_server["server_domain"] = host
+
+webpanel_server["last_updated"] = now
+
+
+# --------------------------------------------------
+# Collect existing OVPN files
+# --------------------------------------------------
+
+ovpn_files = []
+
+for directory in (
+    Path("/etc/openvpn/client"),
+    Path("/opt/irangate/clients"),
+):
+
+    if not directory.is_dir():
+        continue
+
+    ovpn_files.extend(
+        sorted(
+            directory.glob("*.ovpn")
+        )
+    )
+
+
+# --------------------------------------------------
+# Snapshot for rollback
+# --------------------------------------------------
+
+all_paths = (
+    json_paths
+    + ovpn_files
+)
+
+snapshots = {}
+
+for item in all_paths:
+    if item.exists():
+        snapshots[item] = (
+            item.read_bytes(),
+            item.stat().st_mode & 0o777,
+        )
+    else:
+        snapshots[item] = None
+
+
+try:
+
+    # ----------------------------------------------
+    # Write JSON state
+    # ----------------------------------------------
+
+    atomic_json_write(
+        server_config_path,
+        server_config,
+        0o644,
+    )
+
+    atomic_json_write(
+        db_settings_path,
+        db_settings,
+        0o644,
+    )
+
+    atomic_json_write(
+        webpanel_server_path,
+        webpanel_server,
+        0o600,
+    )
+
+
+    # ----------------------------------------------
+    # Rewrite existing OVPN configs
+    # ----------------------------------------------
+
+    changed_count = 0
+
+    remote_re = re.compile(
+        r"(?m)^([ \t]*remote[ \t]+)\S+"
+    )
+
+    for config_path in ovpn_files:
+
+        old_text = config_path.read_text()
+
+        new_text, count = remote_re.subn(
+            lambda match: (
+                match.group(1)
+                + host
+            ),
+            old_text,
+        )
+
+        if count <= 0:
+            continue
+
+        mode = (
+            config_path.stat().st_mode
+            & 0o777
+        )
+
+        temp = config_path.with_name(
+            f".{config_path.name}.tmp-{os.getpid()}"
+        )
+
+        temp.write_text(
+            new_text
+        )
+
+        os.chmod(
+            temp,
+            mode,
+        )
+
+        os.replace(
+            temp,
+            config_path,
+        )
+
+        changed_count += 1
+
+
+except Exception:
+
+    # ----------------------------------------------
+    # Rollback all touched files
+    # ----------------------------------------------
+
+    for item, snapshot in snapshots.items():
+
+        if snapshot is None:
+            try:
+                item.unlink()
+            except FileNotFoundError:
+                pass
+
+            continue
+
+        content, mode = snapshot
+
+        item.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        item.write_bytes(
+            content
+        )
+
+        os.chmod(
+            item,
+            mode,
+        )
+
+    raise
+
+
+mode_name = (
+    "IP"
+    if is_ip
+    else "Domain"
+)
+
+print(
+    f"Mode: {mode_name}"
+)
+
+print(
+    f"Persistent Host: {host}"
+)
+
+print(
+    f"Existing configs updated: {changed_count}"
+)
+PYHOST
+    )" || {
+        echo -e "${RED}Failed to update OpenVPN Public Host. Changes rolled back.${NC}"
+        return 1
+    }
+
+    echo "$sync_output"
+
+    echo
+    echo -e "${GREEN}OpenVPN public host updated successfully.${NC}"
+    echo "Existing and future local client configs will use the new host."
 }
 
 service_status() {
