@@ -1022,7 +1022,7 @@ EOF
         cat > /etc/irangate/traffic_config.json << EOF
 {
   "data_dir": "/opt/irangate/traffic",
-  "collection_interval_seconds": 10,
+  "collection_interval_seconds": 20,
   "retention_days": 90,
   "status_log_path": "/etc/openvpn/openvpn-status.log",
   "enable_quota_tracking": true,
@@ -1280,7 +1280,7 @@ EOF
         cat > /etc/irangate/traffic_config.json << EOF
 {
   "data_dir": "/opt/irangate/traffic",
-  "collection_interval_seconds": 10,
+  "collection_interval_seconds": 20,
   "retention_days": 90,
   "status_log_path": "/etc/openvpn/openvpn-status.log",
   "enable_quota_tracking": true,

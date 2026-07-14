@@ -394,7 +394,7 @@ var clientsCache struct {
 
 func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 	clientsCache.mutex.RLock()
-	cacheValid := time.Since(clientsCache.timestamp) < 5*time.Second && clientsCache.data != nil
+	cacheValid := time.Since(clientsCache.timestamp) < 20*time.Second && clientsCache.data != nil
 	clientsCache.mutex.RUnlock()
 	if cacheValid {
 		clientsCache.mutex.RLock()
@@ -416,6 +416,7 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	trafficDB := NewTrafficDatabase()
 	trafficStats, err := trafficDB.GetCurrentClientStats()
+	cumulativeTotals := trafficDB.loadCumulativeTotalsMap()
 	parser := NewOpenVPNStatusParser()
 	currentlyConnected := make(map[string]bool)
 	connectedSince := make(map[string]time.Time)
@@ -477,10 +478,6 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 					}
 
 					isCurrentlyConnected := currentlyConnected[name]
-					if name == "sandman" || isCurrentlyConnected {
-						log.Printf("DEBUG: Client %s - isCurrentlyConnected=%v, connectedSince=%v",
-							name, isCurrentlyConnected, connectedSince[name])
-					}
 					if stat, exists := trafficMap[name]; exists {
 						stat.Connected = isCurrentlyConnected
 						if isCurrentlyConnected {
@@ -516,26 +513,23 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 								clientMap["connected_since"] = time.Now().Format(time.RFC3339)
 							}
 						} else {
-							now := time.Now()
-							weekAgo := now.AddDate(0, 0, -7)
-							if history, err := trafficDB.GetClientTrafficHistory(name, weekAgo, now); err == nil && len(history) > 0 {
-								var lastRecord TrafficRecord
-								for _, record := range history {
-									if record.Timestamp.After(lastRecord.Timestamp) {
-										lastRecord = record
-									}
-								}
-								if !lastRecord.Timestamp.IsZero() {
-									clientMap["last_seen"] = lastRecord.Timestamp.Format(time.RFC3339)
-									clientMap["last_connection"] = lastRecord.Timestamp.Format(time.RFC3339)
-									cumulativeReceived, cumulativeSent := trafficDB.getCumulativeTraffic(name)
-									clientMap["bytes_received"] = cumulativeReceived
-									clientMap["bytes_sent"] = cumulativeSent
-									clientMap["total_bytes"] = cumulativeReceived + cumulativeSent
+							if total, exists := cumulativeTotals[name]; exists {
+								lastSeen := total.LastUpdate
+
+								if !lastSeen.IsZero() {
+									clientMap["last_seen"] = lastSeen.Format(time.RFC3339)
+									clientMap["last_connection"] = lastSeen.Format(time.RFC3339)
 								} else {
 									clientMap["last_seen"] = ""
 									clientMap["last_connection"] = ""
 								}
+
+								received := total.TotalReceived + total.LastSessionReceived
+								sent := total.TotalSent + total.LastSessionSent
+
+								clientMap["bytes_received"] = received
+								clientMap["bytes_sent"] = sent
+								clientMap["total_bytes"] = received + sent
 							} else {
 								clientMap["last_seen"] = ""
 								clientMap["last_connection"] = ""
@@ -2717,8 +2711,9 @@ func main() {
 		}
 		parser.StartTrafficCollection(collectionInterval)
 	}()
-	go StartDataLimitScanner(30)
-	go StartClientLifecycleMonitor(30)
+	// Legacy destructive data-limit scanner disabled.
+	go StartClientLifecycleMonitor(20)
+	go StartBlockedClientRemoteSync(60)
 	go StartAsyncCleanup()
 	basePathEnv := readEnvOrDefault("WEBPANEL_BASEPATH", "/")
 	basePath := strings.TrimSpace(basePathEnv)

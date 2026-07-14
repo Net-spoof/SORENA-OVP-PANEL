@@ -1,4 +1,5 @@
 package main
+
 import (
 	"bufio"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 )
+
 type OpenVPNStatusParser struct {
 	StatusFiles []string
 	Database    *TrafficDatabase
@@ -28,6 +30,7 @@ type OpenVPNClient struct {
 	ConnectedSince time.Time
 	VirtualIP      string
 }
+
 func NewOpenVPNStatusParser() *OpenVPNStatusParser {
 	ctx, cancel := context.WithCancel(context.Background())
 	statusLogPath := os.Getenv("OPENVPN_STATUS_LOG_PATH")
@@ -37,8 +40,6 @@ func NewOpenVPNStatusParser() *OpenVPNStatusParser {
 	return &OpenVPNStatusParser{
 		StatusFiles: []string{
 			statusLogPath,
-			"/etc/openvpn/openvpn-status-server.log",
-			"/etc/openvpn/openvpn-status-server-tcp-443.log",
 		},
 		Database: NewTrafficDatabase(),
 		ctx:      ctx,
@@ -115,72 +116,152 @@ func (p *OpenVPNStatusParser) ParseStatusLog(filename string) ([]OpenVPNClient, 
 }
 func (p *OpenVPNStatusParser) CollectTrafficData() error {
 	var allClients []OpenVPNClient
-	var currentStats []ClientTrafficStats
+
 	for _, statusFile := range p.StatusFiles {
 		clients, err := p.ParseStatusLog(statusFile)
 		if err != nil {
 			fmt.Printf("Warning: Failed to parse %s: %v\n", statusFile, err)
 			continue
 		}
+
 		allClients = append(allClients, clients...)
 	}
+
+	existingStats, err := p.Database.GetCurrentClientStats()
+	if err != nil {
+		fmt.Printf("Warning: Failed to load current stats: %v\n", err)
+		existingStats = []ClientTrafficStats{}
+	}
+
+	existingByName := make(map[string]ClientTrafficStats, len(existingStats))
+	for _, stat := range existingStats {
+		existingByName[stat.ClientName] = stat
+	}
+
+	// فقط یک بار در هر چرخه، نه یک بار برای هر کاربر
+	quotaBytesByClient := loadClientQuotaBytes()
+
+	currentStats := make(
+		[]ClientTrafficStats,
+		0,
+		len(allClients),
+	)
+
 	const maxBatchSize = 100
-	if len(allClients) > maxBatchSize {
-		for i := 0; i < len(allClients); i += maxBatchSize {
-			end := i + maxBatchSize
-			if end > len(allClients) {
-				end = len(allClients)
-			}
-			batch := allClients[i:end]
-			if err := p.processClientBatch(batch, &currentStats); err != nil {
-				fmt.Printf("Warning: Failed to process client batch: %v\n", err)
-			}
+
+	for i := 0; i < len(allClients); i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > len(allClients) {
+			end = len(allClients)
 		}
-	} else {
-		if err := p.processClientBatch(allClients, &currentStats); err != nil {
-			return fmt.Errorf("failed to process clients: %v", err)
+
+		batch := allClients[i:end]
+
+		if err := p.processClientBatch(
+			batch,
+			&currentStats,
+			existingByName,
+		); err != nil {
+			return fmt.Errorf(
+				"failed to process client batch: %v",
+				err,
+			)
 		}
 	}
+
+	// بعد از ثبت نمونه‌های جدید، cumulative_totals فقط یک بار خوانده شود
+	freshTotals := p.Database.loadCumulativeTotalsMap()
+
+	for i := range currentStats {
+		name := currentStats[i].ClientName
+
+		if total, exists := freshTotals[name]; exists {
+			received := total.TotalReceived +
+				total.LastSessionReceived
+
+			sent := total.TotalSent +
+				total.LastSessionSent
+
+			currentStats[i].CurrentReceived = received
+			currentStats[i].CurrentSent = sent
+			currentStats[i].CurrentTotal = received + sent
+		}
+
+		quotaBytes := quotaBytesByClient[name]
+		if quotaBytes > 0 {
+			currentStats[i].QuotaUsed =
+				(float64(currentStats[i].CurrentTotal) /
+					float64(quotaBytes)) * 100
+		} else {
+			currentStats[i].QuotaUsed = 0
+		}
+	}
+
 	if err := p.Database.UpdateCurrentStats(currentStats); err != nil {
-		return fmt.Errorf("failed to update current stats: %v", err)
+		return fmt.Errorf(
+			"failed to update current stats: %v",
+			err,
+		)
 	}
+
 	return nil
 }
-func (p *OpenVPNStatusParser) processClientBatch(clients []OpenVPNClient, currentStats *[]ClientTrafficStats) error {
+
+func (p *OpenVPNStatusParser) processClientBatch(
+	clients []OpenVPNClient,
+	currentStats *[]ClientTrafficStats,
+	existingByName map[string]ClientTrafficStats,
+) error {
 	now := time.Now()
+
 	for _, client := range clients {
 		record := TrafficRecord{
 			ClientName:    client.CommonName,
 			Timestamp:     now,
 			BytesReceived: client.BytesReceived,
 			BytesSent:     client.BytesSent,
-			TotalBytes:    client.BytesReceived + client.BytesSent,
-			Connected:     true,
-			RealAddress:   client.RealAddress,
-			VirtualIP:     client.VirtualIP,
+			TotalBytes: client.BytesReceived +
+				client.BytesSent,
+			Connected:   true,
+			RealAddress: client.RealAddress,
+			VirtualIP:   client.VirtualIP,
 		}
+
 		if err := p.Database.StoreTrafficRecord(record); err != nil {
-			fmt.Printf("Warning: Failed to store traffic record for %s: %v\n", client.CommonName, err)
+			fmt.Printf(
+				"Warning: Failed to store traffic record for %s: %v\n",
+				client.CommonName,
+				err,
+			)
 		}
-		dailyUsage := p.calculateDailyUsage(client.CommonName, now)
-		monthlyUsage := p.calculateMonthlyUsage(client.CommonName, now)
+
+		previous := existingByName[client.CommonName]
+
 		stats := ClientTrafficStats{
-			ClientName:      client.CommonName,
+			ClientName: client.CommonName,
+
+			// در پایان CollectTrafficData از cumulative_totals
+			// با مقدار دقیق جایگزین می‌شوند.
 			CurrentReceived: client.BytesReceived,
 			CurrentSent:     client.BytesSent,
-			CurrentTotal:    client.BytesReceived + client.BytesSent,
-			LastSeen:        now,
-			Connected:       true,
-			RealAddress:     client.RealAddress,
-			VirtualIP:       client.VirtualIP,
-			DailyUsage:      dailyUsage,
-			MonthlyUsage:    monthlyUsage,
+			CurrentTotal: client.BytesReceived +
+				client.BytesSent,
+
+			LastSeen:     now,
+			Connected:    true,
+			RealAddress:  client.RealAddress,
+			VirtualIP:    client.VirtualIP,
+			DailyUsage:   previous.DailyUsage,
+			MonthlyUsage: previous.MonthlyUsage,
+			QuotaUsed:    previous.QuotaUsed,
 		}
-		stats.QuotaUsed = p.calculateQuotaUsage(client.CommonName, stats.CurrentTotal)
+
 		*currentStats = append(*currentStats, stats)
 	}
+
 	return nil
 }
+
 func (p *OpenVPNStatusParser) calculateDailyUsage(clientName string, date time.Time) int64 {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
@@ -223,36 +304,133 @@ func (p *OpenVPNStatusParser) calculateQuotaUsage(clientName string, currentUsag
 	}
 	return (float64(currentUsage) / float64(quotaBytes)) * 100
 }
-func (p *OpenVPNStatusParser) StartTrafficCollection(interval time.Duration) {
+func loadClientQuotaBytes() map[string]int64 {
+	quotas := make(map[string]int64)
+
+	cmd := exec.Command(
+		"irangate",
+		"client",
+		"list",
+		"--json",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf(
+			"Warning: Failed to load client quotas: %v\n",
+			err,
+		)
+		return quotas
+	}
+
+	var clients []map[string]interface{}
+	if err := json.Unmarshal(output, &clients); err != nil {
+		fmt.Printf(
+			"Warning: Failed to parse client quotas: %v\n",
+			err,
+		)
+		return quotas
+	}
+
+	for _, client := range clients {
+		name, _ := client["name"].(string)
+		if name == "" {
+			continue
+		}
+
+		// ساختار جدیدتر کلاینت‌ها
+		if limit, ok := client["traffic_limit_bytes"].(float64); ok &&
+			limit > 0 {
+			quotas[name] = int64(limit)
+			continue
+		}
+
+		// سازگاری با ساختار قدیمی پنل
+		enabled, _ := client["quota_enabled"].(bool)
+		quotaGB, _ := client["bandwidth_quota_gb"].(float64)
+
+		if enabled && quotaGB > 0 {
+			quotas[name] = int64(
+				quotaGB * 1024 * 1024 * 1024,
+			)
+		}
+	}
+
+	return quotas
+}
+
+func (p *OpenVPNStatusParser) StartTrafficCollection(
+	interval time.Duration,
+) {
 	p.mu.Lock()
+
 	if p.running {
 		p.mu.Unlock()
 		return
 	}
+
 	p.running = true
 	p.mu.Unlock()
+
 	p.wg.Add(1)
+
 	go func() {
 		defer p.wg.Done()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		fmt.Printf("Starting traffic collection service (interval: %v)\n", interval)
+
+		collectionTicker := time.NewTicker(interval)
+		cleanupTicker := time.NewTicker(6 * time.Hour)
+
+		defer collectionTicker.Stop()
+		defer cleanupTicker.Stop()
+
+		fmt.Printf(
+			"Starting traffic collection service (interval: %v)\n",
+			interval,
+		)
+
 		for {
 			select {
 			case <-p.ctx.Done():
-				fmt.Println("Traffic collection service stopping...")
+				fmt.Println(
+					"Traffic collection service stopping...",
+				)
 				return
-			case <-ticker.C:
+
+			case <-collectionTicker.C:
+				// اجرای synchronous باعث می‌شود دو چرخه
+				// به‌صورت هم‌زمان روی هم نیفتند.
+				startedAt := time.Now()
+
 				if err := p.CollectTrafficData(); err != nil {
-					fmt.Printf("Error collecting traffic data: %v\n", err)
+					fmt.Printf(
+						"Error collecting traffic data: %v\n",
+						err,
+					)
 				}
+
+				elapsed := time.Since(startedAt)
+
+				if elapsed > interval {
+					fmt.Printf(
+						"Warning: Traffic collection took %v, interval is %v\n",
+						elapsed,
+						interval,
+					)
+				}
+
+			case <-cleanupTicker.C:
+				// پاک‌سازی سنگین فقط هر شش ساعت
 				if err := p.Database.CleanupOldData(90); err != nil {
-					fmt.Printf("Error cleaning up old data: %v\n", err)
+					fmt.Printf(
+						"Error cleaning up old data: %v\n",
+						err,
+					)
 				}
 			}
 		}
 	}()
 }
+
 func (p *OpenVPNStatusParser) StopTrafficCollection() {
 	p.mu.Lock()
 	if !p.running {

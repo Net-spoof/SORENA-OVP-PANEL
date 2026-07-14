@@ -1,4 +1,5 @@
 package main
+
 import (
 	"encoding/json"
 	"fmt"
@@ -6,16 +7,17 @@ import (
 	"path/filepath"
 	"time"
 )
+
 type TrafficDatabase struct {
 	DataDir string
 }
 type ClientTotalTraffic struct {
-	ClientName      string    `json:"client_name"`
-	TotalReceived   int64     `json:"total_received"`
-	TotalSent       int64     `json:"total_sent"`
-	LastSessionReceived int64 `json:"last_session_received"`
-	LastSessionSent     int64 `json:"last_session_sent"`
-	LastUpdate      time.Time `json:"last_update"`
+	ClientName          string    `json:"client_name"`
+	TotalReceived       int64     `json:"total_received"`
+	TotalSent           int64     `json:"total_sent"`
+	LastSessionReceived int64     `json:"last_session_received"`
+	LastSessionSent     int64     `json:"last_session_sent"`
+	LastUpdate          time.Time `json:"last_update"`
 }
 type TrafficRecord struct {
 	ClientName    string    `json:"client_name"`
@@ -51,6 +53,7 @@ type ClientTrafficStats struct {
 	MonthlyUsage    int64     `json:"monthly_usage"`
 	QuotaUsed       float64   `json:"quota_used_percent"`
 }
+
 func NewTrafficDatabase() *TrafficDatabase {
 	trafficDataDir := os.Getenv("IRANGATE_TRAFFIC_DIR")
 	if trafficDataDir == "" {
@@ -70,7 +73,7 @@ func (td *TrafficDatabase) StoreTrafficRecord(record TrafficRecord) error {
 	os.MkdirAll(dateDir, 0755)
 	filename := fmt.Sprintf("%s_%s.json",
 		record.ClientName,
-		record.Timestamp.Format("15-04-05"))
+		record.Timestamp.Format("15-04"))
 	filepath := filepath.Join(dateDir, filename)
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -100,7 +103,7 @@ func (td *TrafficDatabase) updateCumulativeTotals(record TrafficRecord) {
 		}
 	}
 	if record.BytesReceived < clientTotal.LastSessionReceived ||
-	   record.BytesSent < clientTotal.LastSessionSent {
+		record.BytesSent < clientTotal.LastSessionSent {
 		clientTotal.TotalReceived += clientTotal.LastSessionReceived
 		clientTotal.TotalSent += clientTotal.LastSessionSent
 		clientTotal.LastSessionReceived = record.BytesReceived
@@ -131,7 +134,7 @@ func (td *TrafficDatabase) getCumulativeTotals(clientName string) (int64, int64)
 			for _, total := range totals {
 				if total.ClientName == clientName {
 					return total.TotalReceived + total.LastSessionReceived,
-					       total.TotalSent + total.LastSessionSent
+						total.TotalSent + total.LastSessionSent
 				}
 			}
 		}
@@ -210,6 +213,31 @@ func (td *TrafficDatabase) GetDailySummary(clientName string, date time.Time) (*
 		ConnectedTime: connectedTime,
 	}, nil
 }
+func (td *TrafficDatabase) loadCumulativeTotalsMap() map[string]ClientTotalTraffic {
+	totalsMap := make(map[string]ClientTotalTraffic)
+
+	totalsFile := filepath.Join(
+		td.DataDir,
+		"cumulative_totals.json",
+	)
+
+	data, err := os.ReadFile(totalsFile)
+	if err != nil {
+		return totalsMap
+	}
+
+	var totals []ClientTotalTraffic
+	if err := json.Unmarshal(data, &totals); err != nil {
+		return totalsMap
+	}
+
+	for _, total := range totals {
+		totalsMap[total.ClientName] = total
+	}
+
+	return totalsMap
+}
+
 func (td *TrafficDatabase) GetCurrentClientStats() ([]ClientTrafficStats, error) {
 	statsFile := filepath.Join(td.DataDir, "current_stats.json")
 	if _, err := os.Stat(statsFile); os.IsNotExist(err) {
@@ -223,54 +251,110 @@ func (td *TrafficDatabase) GetCurrentClientStats() ([]ClientTrafficStats, error)
 	err = json.Unmarshal(data, &stats)
 	return stats, err
 }
-func (td *TrafficDatabase) UpdateCurrentStats(stats []ClientTrafficStats) error {
-	statsFile := filepath.Join(td.DataDir, "current_stats.json")
+func (td *TrafficDatabase) UpdateCurrentStats(
+	stats []ClientTrafficStats,
+) error {
+	statsFile := filepath.Join(
+		td.DataDir,
+		"current_stats.json",
+	)
+
 	existingStats := make(map[string]ClientTrafficStats)
+
 	if data, err := os.ReadFile(statsFile); err == nil {
 		var existing []ClientTrafficStats
+
 		if err := json.Unmarshal(data, &existing); err == nil {
 			for _, stat := range existing {
 				existingStats[stat.ClientName] = stat
 			}
 		}
 	}
-	currentClients := make(map[string]bool)
+
+	// به‌جای خواندن cumulative_totals برای تک‌تک کاربران،
+	// فایل فقط یک بار خوانده می‌شود.
+	totalsMap := td.loadCumulativeTotalsMap()
+
+	currentClients := make(map[string]bool, len(stats))
+	mergedStats := make(
+		[]ClientTrafficStats,
+		0,
+		len(stats)+len(existingStats),
+	)
+
 	for _, stat := range stats {
 		currentClients[stat.ClientName] = true
-	}
-	mergedStats := make([]ClientTrafficStats, 0)
-	for _, stat := range stats {
-		cumulativeReceived, cumulativeSent := td.getCumulativeTraffic(stat.ClientName)
-		stat.CurrentReceived = cumulativeReceived
-		stat.CurrentSent = cumulativeSent
-		stat.CurrentTotal = cumulativeReceived + cumulativeSent
-		if existing, exists := existingStats[stat.ClientName]; exists {
-			stat.DailyUsage = existing.DailyUsage
-			stat.MonthlyUsage = existing.MonthlyUsage
-		} else {
-			stat.DailyUsage = td.getDailyTrafficTotal(stat.ClientName, time.Now())
-			stat.MonthlyUsage = td.getMonthlyTrafficTotal(stat.ClientName, time.Now())
+
+		if total, exists := totalsMap[stat.ClientName]; exists {
+			stat.CurrentReceived =
+				total.TotalReceived +
+					total.LastSessionReceived
+
+			stat.CurrentSent =
+				total.TotalSent +
+					total.LastSessionSent
+
+			stat.CurrentTotal =
+				stat.CurrentReceived +
+					stat.CurrentSent
 		}
+
+		if existing, exists := existingStats[stat.ClientName]; exists {
+			// محاسبه تاریخچه روزانه و ماهانه از حلقه
+			// بیست‌ثانیه‌ای خارج شده است.
+			if stat.DailyUsage == 0 {
+				stat.DailyUsage = existing.DailyUsage
+			}
+
+			if stat.MonthlyUsage == 0 {
+				stat.MonthlyUsage = existing.MonthlyUsage
+			}
+		}
+
 		mergedStats = append(mergedStats, stat)
 	}
+
 	for name, existing := range existingStats {
-		if !currentClients[name] {
-			cumulativeReceived, cumulativeSent := td.getCumulativeTraffic(name)
-			existing.CurrentReceived = cumulativeReceived
-			existing.CurrentSent = cumulativeSent
-			existing.CurrentTotal = cumulativeReceived + cumulativeSent
-			existing.Connected = false
-			existing.DailyUsage = td.getDailyTrafficTotal(name, time.Now())
-			existing.MonthlyUsage = td.getMonthlyTrafficTotal(name, time.Now())
-			mergedStats = append(mergedStats, existing)
+		if currentClients[name] {
+			continue
 		}
+
+		if total, exists := totalsMap[name]; exists {
+			existing.CurrentReceived =
+				total.TotalReceived +
+					total.LastSessionReceived
+
+			existing.CurrentSent =
+				total.TotalSent +
+					total.LastSessionSent
+
+			existing.CurrentTotal =
+				existing.CurrentReceived +
+					existing.CurrentSent
+		}
+
+		existing.Connected = false
+		mergedStats = append(mergedStats, existing)
 	}
-	data, err := json.MarshalIndent(mergedStats, "", "  ")
+
+	data, err := json.MarshalIndent(
+		mergedStats,
+		"",
+		"  ",
+	)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(statsFile, data, 0644)
+
+	tempFile := statsFile + ".tmp"
+
+	if err := os.WriteFile(tempFile, data, 0644); err != nil {
+		return err
+	}
+
+	return os.Rename(tempFile, statsFile)
 }
+
 func (td *TrafficDatabase) getCumulativeTraffic(clientName string) (int64, int64) {
 	return td.getCumulativeTotals(clientName)
 }
