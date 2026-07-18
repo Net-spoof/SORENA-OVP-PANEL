@@ -247,6 +247,16 @@ management-client-auth
 verb 3
 explicit-exit-notify 1
 EOF
+
+  install -m 0644 /etc/openvpn/server/server.conf /etc/openvpn/server.conf
+
+  mkdir -p /run/openvpn-server
+
+  cat > /etc/tmpfiles.d/irangate-openvpn.conf <<'EOF_TMP'
+d /run/openvpn-server 0755 root root - -
+EOF_TMP
+
+  systemd-tmpfiles --create /etc/tmpfiles.d/irangate-openvpn.conf 2>/dev/null || true
 }
 
 enable_routing_nat() {
