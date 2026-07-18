@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+
+REAL = "/usr/local/bin/irangate-backup-v2-import.real"
+EXTRA_PREFIX = "irangate-extra/files/"
+
+RESTORE_MAP_PREFIXES = {
+    "opt/irangate/panel-proxy.env": "/opt/irangate/panel-proxy.env",
+
+    "opt/irangate/routing/engine.json": "/opt/irangate/routing/engine.json",
+    "opt/irangate/routing/outbounds.json": "/opt/irangate/routing/outbounds.json",
+    "opt/irangate/routing/balancers.json": "/opt/irangate/routing/balancers.json",
+    "opt/irangate/routing/rules.json": "/opt/irangate/routing/rules.json",
+
+    "etc/sing-box/irangate-routing.json": "/etc/sing-box/irangate-routing.json",
+    "etc/systemd/system/irangate-routing.service": "/etc/systemd/system/irangate-routing.service",
+    "etc/systemd/system/irangate-routing-rules.service": "/etc/systemd/system/irangate-routing-rules.service",
+    "etc/systemd/system/irangate-webpanel.service.d/proxy.conf": "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
+}
+
+
+def is_validate_mode(args):
+    joined = " ".join(args).lower()
+    return "validate" in joined or "--check" in joined or "--dry-run" in joined
+
+
+def clean_member(name):
+    name = str(name or "").replace("\\", "/")
+    while name.startswith("/"):
+        name = name[1:]
+    while name.startswith("./"):
+        name = name[2:]
+    if ".." in name.split("/"):
+        return ""
+    return name
+
+
+def find_archive_arg(args):
+    for arg in args:
+        if arg.endswith((".tar.gz", ".tgz", ".gz")) and Path(arg).exists():
+            return arg
+    return ""
+
+
+def run(cmd):
+    try:
+        p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
+def extract_extras(archive_path):
+    archive_path = Path(archive_path)
+
+    if not archive_path.exists() or not tarfile.is_tarfile(archive_path):
+        return {
+            "restored": [],
+            "skipped": [],
+            "error": f"not a valid tar archive: {archive_path}",
+        }
+
+    restored = []
+    skipped = []
+
+    with tarfile.open(archive_path, "r:*") as tar:
+        names = tar.getnames()
+
+        for member in tar.getmembers():
+            safe_name = clean_member(member.name)
+            if not safe_name.startswith(EXTRA_PREFIX):
+                continue
+
+            rel = safe_name[len(EXTRA_PREFIX):]
+            target = RESTORE_MAP_PREFIXES.get(rel)
+
+            if not target:
+                skipped.append(rel)
+                continue
+
+            if not member.isfile():
+                skipped.append(rel + " (not file)")
+                continue
+
+            target_path = Path(target)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            src = tar.extractfile(member)
+            if src is None:
+                skipped.append(rel + " (no fileobj)")
+                continue
+
+            tmp = target_path.with_suffix(target_path.suffix + ".restore-tmp")
+            with open(tmp, "wb") as f:
+                shutil.copyfileobj(src, f)
+
+            shutil.move(str(tmp), str(target_path))
+
+            if target.endswith("panel-proxy.env"):
+                os.chmod(target_path, 0o600)
+            elif target.endswith(".json"):
+                os.chmod(target_path, 0o600)
+            elif target.endswith(".service") or target.endswith(".conf"):
+                os.chmod(target_path, 0o644)
+            else:
+                os.chmod(target_path, 0o600)
+
+            restored.append(target)
+
+    # Reload services/configs after restore.
+    run(["systemctl", "daemon-reload"])
+
+    if "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf" in restored or "/opt/irangate/panel-proxy.env" in restored:
+        # Do not restart irangate-webpanel from inside an import launched by the webpanel itself.
+        # Restarting here kills the HTTP request and makes the UI show "Failed to import backup"
+        # even when the restore succeeded. The admin can restart later after the response is sent.
+        marker = "/opt/irangate/panel-proxy-restart-required"
+        try:
+            Path(marker).write_text("restart irangate-webpanel.service to apply restored panel proxy\n")
+        except Exception:
+            pass
+
+    if any(x.startswith("/opt/irangate/routing/") for x in restored):
+        if Path("/usr/local/bin/irangate-routing").exists():
+            run(["/usr/local/bin/irangate-routing", "generate-engine", "--write", "--check"])
+
+    return {
+        "restored": restored,
+        "skipped": skipped,
+    }
+
+
+def main():
+    if not os.path.exists(REAL):
+        print(json.dumps({
+            "success": False,
+            "error": f"real importer missing: {REAL}",
+        }))
+        return 1
+
+    args = sys.argv[1:]
+    archive = find_archive_arg(args)
+    validate = is_validate_mode(args)
+
+    proc = subprocess.run(
+        [REAL] + args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+
+    stdout = proc.stdout or ""
+
+    # Never restore extras during validation/check mode.
+    if proc.returncode == 0 and archive and not validate:
+        result = extract_extras(archive)
+        print("[backup-v2-import-wrapper] extras restore: " + json.dumps(result, ensure_ascii=False), file=sys.stderr)
+
+    sys.stdout.write(stdout)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

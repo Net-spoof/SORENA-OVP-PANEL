@@ -1,6 +1,6 @@
 module irangate-webpanel
 
-go 1.24.0
+go 1.26
 
 require (
 	github.com/amiridev-org/irangate-ov v0.0.0

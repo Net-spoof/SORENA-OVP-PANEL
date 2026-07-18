@@ -106,6 +106,13 @@ function createSidebar(activePage) {
                         <span>Inbound</span>
                         <span class="badge beta">💫 Coming Soon</span>
                     </a>
+                    <a href="routing.html" class="menu-item ${activePage === 'routing' ? 'active' : ''}" title="Routing / Outbounds">
+                        <svg class="sidebar-menu-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h11m0 0l-3-3m3 3l-3 3M20 17H9m0 0l3-3m-3 3l3 3"></path>
+                        </svg>
+                        <span>Outbounds</span>
+                    </a>
+
                     <a href="nodes.html" class="menu-item ${activePage === 'nodes' ? 'active' : ''}" title="Nodes">
                         <svg class="sidebar-menu-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <rect x="3" y="4" width="18" height="6" rx="2" stroke-width="2"></rect>

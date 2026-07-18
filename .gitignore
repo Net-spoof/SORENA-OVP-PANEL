@@ -87,3 +87,12 @@ node_modules/
 *.csr
 *.bak.*
 *.clean-backup.*
+panel-proxy.env
+*.restore-tmp
+*.safe-extra.*
+*.safe.*
+routing-snapshot-*.txt
+irangate-backup-v2-*.tar.gz
+backup_schedule_telegram_auto_*.gz
+webpanel/frontend/routing-v*.html
+webpanel/frontend/settings-*.html

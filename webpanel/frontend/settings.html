@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!-- settings-native-proxy-tab-v3-20260718 -->
+    <!-- settings-proxy-tab-v2-20260718 -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - IranGate</title>
@@ -60,7 +62,7 @@
 
         <!-- Tabs -->
         <div class="mb-6 border-b border-gray-200">
-            <nav class="-mb-px flex space-x-8">
+            <nav class="-mb-px flex flex-wrap gap-x-8 gap-y-2">
                 <button onclick="showTab('admin')" id="tab-admin" class="tab-button active">
                     Admin Settings
                 </button>
@@ -78,6 +80,9 @@
                 </button>
                 <button onclick="showTab('system')" id="tab-system" class="tab-button">
                     System Info
+                </button>
+                <button onclick="showTab('proxy'); panelProxyLoadStatus();" id="tab-proxy" class="tab-button">
+                    Proxy & Server
                 </button>
             </nav>
         </div>
@@ -412,6 +417,92 @@
             </div>
         </div>
         </div>
+
+        <!-- Proxy & Server -->
+        <div id="content-proxy" class="tab-content hidden">
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <div class="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-800 mb-2">Proxy & Server</h2>
+                    <p class="text-sm text-gray-600">
+                        Panel-level proxy for Telegram Bot API, automatic backups, notifications and outbound HTTP/HTTPS requests.
+                    </p>
+                </div>
+                <span id="panelProxyMiniStatus" class="inline-flex px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
+                    loading...
+                </span>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div class="space-y-4">
+                    <label class="flex items-center gap-2 text-gray-700">
+                        <input id="panelProxyEnabled" type="checkbox" class="h-4 w-4">
+                        Enable panel proxy
+                    </label>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Proxy URL</label>
+                        <input
+                            id="panelProxyUrl"
+                            type="text"
+                            placeholder="socks5://user:pass@host:port"
+                            class="w-full px-4 py-2 border rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                        <p class="text-xs text-gray-500 mt-1">
+                            Supported: socks5://user:pass@host:port or http://user:pass@host:port
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Test URL</label>
+                        <input
+                            id="panelProxyTestUrl"
+                            type="text"
+                            value="https://api.telegram.org"
+                            class="w-full px-4 py-2 border rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                        <p class="text-xs text-gray-500 mt-1">
+                            For bot test: https://api.telegram.org/botTOKEN/getMe
+                        </p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="panelProxyTest()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg">
+                            Test Proxy
+                        </button>
+
+                        <button type="button" onclick="panelProxySave()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg">
+                            Save & Restart Panel
+                        </button>
+
+                        <button type="button" onclick="panelProxyClear()" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg">
+                            Disable Proxy
+                        </button>
+
+                        <button type="button" onclick="panelProxyLoadStatus()" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-lg">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div id="panelProxyStatus" class="rounded-lg border p-4 text-sm text-gray-700 bg-gray-50 mb-3">
+                        loading...
+                    </div>
+
+                    <details>
+                        <summary class="cursor-pointer text-sm text-gray-500 hover:text-gray-800">Raw Result</summary>
+                        <pre id="panelProxyResult" class="mt-3 bg-gray-900 text-green-300 rounded-lg p-4 text-xs overflow-auto max-h-72">No command yet.</pre>
+                    </details>
+                </div>
+            </div>
+
+            <div class="text-xs text-gray-500 mt-4">
+                This proxy affects the panel service only. It does not route OpenVPN users; user traffic still uses Outbounds/TPROXY.
+            </div>
+        </div>
+        </div>
+
     </div>
 
     <script src="js/api.js?v=backup-v2-20260705-1"></script>
@@ -978,6 +1069,144 @@
             });
         });
 
+
+        function panelProxyToken() {
+            return localStorage.getItem('token') ||
+                   sessionStorage.getItem('token') ||
+                   localStorage.getItem('authToken') ||
+                   sessionStorage.getItem('authToken') ||
+                   localStorage.getItem('jwt') ||
+                   sessionStorage.getItem('jwt') ||
+                   '';
+        }
+
+        async function panelProxyRequest(path, method = 'GET', data = null) {
+            const options = {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + panelProxyToken()
+                }
+            };
+
+            if (data !== null) {
+                options.headers['Content-Type'] = 'application/json';
+                options.body = JSON.stringify(data);
+            }
+
+            const response = await fetch('/api' + path, options);
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.message || result.error || ('HTTP ' + response.status));
+            }
+
+            return result;
+        }
+
+        function panelProxySetBadge(text, ok) {
+            const badge = document.getElementById('panelProxyMiniStatus');
+            if (!badge) return;
+
+            badge.className = 'inline-flex px-3 py-1 rounded-full text-xs ' + (
+                ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+            );
+
+            badge.textContent = text;
+        }
+
+        function panelProxyShowResult(value) {
+            const box = document.getElementById('panelProxyResult');
+            if (!box) return;
+
+            box.textContent = typeof value === 'string'
+                ? value
+                : JSON.stringify(value, null, 2);
+        }
+
+        async function panelProxyLoadStatus() {
+            try {
+                const result = await panelProxyRequest('/proxy/status');
+                const data = result.data || {};
+
+                document.getElementById('panelProxyEnabled').checked = !!data.enabled;
+                document.getElementById('panelProxyUrl').value = data.proxy_url || '';
+
+                panelProxySetBadge(data.enabled ? 'enabled ✅' : 'disabled', !!data.enabled);
+
+                document.getElementById('panelProxyStatus').innerHTML = `
+                    <div><strong>Status:</strong> ${data.enabled ? 'Enabled ✅' : 'Disabled'}</div>
+                    <div><strong>Proxy:</strong> <span class="font-mono">${data.proxy_url || '-'}</span></div>
+                    <div><strong>Env:</strong> <span class="font-mono">${data.env_file || '-'}</span></div>
+                    <div><strong>Drop-in:</strong> <span class="font-mono">${data.dropin_file || '-'}</span></div>
+                `;
+
+                panelProxyShowResult(result);
+            } catch (error) {
+                panelProxySetBadge('error', false);
+                panelProxyShowResult(error.message);
+            }
+        }
+
+        async function panelProxyTest() {
+            try {
+                const proxy_url = document.getElementById('panelProxyUrl').value.trim();
+                const test_url = document.getElementById('panelProxyTestUrl').value.trim() || 'https://api.telegram.org';
+
+                const result = await panelProxyRequest('/proxy/test', 'POST', {
+                    proxy_url,
+                    test_url
+                });
+
+                panelProxyShowResult(result);
+                panelProxySetBadge(result.success ? 'proxy test OK ✅' : 'proxy test failed ❌', !!result.success);
+            } catch (error) {
+                panelProxySetBadge('test failed ❌', false);
+                panelProxyShowResult(error.message);
+            }
+        }
+
+        async function panelProxySave() {
+            try {
+                const enabled = document.getElementById('panelProxyEnabled').checked;
+                const proxy_url = document.getElementById('panelProxyUrl').value.trim();
+
+                const result = await panelProxyRequest('/proxy/apply', 'POST', {
+                    enabled,
+                    proxy_url
+                });
+
+                panelProxyShowResult(result);
+                panelProxySetBadge('saved; restarting ✅', true);
+                showToast('Panel proxy saved. Webpanel will restart.', 'success');
+
+                setTimeout(panelProxyLoadStatus, 3500);
+            } catch (error) {
+                panelProxySetBadge('save failed ❌', false);
+                panelProxyShowResult(error.message);
+                showToast('Failed to save panel proxy', 'error');
+            }
+        }
+
+        async function panelProxyClear() {
+            if (!confirm('Disable panel proxy?')) {
+                return;
+            }
+
+            try {
+                const result = await panelProxyRequest('/proxy/clear', 'POST', {});
+                panelProxyShowResult(result);
+                panelProxySetBadge('disabled; restarting ✅', true);
+                showToast('Panel proxy disabled. Webpanel will restart.', 'success');
+
+                setTimeout(panelProxyLoadStatus, 3500);
+            } catch (error) {
+                panelProxySetBadge('disable failed ❌', false);
+                panelProxyShowResult(error.message);
+                showToast('Failed to disable panel proxy', 'error');
+            }
+        }
+
+
         // Load settings on page load
         loadSettings();
         loadTheme();
@@ -986,6 +1215,12 @@
         initSidebar('settings');
     </script>
     </div>
+
+
+
+
+
+
 </body>
 </html>
 

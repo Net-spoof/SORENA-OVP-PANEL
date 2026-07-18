@@ -1,0 +1,1763 @@
+#!/usr/bin/env python3
+import argparse
+import base64
+import json
+import os
+import re
+import socket
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
+
+
+BASE_DIR = Path("/opt/irangate/routing")
+OUTBOUNDS_FILE = BASE_DIR / "outbounds.json"
+RULES_FILE = BASE_DIR / "rules.json"
+BALANCERS_FILE = BASE_DIR / "balancers.json"
+STATE_FILE = BASE_DIR / "state.json"
+ENGINE_FILE = BASE_DIR / "engine.json"
+SING_BOX_DIR = Path("/etc/sing-box")
+SING_BOX_CONFIG = SING_BOX_DIR / "irangate-routing.json"
+ROUTING_SERVICE_FILE = Path("/etc/systemd/system/irangate-routing.service")
+NFT_TABLE_NAME = "irangate_routing"
+
+OPENVPN_CONF = Path("/etc/openvpn/server.conf")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def ensure_base() -> None:
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(BASE_DIR, 0o700)
+
+
+def load_json(path: Path, default):
+    if not path.exists():
+        return default
+
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return data
+
+
+def save_json(path: Path, data, mode: int = 0o600) -> None:
+    ensure_base()
+
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def run(cmd):
+    try:
+        return subprocess.check_output(
+            cmd,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return ""
+
+
+def parse_openvpn_conf() -> dict:
+    result = {
+        "port": 443,
+        "protocol": "udp",
+        "interface": "tun0",
+        "subnet": "10.8.0.0/24",
+    }
+
+    if not OPENVPN_CONF.exists():
+        return result
+
+    text = OPENVPN_CONF.read_text(encoding="utf-8", errors="ignore")
+
+    for line in text.splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split()
+
+        if len(parts) >= 2 and parts[0] == "port":
+            try:
+                result["port"] = int(parts[1])
+            except ValueError:
+                pass
+
+        elif len(parts) >= 2 and parts[0] == "proto":
+            result["protocol"] = parts[1].lower()
+
+        elif len(parts) >= 2 and parts[0] == "dev":
+            dev = parts[1]
+            result["interface"] = dev if dev != "tun" else "tun0"
+
+        elif len(parts) >= 3 and parts[0] == "server":
+            ip = parts[1]
+            mask = parts[2]
+
+            if ip == "10.8.0.0" and mask == "255.255.255.0":
+                result["subnet"] = "10.8.0.0/24"
+            else:
+                result["subnet"] = f"{ip}/{mask}"
+
+    return result
+
+
+def slug(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9_-]+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-") or "item"
+
+
+def init_config() -> None:
+    ensure_base()
+
+    ovpn = parse_openvpn_conf()
+    inbound_tag = f"openvpn-{ovpn['port']}"
+
+    outbounds = load_json(
+        OUTBOUNDS_FILE,
+        {"version": 1, "outbounds": []},
+    )
+
+    if not any(o.get("tag") == "direct" for o in outbounds["outbounds"]):
+        outbounds["outbounds"].append({
+            "tag": "direct",
+            "name": "Direct / Server Default Route",
+            "type": "direct",
+            "enabled": True,
+            "created_at": now_iso(),
+            "config": {},
+        })
+
+    if not any(o.get("tag") == "default-gost" for o in outbounds["outbounds"]):
+        outbounds["outbounds"].append({
+            "tag": "default-gost",
+            "name": "Default GOST Tunnel",
+            "type": "gost",
+            "enabled": True,
+            "created_at": now_iso(),
+            "config": {
+                "mode": "existing",
+                "note": "Placeholder for existing GOST tunnel. No route changes are applied in milestone 1."
+            },
+        })
+
+    save_json(OUTBOUNDS_FILE, outbounds)
+
+    balancers = load_json(
+        BALANCERS_FILE,
+        {"version": 1, "balancers": []},
+    )
+
+    balancer_tag = f"bal-{inbound_tag}"
+
+    if not any(b.get("tag") == balancer_tag for b in balancers["balancers"]):
+        balancers["balancers"].append({
+            "tag": balancer_tag,
+            "name": f"Failover for {inbound_tag}",
+            "strategy": "failover",
+            "selector": ["direct"],
+            "active": "direct",
+            "fail_after": 3,
+            "recover_after": 6,
+            "auto_failback": False,
+            "enabled": True,
+            "created_at": now_iso(),
+        })
+
+    save_json(BALANCERS_FILE, balancers)
+
+    rules = load_json(
+        RULES_FILE,
+        {"version": 1, "rules": []},
+    )
+
+    rule_tag = f"route-{inbound_tag}"
+
+    if not any(r.get("tag") == rule_tag for r in rules["rules"]):
+        rules["rules"].append({
+            "tag": rule_tag,
+            "name": f"Route {inbound_tag}",
+            "enabled": True,
+            "inboundTag": inbound_tag,
+            "inbound": {
+                "type": "openvpn",
+                "port": ovpn["port"],
+                "protocol": ovpn["protocol"],
+                "interface": ovpn["interface"],
+                "subnet": ovpn["subnet"],
+            },
+            "network": "tcp,udp",
+            "mode": "failover",
+            "balancerTag": balancer_tag,
+        })
+
+    save_json(RULES_FILE, rules)
+
+    state = load_json(
+        STATE_FILE,
+        {"version": 1, "runtime": {}},
+    )
+
+    state["last_init"] = now_iso()
+    state.setdefault("runtime", {})
+    state["runtime"][rule_tag] = {
+        "active_outbound": "direct",
+        "last_change": now_iso(),
+        "applied": False,
+        "note": "Milestone 1 dry-run only",
+    }
+
+    save_json(STATE_FILE, state)
+
+    print("Routing model initialized ✅")
+    print(f"Inbound: {inbound_tag}")
+    print(f"Rule:    {rule_tag}")
+    print(f"Balancer:{balancer_tag}")
+
+
+
+def init_engine_config() -> None:
+    ensure_base()
+
+    engine = load_json(
+        ENGINE_FILE,
+        {
+            "version": 1,
+            "engine": "sing-box",
+            "enabled": False,
+            "mode": "dry-run",
+            "tproxy": {
+                "listen": "127.0.0.1",
+                "tcp_port": 12345,
+                "udp_port": 12345,
+                "mark": 100,
+                "table": 100
+            },
+            "created_at": now_iso(),
+        },
+    )
+
+    engine.setdefault("version", 1)
+    engine.setdefault("engine", "sing-box")
+    engine.setdefault("enabled", False)
+    engine.setdefault("mode", "dry-run")
+    engine.setdefault("tproxy", {})
+    engine["tproxy"].setdefault("listen", "127.0.0.1")
+    engine["tproxy"].setdefault("tcp_port", 12345)
+    engine["tproxy"].setdefault("udp_port", 12345)
+    engine["tproxy"].setdefault("mark", 100)
+    engine["tproxy"].setdefault("table", 100)
+    engine["updated_at"] = now_iso()
+
+    save_json(ENGINE_FILE, engine)
+
+    print("Routing engine config initialized ✅")
+    print(f"Engine: {engine['engine']}")
+    print(f"Mode:   {engine['mode']}")
+    print(f"File:   {ENGINE_FILE}")
+
+
+
+def _b64_decode_padded(value: str) -> bytes:
+    value = value.strip()
+    value += "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value.encode())
+
+
+def _first_qs(qs: dict, key: str, default: str = "") -> str:
+    vals = qs.get(key)
+    if not vals:
+        return default
+    return vals[0]
+
+
+def _bool_from_str(value: str) -> bool:
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def parse_vless_link(link: str, tag: str) -> dict:
+    u = urlparse(link)
+    if u.scheme != "vless":
+        raise ValueError("not a vless link")
+    uuid = unquote(u.username or "")
+    server = u.hostname or ""
+    port = int(u.port or 443)
+    qs = parse_qs(u.query)
+
+    outbound = {
+        "type": "vless",
+        "tag": tag,
+        "server": server,
+        "server_port": port,
+        "uuid": uuid,
+    }
+
+    flow = _first_qs(qs, "flow")
+    if flow:
+        outbound["flow"] = flow
+
+    # UDP support through VLESS. xudp works for modern sing-box/xray style stacks.
+    packet_encoding = _first_qs(qs, "packetEncoding") or _first_qs(qs, "packet_encoding")
+    outbound["packet_encoding"] = packet_encoding or "xudp"
+
+    security = (_first_qs(qs, "security") or "none").lower()
+    if security in {"tls", "reality"}:
+        tls = {
+            "enabled": True,
+            "server_name": _first_qs(qs, "sni") or _first_qs(qs, "serverName") or _first_qs(qs, "host") or server,
+        }
+        fp = _first_qs(qs, "fp") or _first_qs(qs, "fingerprint")
+        if fp:
+            tls["utls"] = {"enabled": True, "fingerprint": fp}
+        if security == "reality":
+            reality = {
+                "enabled": True,
+                "public_key": _first_qs(qs, "pbk") or _first_qs(qs, "publicKey"),
+            }
+            sid = _first_qs(qs, "sid") or _first_qs(qs, "shortId")
+            if sid:
+                reality["short_id"] = sid
+            tls["reality"] = reality
+        outbound["tls"] = tls
+
+    net = (_first_qs(qs, "type") or _first_qs(qs, "network") or "tcp").lower()
+    if net in {"ws", "websocket"}:
+        host = _first_qs(qs, "host") or server
+        path = unquote(_first_qs(qs, "path") or "/")
+        outbound["transport"] = {
+            "type": "ws",
+            "path": path,
+            "headers": {"Host": host},
+        }
+    elif net == "grpc":
+        outbound["transport"] = {
+            "type": "grpc",
+            "service_name": _first_qs(qs, "serviceName") or _first_qs(qs, "service_name"),
+        }
+    elif net in {"tcp", "raw"}:
+        pass
+    else:
+        raise ValueError(f"unsupported vless network: {net}")
+
+    return outbound
+
+
+def parse_trojan_link(link: str, tag: str) -> dict:
+    u = urlparse(link)
+    if u.scheme != "trojan":
+        raise ValueError("not a trojan link")
+    password = unquote(u.username or "")
+    server = u.hostname or ""
+    port = int(u.port or 443)
+    qs = parse_qs(u.query)
+
+    outbound = {
+        "type": "trojan",
+        "tag": tag,
+        "server": server,
+        "server_port": port,
+        "password": password,
+    }
+
+    security = (_first_qs(qs, "security") or "tls").lower()
+    if security != "none":
+        outbound["tls"] = {
+            "enabled": True,
+            "server_name": _first_qs(qs, "sni") or _first_qs(qs, "host") or server,
+        }
+
+    net = (_first_qs(qs, "type") or _first_qs(qs, "network") or "tcp").lower()
+    if net in {"ws", "websocket"}:
+        outbound["transport"] = {
+            "type": "ws",
+            "path": unquote(_first_qs(qs, "path") or "/"),
+            "headers": {"Host": _first_qs(qs, "host") or server},
+        }
+    elif net == "grpc":
+        outbound["transport"] = {
+            "type": "grpc",
+            "service_name": _first_qs(qs, "serviceName") or _first_qs(qs, "service_name"),
+        }
+    return outbound
+
+
+def parse_vmess_link(link: str, tag: str) -> dict:
+    raw = link[len("vmess://"):]
+    try:
+        data = json.loads(_b64_decode_padded(raw).decode())
+    except Exception as e:
+        raise ValueError(f"invalid vmess base64/json: {e}")
+
+    server = data.get("add") or data.get("server") or ""
+    port = int(data.get("port") or 443)
+    uuid = data.get("id") or data.get("uuid") or ""
+    security = data.get("scy") or data.get("security") or "auto"
+    alter_id = int(data.get("aid") or data.get("alterId") or 0)
+
+    outbound = {
+        "type": "vmess",
+        "tag": tag,
+        "server": server,
+        "server_port": port,
+        "uuid": uuid,
+        "security": security,
+        "alter_id": alter_id,
+    }
+
+    tls_mode = str(data.get("tls") or "").lower()
+    if tls_mode in {"tls", "1", "true"}:
+        outbound["tls"] = {
+            "enabled": True,
+            "server_name": data.get("sni") or data.get("host") or server,
+        }
+
+    net = str(data.get("net") or data.get("type") or "tcp").lower()
+    if net == "ws":
+        outbound["transport"] = {
+            "type": "ws",
+            "path": data.get("path") or "/",
+            "headers": {"Host": data.get("host") or server},
+        }
+    elif net == "grpc":
+        outbound["transport"] = {
+            "type": "grpc",
+            "service_name": data.get("path") or data.get("serviceName") or "",
+        }
+
+    return outbound
+
+
+def parse_shadowsocks_link(link: str, tag: str) -> dict:
+    u = urlparse(link)
+    if u.scheme != "ss":
+        raise ValueError("not a shadowsocks link")
+
+    # SIP002: ss://base64(method:password)@host:port or ss://method:password@host:port
+    server = u.hostname
+    port = u.port
+    method = ""
+    password = ""
+
+    if server and port:
+        if u.username and u.password:
+            method = unquote(u.username)
+            password = unquote(u.password)
+        else:
+            userinfo = (u.netloc.split("@", 1)[0] if "@" in u.netloc else "")
+            if userinfo:
+                decoded = _b64_decode_padded(userinfo).decode()
+                method, password = decoded.split(":", 1)
+    else:
+        # Whole authority may be base64 encoded: ss://base64(method:password@host:port)
+        raw = link[len("ss://"):].split("#", 1)[0].split("?", 1)[0]
+        decoded = _b64_decode_padded(raw).decode()
+        userpass, hostport = decoded.rsplit("@", 1)
+        method, password = userpass.split(":", 1)
+        host, port_s = hostport.rsplit(":", 1)
+        server = host.strip("[]")
+        port = int(port_s)
+
+    if not server or not port or not method or not password:
+        raise ValueError("invalid shadowsocks link")
+
+    return {
+        "type": "shadowsocks",
+        "tag": tag,
+        "server": server,
+        "server_port": int(port),
+        "method": method,
+        "password": password,
+    }
+
+
+def parse_share_link_to_sing_box(link: str, tag: str) -> dict:
+    link = (link or "").strip()
+    if link.startswith("vless://"):
+        return parse_vless_link(link, tag)
+    if link.startswith("vmess://"):
+        return parse_vmess_link(link, tag)
+    if link.startswith("ss://"):
+        return parse_shadowsocks_link(link, tag)
+    if link.startswith("trojan://"):
+        return parse_trojan_link(link, tag)
+    raise ValueError("unsupported share-link scheme")
+
+
+def outbound_to_sing_box(item: dict) -> tuple[dict | None, str | None]:
+    tag = item.get("tag")
+    typ = item.get("type")
+    config = item.get("config") or {}
+
+    if not item.get("enabled", True):
+        return None, f"outbound disabled: {tag}"
+
+    if typ == "direct":
+        return {
+            "type": "direct",
+            "tag": tag,
+        }, None
+
+    if typ == "block":
+        return {
+            "type": "block",
+            "tag": tag,
+        }, None
+
+    if typ in {"socks", "http"}:
+        remote = config.get("remote", "")
+        if ":" not in remote:
+            return None, f"{tag}: {typ} remote must be host:port"
+
+        server, port = remote.rsplit(":", 1)
+
+        try:
+            port = int(port)
+        except ValueError:
+            return None, f"{tag}: invalid port in remote"
+
+        outbound = {
+            "type": typ,
+            "tag": tag,
+            "server": server,
+            "server_port": port,
+        }
+
+        if typ == "socks":
+            outbound["version"] = str(config.get("version") or "5")
+
+        if config.get("username"):
+            outbound["username"] = config["username"]
+
+        if config.get("password"):
+            outbound["password"] = config["password"]
+
+        return outbound, None
+
+    if typ == "sing-box":
+        raw = config.get("raw")
+        if isinstance(raw, dict):
+            raw = dict(raw)
+            raw.setdefault("tag", tag)
+            return raw, None
+        return None, f"{tag}: sing-box raw config missing"
+
+    if typ == "gost":
+        return None, f"{tag}: gost outbound is placeholder in milestone 2; use socks/http/sing-box raw later"
+
+    if typ == "xray":
+        link = str(config.get("link") or item.get("link") or "").strip()
+        if not link:
+            return None, f"{tag}: xray outbound link missing"
+        try:
+            return parse_share_link_to_sing_box(link, tag), None
+        except Exception as e:
+            return None, f"{tag}: share-link conversion failed: {e}"
+
+    if typ in {"vless", "vmess", "shadowsocks", "ss", "trojan"}:
+        link = str(config.get("link") or item.get("link") or "").strip()
+        if not link:
+            return None, f"{tag}: {typ} outbound link missing"
+        try:
+            return parse_share_link_to_sing_box(link, tag), None
+        except Exception as e:
+            return None, f"{tag}: {typ} conversion failed: {e}"
+
+    return None, f"{tag}: unsupported outbound type: {typ}"
+
+
+
+def normalize_balancer_strategy(value: str) -> str:
+    value = (value or "").strip()
+
+    aliases = {
+        "least_ping": "leastPing",
+        "least-ping": "leastPing",
+        "leastping": "leastPing",
+        "ping": "leastPing",
+        "urltest": "leastPing",
+        "url_test": "leastPing",
+        "manual": "selector",
+        "manualSelector": "selector",
+        "round_robin": "roundRobin",
+        "round-robin": "roundRobin",
+        "least_load": "leastLoad",
+        "least-load": "leastLoad",
+    }
+
+    return aliases.get(value, value or "leastPing")
+
+
+def routing_mode_from_strategy(strategy: str) -> str:
+    return "single" if strategy == "single" else "failover"
+
+
+def build_sing_box_config() -> tuple[dict, list[str]]:
+    init_if_missing()
+
+    if not ENGINE_FILE.exists():
+        init_engine_config()
+
+    engine = load_json(ENGINE_FILE, {"engine": "sing-box"})
+    tproxy = engine.get("tproxy", {})
+
+    outbounds_data = load_json(OUTBOUNDS_FILE, {"outbounds": []})
+    balancers_data = load_json(BALANCERS_FILE, {"balancers": []})
+    rules_data = load_json(RULES_FILE, {"rules": []})
+
+    warnings = []
+    outbounds = []
+    existing_tags = set()
+
+    for item in outbounds_data.get("outbounds", []):
+        outbound, warning = outbound_to_sing_box(item)
+        if warning:
+            warnings.append(warning)
+        if outbound:
+            tag = outbound.get("tag")
+            if tag in existing_tags:
+                warnings.append(f"duplicate sing-box outbound tag skipped: {tag}")
+                continue
+            existing_tags.add(tag)
+            outbounds.append(outbound)
+
+    if "direct" not in existing_tags:
+        outbounds.insert(0, {"type": "direct", "tag": "direct"})
+        existing_tags.add("direct")
+
+    if "block" not in existing_tags:
+        outbounds.append({"type": "block", "tag": "block"})
+        existing_tags.add("block")
+
+    balancer_map = {
+        item.get("tag"): item
+        for item in balancers_data.get("balancers", [])
+    }
+
+    route_rules = []
+
+    for rule in rules_data.get("rules", []):
+        if not rule.get("enabled", True):
+            continue
+
+        inbound = rule.get("inbound", {})
+        balancer = balancer_map.get(rule.get("balancerTag"), {})
+
+        selector = [
+            tag for tag in balancer.get("selector", [])
+            if tag in existing_tags and tag not in {"block"}
+        ]
+
+        if not selector:
+            warnings.append(
+                f"{rule.get('tag')}: no supported outbound in selector; falling back to direct"
+            )
+            selector = ["direct"]
+
+        raw_strategy = balancer.get("strategy") or rule.get("mode") or "leastPing"
+        strategy = normalize_balancer_strategy(raw_strategy)
+        route_mode = routing_mode_from_strategy(strategy)
+
+        inbound_tags = [
+            "irangate-tproxy",
+            "irangate-tproxy-udp",
+        ]
+
+        inbound_tag = rule.get("inboundTag") or "openvpn-443"
+
+        if route_mode == "single" or len(selector) == 1:
+            final_tag = selector[0]
+
+        elif strategy == "leastPing":
+            urltest_tag = f"urltest-{inbound_tag}"
+            selector_tag = f"select-{inbound_tag}"
+
+            outbounds.append({
+                "type": "urltest",
+                "tag": urltest_tag,
+                "outbounds": selector,
+                "url": "https://www.gstatic.com/generate_204",
+                "interval": "1m",
+                "tolerance": 50,
+                "interrupt_exist_connections": False,
+            })
+
+            outbounds.append({
+                "type": "selector",
+                "tag": selector_tag,
+                "outbounds": [urltest_tag] + selector,
+                "default": urltest_tag,
+                "interrupt_exist_connections": False,
+            })
+
+            final_tag = selector_tag
+
+        elif strategy == "selector":
+            selector_tag = f"select-{inbound_tag}"
+
+            outbounds.append({
+                "type": "selector",
+                "tag": selector_tag,
+                "outbounds": selector,
+                "default": selector[0],
+                "interrupt_exist_connections": False,
+            })
+
+            final_tag = selector_tag
+
+        elif strategy == "failover":
+            # Current sing-box engine has no exact Xray-like backup balancer here.
+            # Keep priority behavior: first selected outbound is active.
+            warnings.append(
+                f"{rule.get('tag')}: failover strategy uses first outbound as active in sing-box mode"
+            )
+            final_tag = selector[0]
+
+        elif strategy in {"random", "roundRobin", "leastLoad"}:
+            warnings.append(
+                f"{rule.get('tag')}: strategy {strategy} needs Xray engine; using leastPing/urltest fallback"
+            )
+
+            urltest_tag = f"urltest-{inbound_tag}"
+            selector_tag = f"select-{inbound_tag}"
+
+            outbounds.append({
+                "type": "urltest",
+                "tag": urltest_tag,
+                "outbounds": selector,
+                "url": "https://www.gstatic.com/generate_204",
+                "interval": "1m",
+                "tolerance": 50,
+                "interrupt_exist_connections": False,
+            })
+
+            outbounds.append({
+                "type": "selector",
+                "tag": selector_tag,
+                "outbounds": [urltest_tag] + selector,
+                "default": urltest_tag,
+                "interrupt_exist_connections": False,
+            })
+
+            final_tag = selector_tag
+
+        else:
+            warnings.append(
+                f"{rule.get('tag')}: unknown strategy {strategy}; using first outbound"
+            )
+            final_tag = selector[0]
+
+        route_rules.append({
+            "inbound": inbound_tags,
+            "outbound": final_tag,
+        })
+
+    config = {
+        "log": {
+            "level": "warn",
+            "timestamp": True,
+        },
+        "inbounds": [
+            {
+                "type": "tproxy",
+                "tag": "irangate-tproxy",
+                "listen": tproxy.get("listen", "127.0.0.1"),
+                "listen_port": int(tproxy.get("tcp_port", 12345)),
+                "network": "tcp",
+            },
+            {
+                "type": "tproxy",
+                "tag": "irangate-tproxy-udp",
+                "listen": tproxy.get("listen", "127.0.0.1"),
+                "listen_port": int(tproxy.get("udp_port", 12345)),
+                "network": "udp",
+            },
+        ],
+        "outbounds": outbounds,
+        "route": {
+            "auto_detect_interface": True,
+            "rules": route_rules,
+            "final": "direct",
+        },
+    }
+
+    return config, warnings
+
+
+
+def redact_secrets(value):
+    secret_keys = {
+        "uuid", "password", "private_key", "short_id", "server_name",
+        "tls", "reality", "link", "url", "token", "secret"
+    }
+
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            lk = str(k).lower()
+            if lk in secret_keys or any(x in lk for x in ["pass", "token", "secret", "uuid", "key"]):
+                if isinstance(v, str) and v:
+                    out[k] = v[:4] + "***" + v[-4:] if len(v) > 8 else "***"
+                else:
+                    out[k] = "***"
+            else:
+                out[k] = redact_secrets(v)
+        return out
+
+    if isinstance(value, list):
+        return [redact_secrets(x) for x in value]
+
+    return value
+
+
+def generate_engine_config(args) -> None:
+    init_if_missing()
+
+    if not ENGINE_FILE.exists():
+        init_engine_config()
+
+    config, warnings = build_sing_box_config()
+
+    print("===== IRANGATE ROUTING ENGINE GENERATE =====")
+    print("Engine: sing-box")
+    print("Mode: dry-run safe generation")
+    print()
+
+    if warnings:
+        print("Warnings:")
+        for warning in warnings:
+            print(f"- {warning}")
+        print()
+
+    print("Generated config preview:")
+    print(json.dumps(redact_secrets(config), ensure_ascii=False, indent=2))
+
+    if args.write:
+        SING_BOX_DIR.mkdir(parents=True, exist_ok=True)
+        save_json(SING_BOX_CONFIG, config, mode=0o600)
+        print()
+        print(f"Config written ✅ {SING_BOX_CONFIG}")
+
+    if args.check:
+        if not shutil.which("sing-box"):
+            print()
+            print("sing-box binary not found; config check skipped.")
+        else:
+            check_path = SING_BOX_CONFIG
+
+            if not args.write:
+                check_path = BASE_DIR / f".sing-box-check-{os.getpid()}.json"
+                save_json(check_path, config, mode=0o600)
+
+            try:
+                result = subprocess.run(
+                    ["sing-box", "check", "-c", str(check_path)],
+                    text=True,
+                )
+            finally:
+                if not args.write and check_path.exists():
+                    check_path.unlink()
+
+            if result.returncode != 0:
+                raise SystemExit(result.returncode)
+
+            print("sing-box config check OK ✅")
+
+
+def list_all() -> None:
+    init_if_missing()
+
+    outbounds = load_json(OUTBOUNDS_FILE, {"outbounds": []})
+    balancers = load_json(BALANCERS_FILE, {"balancers": []})
+    rules = load_json(RULES_FILE, {"rules": []})
+    state = load_json(STATE_FILE, {"runtime": {}})
+
+    print("===== OUTBOUNDS =====")
+    for item in outbounds.get("outbounds", []):
+        status = "enabled" if item.get("enabled") else "disabled"
+        print(f"- {item.get('tag')} | {item.get('name')} | {item.get('type')} | {status}")
+
+    print()
+    print("===== BALANCERS =====")
+    for item in balancers.get("balancers", []):
+        selector = ", ".join(item.get("selector", []))
+        print(
+            f"- {item.get('tag')} | {item.get('strategy')} | active={item.get('active')} | selector=[{selector}]"
+        )
+
+    print()
+    print("===== ROUTING RULES =====")
+    for item in rules.get("rules", []):
+        inbound = item.get("inbound", {})
+        rt_state = state.get("runtime", {}).get(item.get("tag"), {})
+        print(
+            f"- {item.get('tag')} | {item.get('inboundTag')} "
+            f"| {inbound.get('port')}/{inbound.get('protocol')} "
+            f"| {item.get('mode')} -> {item.get('balancerTag')} "
+            f"| active_outbound={rt_state.get('active_outbound')}"
+        )
+
+
+def init_if_missing() -> None:
+    if not OUTBOUNDS_FILE.exists() or not RULES_FILE.exists() or not BALANCERS_FILE.exists():
+        init_config()
+
+
+def add_outbound(args) -> None:
+    init_if_missing()
+
+    tag = slug(args.tag or args.name)
+    outbounds = load_json(OUTBOUNDS_FILE, {"version": 1, "outbounds": []})
+
+    if any(o.get("tag") == tag for o in outbounds["outbounds"]):
+        raise SystemExit(f"Outbound already exists: {tag}")
+
+    item = {
+        "tag": tag,
+        "name": args.name,
+        "type": args.type,
+        "enabled": True,
+        "created_at": now_iso(),
+        "config": {},
+    }
+
+    if args.link:
+        item["config"]["link"] = args.link
+
+    if args.remote:
+        item["config"]["remote"] = args.remote
+
+    if getattr(args, "username", ""):
+        item["config"]["username"] = args.username
+
+    if getattr(args, "password", ""):
+        item["config"]["password"] = args.password
+
+    if getattr(args, "version", ""):
+        item["config"]["version"] = args.version
+
+    outbounds["outbounds"].append(item)
+    save_json(OUTBOUNDS_FILE, outbounds)
+
+    print(f"Outbound added ✅ {tag}")
+
+
+def bind_rule(args) -> None:
+    raw_mode = getattr(args, "mode", "leastPing")
+    strategy = normalize_balancer_strategy(raw_mode)
+    route_mode = routing_mode_from_strategy(strategy)
+
+    init_if_missing()
+
+    port = int(args.port)
+    inbound_tag = f"openvpn-{port}"
+    balancer_tag = f"bal-{inbound_tag}"
+
+    wanted = [slug(x) for x in args.outbounds.split(",") if x.strip()]
+
+    if not wanted:
+        raise SystemExit("At least one outbound is required")
+
+    outbounds = load_json(OUTBOUNDS_FILE, {"outbounds": []})
+    existing = {o.get("tag") for o in outbounds.get("outbounds", [])}
+
+    missing = [x for x in wanted if x not in existing]
+
+    if missing:
+        raise SystemExit(f"Missing outbound(s): {', '.join(missing)}")
+
+    balancers = load_json(BALANCERS_FILE, {"version": 1, "balancers": []})
+    found = False
+
+    for item in balancers["balancers"]:
+        if item.get("tag") == balancer_tag:
+            item["selector"] = wanted
+            item["active"] = wanted[0]
+            item["strategy"] = strategy
+            item["enabled"] = True
+            item["updated_at"] = now_iso()
+            found = True
+
+    if not found:
+        balancers["balancers"].append({
+            "tag": balancer_tag,
+            "name": f"Failover for {inbound_tag}",
+            "strategy": strategy,
+            "selector": wanted,
+            "active": wanted[0],
+            "fail_after": 3,
+            "recover_after": 6,
+            "auto_failback": False,
+            "enabled": True,
+            "created_at": now_iso(),
+        })
+
+    save_json(BALANCERS_FILE, balancers)
+
+    rules = load_json(RULES_FILE, {"version": 1, "rules": []})
+    rule_tag = f"route-{inbound_tag}"
+
+    found = False
+
+    for item in rules["rules"]:
+        if item.get("tag") == rule_tag:
+            item["mode"] = route_mode
+            item["balancerTag"] = balancer_tag
+            item["enabled"] = True
+            item["updated_at"] = now_iso()
+            found = True
+
+    if not found:
+        rules["rules"].append({
+            "tag": rule_tag,
+            "name": f"Route {inbound_tag}",
+            "enabled": True,
+            "inboundTag": inbound_tag,
+            "inbound": {
+                "type": "openvpn",
+                "port": port,
+                "protocol": "udp",
+                "interface": "tun0",
+                "subnet": "10.8.0.0/24",
+            },
+            "network": "tcp,udp",
+            "mode": route_mode,
+            "balancerTag": balancer_tag,
+        })
+
+    save_json(RULES_FILE, rules)
+
+    state = load_json(STATE_FILE, {"version": 1, "runtime": {}})
+    state.setdefault("runtime", {})
+    state["runtime"][rule_tag] = {
+        "active_outbound": wanted[0],
+        "last_change": now_iso(),
+        "applied": False,
+        "note": "Milestone 1 dry-run only",
+    }
+    save_json(STATE_FILE, state)
+
+    print("Routing rule updated ✅")
+    print(f"Inbound:   {inbound_tag}")
+    print(f"Mode:      {route_mode}")
+    print(f"Strategy:  {strategy}")
+    print(f"Outbounds: {', '.join(wanted)}")
+    print("Apply:     dry-run only")
+
+
+def dry_run_apply() -> None:
+    init_if_missing()
+
+    rules = load_json(RULES_FILE, {"rules": []})
+    balancers = load_json(BALANCERS_FILE, {"balancers": []})
+    outbounds = load_json(OUTBOUNDS_FILE, {"outbounds": []})
+
+    balancer_map = {b.get("tag"): b for b in balancers.get("balancers", [])}
+    outbound_map = {o.get("tag"): o for o in outbounds.get("outbounds", [])}
+
+    print("===== IRANGATE ROUTING DRY RUN =====")
+    print("No firewall, route, nftables, iptables, or service changes will be applied.")
+    print()
+
+    for rule in rules.get("rules", []):
+        if not rule.get("enabled", True):
+            continue
+
+        inbound = rule.get("inbound", {})
+        balancer = balancer_map.get(rule.get("balancerTag"), {})
+        selector = balancer.get("selector", [])
+        active = balancer.get("active")
+
+        print(f"Rule: {rule.get('tag')}")
+        print(f"  inbound: {rule.get('inboundTag')} {inbound.get('port')}/{inbound.get('protocol')}")
+        print(f"  source:  {inbound.get('interface')} {inbound.get('subnet')}")
+        print(f"  mode:    {rule.get('mode')}")
+        print(f"  active:  {active}")
+        print("  outbounds:")
+
+        for tag in selector:
+            ob = outbound_map.get(tag, {})
+            print(f"    - {tag} | {ob.get('type')} | {ob.get('name')} | enabled={ob.get('enabled')}")
+
+        print()
+
+    print("Dry-run completed ✅")
+
+
+
+def outbound_endpoint_for_test(item: dict) -> tuple[str, int, str]:
+    tag = item.get("tag") or "unknown"
+    converted, warning = outbound_to_sing_box(item)
+
+    if warning:
+        raise ValueError(warning)
+
+    if not converted:
+        raise ValueError(f"{tag}: outbound cannot be converted")
+
+    typ = converted.get("type")
+    if typ in {"direct", "block"}:
+        raise ValueError(f"{tag}: {typ} outbound has no remote endpoint to ping")
+
+    server = str(converted.get("server") or "").strip()
+    port = int(converted.get("server_port") or 0)
+
+    if not server or port <= 0:
+        raise ValueError(f"{tag}: remote endpoint missing")
+
+    return server, port, typ
+
+
+def tcp_ping_host(server: str, port: int, timeout: float = 3.0) -> tuple[bool, float, str]:
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((server, port), timeout=timeout):
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            return True, elapsed_ms, "connected"
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return False, elapsed_ms, str(e)
+
+
+def update_outbound(args) -> None:
+    tag = slug(args.tag)
+    outbounds = load_json(OUTBOUNDS_FILE, {"version": 1, "outbounds": []})
+
+    item = next((o for o in outbounds.get("outbounds", []) if o.get("tag") == tag), None)
+    if not item:
+        raise SystemExit(f"Outbound not found: {tag}")
+
+    if tag in {"direct", "block"}:
+        raise SystemExit(f"Protected outbound cannot be edited: {tag}")
+
+    if getattr(args, "name", None):
+        item["name"] = args.name.strip()
+
+    if getattr(args, "type", None):
+        item["type"] = args.type.strip()
+
+    config = item.setdefault("config", {})
+
+    if getattr(args, "link", None) is not None:
+        config["link"] = args.link.strip()
+
+    if getattr(args, "remote", None) is not None:
+        config["remote"] = args.remote.strip()
+
+    if getattr(args, "username", None) is not None:
+        config["username"] = args.username.strip()
+
+    if getattr(args, "password", None) is not None:
+        config["password"] = args.password.strip()
+
+    if getattr(args, "version", None) is not None:
+        config["version"] = str(args.version).strip()
+
+    item["updated_at"] = now_iso()
+
+    save_json(OUTBOUNDS_FILE, outbounds)
+
+    print(f"Outbound updated ✅")
+    print(f"Tag: {tag}")
+    print(f"Type: {item.get('type')}")
+    print(f"Name: {item.get('name')}")
+
+
+def delete_outbound(args) -> None:
+    tag = slug(args.tag)
+
+    if tag in {"direct", "block"}:
+        raise SystemExit(f"Protected outbound cannot be deleted: {tag}")
+
+    outbounds = load_json(OUTBOUNDS_FILE, {"version": 1, "outbounds": []})
+    balancers = load_json(BALANCERS_FILE, {"version": 1, "balancers": []})
+    state = load_json(STATE_FILE, {"version": 1, "runtime": {}})
+
+    existing = outbounds.get("outbounds", [])
+    item = next((o for o in existing if o.get("tag") == tag), None)
+    if not item:
+        raise SystemExit(f"Outbound not found: {tag}")
+
+    used_by = []
+    for b in balancers.get("balancers", []):
+        selector = b.get("selector") or []
+        if tag in selector or b.get("active") == tag:
+            used_by.append(b.get("tag") or "unknown")
+
+    if used_by and not getattr(args, "force", False):
+        raise SystemExit(
+            f"Outbound is used by balancer(s): {', '.join(used_by)}. "
+            f"Bind another outbound first or use --force."
+        )
+
+    outbounds["outbounds"] = [o for o in existing if o.get("tag") != tag]
+
+    if getattr(args, "force", False):
+        for b in balancers.get("balancers", []):
+            selector = [x for x in (b.get("selector") or []) if x != tag]
+            if not selector:
+                selector = ["direct"]
+            b["selector"] = selector
+            if b.get("active") == tag:
+                b["active"] = selector[0]
+            b["updated_at"] = now_iso()
+
+        for _, runtime in (state.get("runtime") or {}).items():
+            if runtime.get("active_outbound") == tag:
+                runtime["active_outbound"] = "direct"
+                runtime["last_change"] = now_iso()
+                runtime["note"] = "Outbound deleted; fallback to direct"
+
+    save_json(OUTBOUNDS_FILE, outbounds)
+    save_json(BALANCERS_FILE, balancers)
+    save_json(STATE_FILE, state)
+
+    print("Outbound deleted ✅")
+    print(f"Tag: {tag}")
+
+def test_outbound(args) -> None:
+    tag = slug(args.tag)
+    outbounds = load_json(OUTBOUNDS_FILE, {"outbounds": []})
+    item = next((o for o in outbounds.get("outbounds", []) if o.get("tag") == tag), None)
+
+    if not item:
+        raise SystemExit(f"Outbound not found: {tag}")
+
+    print("===== IRANGATE OUTBOUND TEST =====")
+    print(f"Tag: {tag}")
+    print(f"Stored Type: {item.get('type')}")
+
+    try:
+        server, port, typ = outbound_endpoint_for_test(item)
+    except Exception as e:
+        raise SystemExit(f"Test failed: {e}")
+
+    print(f"Runtime Type: {typ}")
+    print(f"Remote: {server}:{port}")
+    print()
+
+    results = []
+    for i in range(1, 4):
+        ok, ms, msg = tcp_ping_host(server, port, timeout=3.0)
+        results.append((ok, ms, msg))
+        status = "OK" if ok else "FAILED"
+        print(f"Attempt {i}: {status} {ms:.1f} ms - {msg}")
+
+    success = [ms for ok, ms, _ in results if ok]
+    print()
+
+    if success:
+        avg = sum(success) / len(success)
+        best = min(success)
+        worst = max(success)
+        print("Result: reachable ✅")
+        print(f"Ping TCP avg: {avg:.1f} ms")
+        print(f"Ping TCP best: {best:.1f} ms")
+        print(f"Ping TCP worst: {worst:.1f} ms")
+    else:
+        print("Result: unreachable ❌")
+        raise SystemExit(2)
+
+
+def show_files() -> None:
+    init_if_missing()
+
+    for path in [OUTBOUNDS_FILE, BALANCERS_FILE, RULES_FILE, STATE_FILE]:
+        print()
+        print(f"===== {path} =====")
+        print(path.read_text(encoding="utf-8"))
+
+
+
+
+def build_nft_plan() -> tuple[list[str], list[str]]:
+    init_if_missing()
+
+    engine = load_json(ENGINE_FILE, None)
+    if engine is None:
+        init_engine_config()
+        engine = load_json(ENGINE_FILE, {})
+
+    rules_data = load_json(RULES_FILE, {"rules": []})
+    tproxy = engine.get("tproxy", {})
+
+    listen_port = int(tproxy.get("tcp_port", 12345))
+    mark = int(tproxy.get("mark", 100))
+    table_id = int(tproxy.get("table", 100))
+
+    nft_lines = [
+        f"add table inet {NFT_TABLE_NAME}",
+        f"add chain inet {NFT_TABLE_NAME} prerouting {{ type filter hook prerouting priority mangle; policy accept; }}",
+        f"add chain inet {NFT_TABLE_NAME} output {{ type route hook output priority mangle; policy accept; }}",
+        f"add set inet {NFT_TABLE_NAME} local_ipv4 {{ type ipv4_addr; flags interval; }}",
+        f"add element inet {NFT_TABLE_NAME} local_ipv4 {{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }}",
+        f"add rule inet {NFT_TABLE_NAME} prerouting ip daddr @local_ipv4 return",
+        f"add rule inet {NFT_TABLE_NAME} prerouting meta mark {mark} return",
+    ]
+
+    warnings = []
+
+    for rule in rules_data.get("rules", []):
+        if not rule.get("enabled", True):
+            continue
+
+        inbound = rule.get("inbound", {})
+        interface = inbound.get("interface") or "tun0"
+        subnet = inbound.get("subnet") or "10.8.0.0/24"
+        network = str(rule.get("network") or "tcp,udp").lower()
+
+        if "tcp" in network:
+            nft_lines.append(
+                f"add rule inet {NFT_TABLE_NAME} prerouting iifname {interface} ip saddr {subnet} meta l4proto tcp tproxy ip to 127.0.0.1:{listen_port} meta mark set {mark} accept"
+            )
+
+        if "udp" in network:
+            nft_lines.append(
+                f"add rule inet {NFT_TABLE_NAME} prerouting iifname {interface} ip saddr {subnet} meta l4proto udp tproxy ip to 127.0.0.1:{listen_port} meta mark set {mark} accept"
+            )
+
+    route_lines = [
+        f"ip rule add fwmark {mark} table {table_id}",
+        f"ip route add local default dev lo table {table_id}",
+    ]
+
+    return nft_lines, route_lines
+
+
+def build_nft_reset_plan() -> list[str]:
+    engine = load_json(ENGINE_FILE, {})
+    tproxy = engine.get("tproxy", {})
+    mark = int(tproxy.get("mark", 100))
+    table_id = int(tproxy.get("table", 100))
+
+    return [
+        f"ip rule del fwmark {mark} table {table_id} 2>/dev/null || true",
+        f"ip route flush table {table_id} 2>/dev/null || true",
+        f"nft delete table inet {NFT_TABLE_NAME} 2>/dev/null || true",
+    ]
+
+
+
+
+def get_engine_tproxy() -> dict:
+    engine = load_json(ENGINE_FILE, {})
+    return engine.get("tproxy", {})
+
+
+def routing_snapshot() -> None:
+    ensure_base()
+
+    snapshot_dir = BASE_DIR / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = subprocess.check_output(
+        ["date", "+%Y%m%d-%H%M%S"],
+        text=True,
+    ).strip()
+
+    snapshot_file = snapshot_dir / f"routing-snapshot-{timestamp}.txt"
+
+    tproxy = get_engine_tproxy()
+    table_id = str(int(tproxy.get("table", 100)))
+
+    sections: list[str] = []
+
+    def capture(title: str, command: list[str]) -> None:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+
+        sections.append(f"===== {title} =====")
+        sections.append("$ " + " ".join(command))
+        sections.append(result.stdout.rstrip())
+        sections.append("")
+
+    capture("ip rule", ["ip", "rule", "show"])
+    capture(f"ip route table {table_id}", ["ip", "route", "show", "table", table_id])
+    capture("nft ruleset", ["nft", "list", "ruleset"])
+    capture("irangate-routing active", ["systemctl", "is-active", "irangate-routing"])
+    capture("irangate-routing enabled", ["systemctl", "is-enabled", "irangate-routing"])
+    capture("sing-box active", ["systemctl", "is-active", "sing-box"])
+    capture("openvpn status", ["systemctl", "is-active", "openvpn@server"])
+
+    snapshot_file.write_text("\n".join(sections) + "\n", encoding="utf-8")
+    os.chmod(snapshot_file, 0o600)
+
+    print("Routing snapshot saved ✅")
+    print(f"File: {snapshot_file}")
+
+
+def run_shell(command: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command,
+        shell=True,
+        executable="/bin/bash",
+        text=True,
+    )
+
+
+def reset_routing() -> None:
+    tproxy = get_engine_tproxy()
+    mark = int(tproxy.get("mark", 100))
+    table_id = int(tproxy.get("table", 100))
+
+    print("===== IRANGATE ROUTING RESET =====")
+
+    subprocess.run(["systemctl", "disable", "--now", "irangate-routing"], check=False)
+
+    reset_commands = [
+        f"ip rule del fwmark {mark} table {table_id} 2>/dev/null || true",
+        f"ip route flush table {table_id} 2>/dev/null || true",
+        f"nft delete table inet {NFT_TABLE_NAME} 2>/dev/null || true",
+    ]
+
+    for command in reset_commands:
+        print(f"$ {command}")
+        result = run_shell(command)
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+
+    print("Routing reset completed ✅")
+
+
+def apply_routing() -> None:
+    print("===== IRANGATE ROUTING APPLY =====")
+    print("This will apply nftables/ip-rule routing and start irangate-routing.service.")
+
+    routing_snapshot()
+
+    check_engine_config()
+    nft_check_plan()
+
+    nft_lines, route_lines = build_nft_plan()
+
+    ensure_base()
+    apply_file = BASE_DIR / f".nft-apply-{os.getpid()}.nft"
+    apply_file.write_text(nft_script_from_plan(nft_lines), encoding="utf-8")
+    os.chmod(apply_file, 0o600)
+
+    try:
+        print()
+        print("Resetting previous routing state...")
+        reset_routing()
+
+        print()
+        print(f"Applying nft rules from {apply_file} ...")
+        result = subprocess.run(
+            ["nft", "-f", str(apply_file)],
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+
+        print("Applying policy routing...")
+        for command in route_lines:
+            safe_command = command + " 2>/dev/null || true"
+            print(f"$ {safe_command}")
+            result = run_shell(safe_command)
+            if result.returncode != 0:
+                raise SystemExit(result.returncode)
+
+        print("Starting irangate-routing.service...")
+        subprocess.run(["systemctl", "enable", "--now", "irangate-routing"], check=False)
+
+        active = subprocess.run(
+            ["systemctl", "is-active", "irangate-routing"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        ).stdout.strip()
+
+        if active != "active":
+            print("irangate-routing.service is not active ❌")
+            subprocess.run(["systemctl", "status", "irangate-routing", "--no-pager", "-l"], check=False)
+            raise SystemExit(1)
+
+        print("Routing applied ✅")
+        print("irangate-routing.service active ✅")
+
+    except BaseException:
+        print()
+        print("Apply failed. Running automatic reset...")
+        reset_routing()
+        raise
+
+    finally:
+        if apply_file.exists():
+            apply_file.unlink()
+
+
+def nft_script_from_plan(nft_lines: list[str]) -> str:
+    lines = []
+
+    for line in nft_lines:
+        lines.append(line)
+
+    return "\n".join(lines) + "\n"
+
+
+def nft_check_plan() -> None:
+    if not shutil.which("nft"):
+        raise SystemExit("nft binary not found")
+
+    nft_lines, _ = build_nft_plan()
+    script = nft_script_from_plan(nft_lines)
+
+    ensure_base()
+    check_file = BASE_DIR / f".nft-check-{os.getpid()}.nft"
+
+    check_file.write_text(script, encoding="utf-8")
+    os.chmod(check_file, 0o600)
+
+    print("===== IRANGATE NFT PLAN CHECK =====")
+    print("Mode: nft syntax check only. No rules will be applied.")
+    print(f"Temp file: {check_file}")
+    print()
+
+    try:
+        result = subprocess.run(
+            ["nft", "-c", "-f", str(check_file)],
+            text=True,
+        )
+    finally:
+        if check_file.exists():
+            check_file.unlink()
+
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+    print("nft plan syntax check OK ✅")
+
+
+def nft_dry_run() -> None:
+    nft_lines, route_lines = build_nft_plan()
+
+    print("===== IRANGATE NFT/TPROXY DRY RUN =====")
+    print("No nftables, ip rule, ip route, service, or firewall change will be applied.")
+    print()
+    print("Planned nft commands:")
+    for line in nft_lines:
+        print(f"nft {line}")
+
+    print()
+    print("Planned policy routing commands:")
+    for line in route_lines:
+        print(line)
+
+    print()
+    print("Reset plan:")
+    for line in build_nft_reset_plan():
+        print(line)
+
+
+def check_engine_config() -> None:
+    if not shutil.which("sing-box"):
+        raise SystemExit("sing-box binary not found")
+
+    generate_args = argparse.Namespace(write=True, check=False)
+    generate_engine_config(generate_args)
+
+    result = subprocess.run(
+        ["sing-box", "check", "-c", str(SING_BOX_CONFIG)],
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+    print("sing-box config check OK ✅")
+
+
+def install_routing_service() -> None:
+    if not shutil.which("sing-box"):
+        raise SystemExit("sing-box binary not found")
+
+    check_engine_config()
+
+    sing_box_bin = shutil.which("sing-box")
+
+    service = f"""[Unit]
+Description=IranGate Routing Engine
+Documentation=https://sing-box.sagernet.org/
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists={SING_BOX_CONFIG}
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStartPre={sing_box_bin} check -c {SING_BOX_CONFIG}
+ExecStart={sing_box_bin} run -c {SING_BOX_CONFIG}
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    ROUTING_SERVICE_FILE.write_text(service, encoding="utf-8")
+    os.chmod(ROUTING_SERVICE_FILE, 0o644)
+
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+
+    # Keep service disabled and stopped by default. Real routing is not active yet.
+    subprocess.run(["systemctl", "disable", "--now", "irangate-routing"], check=False)
+
+    print("irangate-routing.service installed ✅")
+    print("State: disabled/inactive by design")
+    print(f"File: {ROUTING_SERVICE_FILE}")
+
+
+def service_status() -> None:
+    print("===== irangate-routing.service =====")
+    subprocess.run(
+        ["systemctl", "status", "irangate-routing", "--no-pager", "-l"],
+        check=False,
+    )
+
+    print()
+    print("===== sing-box.service =====")
+    subprocess.run(
+        ["systemctl", "status", "sing-box", "--no-pager", "-l"],
+        check=False,
+    )
+
+    print()
+    print("===== routing config =====")
+    print(f"Config: {SING_BOX_CONFIG}")
+    print(f"Exists: {SING_BOX_CONFIG.exists()}")
+
+    if SING_BOX_CONFIG.exists():
+        print(f"Size:   {SING_BOX_CONFIG.stat().st_size} bytes")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="IranGate Routing Manager"
+    )
+
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init")
+    sub.add_parser("list")
+    sub.add_parser("dry-run")
+    sub.add_parser("show-files")
+    sub.add_parser("init-engine")
+    sub.add_parser("check-engine")
+    sub.add_parser("install-service")
+    sub.add_parser("service-status")
+    sub.add_parser("nft-dry-run")
+    sub.add_parser("nft-check")
+    sub.add_parser("routing-snapshot")
+    sub.add_parser("apply-routing")
+    sub.add_parser("reset-routing")
+
+    p = sub.add_parser("generate-engine")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--check", action="store_true")
+
+    p = sub.add_parser("add-outbound")
+    p.add_argument("--tag", default="")
+    p.add_argument("--name", required=True)
+    p.add_argument("--type", choices=["direct", "gost", "xray", "sing-box", "socks", "http", "block", "vless", "vmess", "shadowsocks", "ss", "trojan"], required=True)
+    p.add_argument("--link", default="")
+    p.add_argument("--remote", default="")
+    p.add_argument("--username", default="")
+    p.add_argument("--password", default="")
+    p.add_argument("--version", default="")
+
+    p = sub.add_parser("update-outbound")
+    p.add_argument("tag")
+    p.add_argument("--name")
+    p.add_argument("--type", choices=["direct", "gost", "xray", "sing-box", "socks", "http", "block", "vless", "vmess", "shadowsocks", "ss", "trojan"])
+    p.add_argument("--link")
+    p.add_argument("--remote")
+    p.add_argument("--username")
+    p.add_argument("--password")
+    p.add_argument("--version")
+
+    p = sub.add_parser("delete-outbound")
+    p.add_argument("tag")
+    p.add_argument("--force", action="store_true")
+
+    p = sub.add_parser("bind")
+    p.add_argument("--port", required=True)
+    p.add_argument("--mode", choices=["single", "failover", "leastPing", "least_ping", "urltest", "random", "roundRobin", "round_robin", "leastLoad", "least_load", "selector"], default="leastPing")
+    p.add_argument("--outbounds", required=True)
+
+    p = sub.add_parser("test-outbound")
+    p.add_argument("tag")
+    p.add_argument("--target", default="1.1.1.1")
+    p.add_argument("--port", default="53")
+
+    args = parser.parse_args()
+
+    if args.cmd == "init":
+        init_config()
+    elif args.cmd == "list":
+        list_all()
+    elif args.cmd == "dry-run":
+        dry_run_apply()
+    elif args.cmd == "show-files":
+        show_files()
+    elif args.cmd == "init-engine":
+        init_engine_config()
+    elif args.cmd == "generate-engine":
+        generate_engine_config(args)
+    elif args.cmd == "check-engine":
+        check_engine_config()
+    elif args.cmd == "install-service":
+        install_routing_service()
+    elif args.cmd == "service-status":
+        service_status()
+    elif args.cmd == "nft-dry-run":
+        nft_dry_run()
+    elif args.cmd == "nft-check":
+        nft_check_plan()
+    elif args.cmd == "routing-snapshot":
+        routing_snapshot()
+    elif args.cmd == "apply-routing":
+        apply_routing()
+    elif args.cmd == "reset-routing":
+        reset_routing()
+    elif args.cmd == "add-outbound":
+        add_outbound(args)
+    elif args.cmd == "update-outbound":
+        update_outbound(args)
+    elif args.cmd == "delete-outbound":
+        delete_outbound(args)
+    elif args.cmd == "bind":
+        bind_rule(args)
+    elif args.cmd == "test-outbound":
+        test_outbound(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+REAL = "/usr/local/bin/irangate-backup-v2-export.real"
+
+EXTRA_FILES = [
+    "/opt/irangate/panel-proxy.env",
+    "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
+
+    "/opt/irangate/routing/engine.json",
+    "/opt/irangate/routing/outbounds.json",
+    "/opt/irangate/routing/balancers.json",
+    "/opt/irangate/routing/rules.json",
+
+    "/etc/sing-box/irangate-routing.json",
+    "/etc/systemd/system/irangate-routing.service",
+    "/etc/systemd/system/irangate-routing-rules.service",
+]
+
+EXTRA_PREFIX = "irangate-extra"
+
+
+def run_cmd(cmd):
+    try:
+        p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8)
+        return {
+            "ok": p.returncode == 0,
+            "exit_code": p.returncode,
+            "stdout": p.stdout.strip(),
+            "stderr": p.stderr.strip(),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+def find_archive_paths(obj):
+    found = []
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            lk = str(k).lower()
+            if isinstance(v, str) and (
+                lk in {"path", "archive", "archive_path", "backup_path", "file", "filename", "output", "output_path"}
+                or v.endswith((".tar.gz", ".tgz", ".gz"))
+            ):
+                found.append(v)
+            else:
+                found.extend(find_archive_paths(v))
+
+    elif isinstance(obj, list):
+        for item in obj:
+            found.extend(find_archive_paths(item))
+
+    return found
+
+
+def clean_tar_name(name):
+    name = str(name or "").replace("\\", "/")
+
+    while name.startswith("/"):
+        name = name[1:]
+
+    while name.startswith("./"):
+        name = name[2:]
+
+    parts = []
+    for part in name.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return ""
+        parts.append(part)
+
+    return "/".join(parts)
+
+
+def make_meta():
+    return {
+        "version": 1,
+        "kind": "irangate-extra-proxy-outbounds-routing",
+        "created_at": run_cmd(["date", "-Is"]).get("stdout", ""),
+        "services": {
+            "irangate-routing.service": {
+                "active": run_cmd(["systemctl", "is-active", "irangate-routing.service"]).get("stdout", ""),
+                "enabled": run_cmd(["systemctl", "is-enabled", "irangate-routing.service"]).get("stdout", ""),
+            },
+            "irangate-routing-rules.service": {
+                "active": run_cmd(["systemctl", "is-active", "irangate-routing-rules.service"]).get("stdout", ""),
+                "enabled": run_cmd(["systemctl", "is-enabled", "irangate-routing-rules.service"]).get("stdout", ""),
+            },
+            "irangate-webpanel.service": {
+                "active": run_cmd(["systemctl", "is-active", "irangate-webpanel.service"]).get("stdout", ""),
+                "enabled": run_cmd(["systemctl", "is-enabled", "irangate-webpanel.service"]).get("stdout", ""),
+            },
+        },
+        "notes": [
+            "panel-proxy.env may contain proxy credentials",
+            "routing JSON may contain outbound secrets / UUIDs / links",
+            "import wrapper restores these optional extras after main Backup v2 restore",
+        ],
+    }
+
+
+def add_bytes_to_tar(dst, name, data, mode=0o600):
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    info.mode = mode
+    info.mtime = int(Path("/").stat().st_mtime)
+    dst.addfile(info, io.BytesIO(data))
+
+
+def repack_safe_archive_with_extras(path):
+    path = Path(path)
+
+    if not path.exists() or not path.is_file():
+        return False, f"archive not found: {path}"
+
+    if not tarfile.is_tarfile(path):
+        return False, f"not a tar archive: {path}"
+
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".safe-extra.",
+        suffix=".tar.gz",
+        dir=str(path.parent),
+    )
+    os.close(tmp_fd)
+
+    changed = False
+    skipped = []
+
+    try:
+        with tarfile.open(path, "r:*") as src, tarfile.open(tmp_name, "w:gz") as dst:
+            existing = set()
+
+            for member in src.getmembers():
+                original = member.name
+                safe = clean_tar_name(original)
+
+                if not safe:
+                    skipped.append(original)
+                    changed = True
+                    continue
+
+                if safe != original:
+                    changed = True
+
+                member.name = safe
+
+                if member.islnk() or member.issym():
+                    link = clean_tar_name(member.linkname)
+                    if not link:
+                        skipped.append(original + " -> " + str(member.linkname))
+                        changed = True
+                        continue
+                    member.linkname = link
+
+                existing.add(safe)
+                fileobj = src.extractfile(member) if member.isfile() else None
+                dst.addfile(member, fileobj)
+
+            meta = json.dumps(make_meta(), ensure_ascii=False, indent=2).encode()
+            add_bytes_to_tar(dst, f"{EXTRA_PREFIX}/meta.json", meta, 0o600)
+
+            for raw_path in EXTRA_FILES:
+                src_path = Path(raw_path)
+                if not src_path.exists() or not src_path.is_file():
+                    continue
+
+                rel = clean_tar_name(raw_path)
+                extra_name = f"{EXTRA_PREFIX}/files/{rel}"
+
+                if extra_name in existing:
+                    continue
+
+                info = dst.gettarinfo(str(src_path), arcname=extra_name)
+
+                # Force safe permissions for sensitive files.
+                if raw_path.endswith("panel-proxy.env") or raw_path.endswith(".json") or "proxy.conf" in raw_path:
+                    info.mode = 0o600
+
+                with open(src_path, "rb") as f:
+                    dst.addfile(info, f)
+
+                changed = True
+
+        shutil.move(tmp_name, path)
+        return True, f"safe archive + extras repacked: {path}; changed={changed}; skipped={len(skipped)}"
+
+    except Exception as exc:
+        try:
+            os.remove(tmp_name)
+        except OSError:
+            pass
+        return False, f"safe extra repack failed: {exc}"
+
+
+def main():
+    if not os.path.exists(REAL):
+        print(json.dumps({
+            "success": False,
+            "error": f"real exporter missing: {REAL}",
+        }))
+        return 1
+
+    proc = subprocess.run(
+        [REAL] + sys.argv[1:],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+
+    stdout = proc.stdout or ""
+
+    archive_candidates = []
+
+    try:
+        data = json.loads(stdout)
+        archive_candidates.extend(find_archive_paths(data))
+    except Exception:
+        pass
+
+    archive_candidates.extend(
+        re.findall(r"(/[^\s\"']+?\.t(?:ar\.)?gz)", stdout)
+    )
+
+    seen = set()
+    for candidate in archive_candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        ok, msg = repack_safe_archive_with_extras(candidate)
+        print(f"[backup-v2-wrapper] {msg}", file=sys.stderr)
+
+    sys.stdout.write(stdout)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

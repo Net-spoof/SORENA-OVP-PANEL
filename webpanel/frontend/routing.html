@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- routing-v24-outbounds-payload-fix-20260718 -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IranGate - Outbounds</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link rel="stylesheet" href="css/themes.css">
+    <link rel="stylesheet" href="css/dark-theme.css">
+    <link rel="stylesheet" href="css/theme-overrides.css">
+    <link rel="stylesheet" href="css/sidebar.css">
+    <link rel="stylesheet" href="css/mobile.css">
+    <link rel="stylesheet" href="css/loading.css">
+
+    <script src="js/theme-loader.js"></script>
+    <script src="js/particles.js"></script>
+    <script src="js/sidebar.js?v=routing-v24-outbounds-payload-fix"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+<div id="particles-js"></div>
+
+<div class="main-content">
+    <div class="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Outbounds</h1>
+                <p class="text-gray-500 mt-1">Route OpenVPN UDP traffic through selected outbound strategies.</p>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+                <button onclick="loadRouting()" class="px-4 py-2 rounded-lg bg-gray-800 text-white hover:bg-gray-700">
+                    Refresh
+                </button>
+                <button onclick="bypassRouting()" class="px-4 py-2 rounded-lg bg-yellow-500 text-white hover:bg-yellow-600">
+                    Bypass / GOST Mode
+                </button>
+            </div>
+        </div>
+
+        <div id="toast" class="hidden rounded-lg p-3 text-sm"></div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Outbound Form</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Tag</label>
+                        <input id="tagInput" class="w-full border rounded-lg px-3 py-2" placeholder="turkey-vless-ws">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Name</label>
+                        <input id="nameInput" class="w-full border rounded-lg px-3 py-2" placeholder="Turkey VLESS">
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-sm text-gray-600 mb-1">Type</label>
+                        <select id="typeInput" class="w-full border rounded-lg px-3 py-2">
+                            <option value="xray">Auto / xray parser</option>
+                            <option value="vless">VLESS</option>
+                            <option value="vmess">VMess</option>
+                            <option value="trojan">Trojan</option>
+                            <option value="shadowsocks">Shadowsocks</option>
+                            <option value="socks">SOCKS</option>
+                            <option value="http">HTTP</option>
+                        </select>
+                    </div>
+
+                    <div class="md:col-span-2">
+                        <label class="block text-sm text-gray-600 mb-1">Share Link</label>
+                        <textarea id="linkInput" class="w-full border rounded-lg px-3 py-2 h-28" placeholder="vless://..."></textarea>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 mt-5">
+                    <button onclick="addOutbound()" class="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700">
+                        Add New
+                    </button>
+                    <button onclick="updateSelected()" class="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600">
+                        Update Selected
+                    </button>
+                    <button onclick="clearForm()" class="px-4 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+                        Clear
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Bind to OpenVPN UDP</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Port</label>
+                        <input id="bindPort" type="number" value="443" class="w-full border rounded-lg px-3 py-2">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Mode</label>
+                        <select id="bindMode" onchange="toggleBalancerStrategy(); refreshSelectionPreview();" class="w-full border rounded-lg px-3 py-2">
+                            <option value="single">single</option>
+                            <option value="failover">failover</option>
+                        </select>
+                    </div>
+
+                    <div id="balancerStrategyBox" class="md:col-span-2 hidden">
+                        <label class="block text-sm text-gray-600 mb-1">Balancer Strategy</label>
+                        <select id="balancerStrategy" onchange="refreshSelectionPreview();" class="w-full border rounded-lg px-3 py-2">
+                            <option value="leastPing">Least Ping / URLTest</option>
+                            <option value="selector">Manual Selector</option>
+                            <option value="failover">Failover / Priority Backup</option>
+                            <option value="random" disabled>Random — Xray Engine Required</option>
+                            <option value="roundRobin" disabled>Round Robin — Xray Engine Required</option>
+                            <option value="leastLoad" disabled>Least Load — Xray Engine Required</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Like Sanaei: Least Ping is active with sing-box URLTest. Random/RoundRobin/LeastLoad need Xray engine for exact behavior.
+                        </p>
+                    </div>
+
+                    <div class="md:col-span-2 bg-gray-900 rounded-lg p-3 text-xs text-green-300 font-mono">
+                        <div class="text-gray-400 mb-1">Selected Route Preview</div>
+                        <pre id="selectionPreview">mode=single
+strategy=single
+selected=-</pre>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 mt-5">
+                    <button onclick="pingChecked()" class="px-4 py-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600">
+                        Ping Checked
+                    </button>
+                    <button onclick="bindCheckedOnly()" class="px-4 py-2 rounded-lg bg-cyan-500 text-white hover:bg-cyan-600">
+                        Bind Checked
+                    </button>
+                    <button onclick="activateChecked()" class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">
+                        Activate Checked
+                    </button>
+                    <button onclick="editChecked()" class="px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600">
+                        Edit Checked
+                    </button>
+                    <button onclick="deleteChecked()" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">
+                        Delete Checked
+                    </button>
+                </div>
+
+                <div class="mt-5">
+                    <h3 class="font-bold text-gray-800 mb-2">Status</h3>
+                    <div id="statusBadge" class="inline-flex px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600">loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow overflow-hidden">
+            <div class="p-5 border-b">
+                <h2 class="text-xl font-bold text-gray-800">Configured Outbounds</h2>
+                <p class="text-gray-500 text-sm mt-1">Tick outbounds for single/failover routing.</p>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-600">
+                    <tr>
+                        <th class="text-left p-3">Use</th>
+                        <th class="text-left p-3">Tag</th>
+                        <th class="text-left p-3">Name</th>
+                        <th class="text-left p-3">Type</th>
+                        <th class="text-left p-3">Link / Remote</th>
+                        <th class="text-right p-3">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="outboundsTable">
+                    <tr><td colspan="6" class="p-6 text-center text-gray-500">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Routing Overview</h2>
+                <div id="routeCards" class="space-y-4">
+                    <div class="text-gray-500">loading...</div>
+                </div>
+
+                <details class="mt-4">
+                    <summary class="cursor-pointer text-sm text-gray-500 hover:text-gray-800">Raw CLI Output</summary>
+                    <pre id="listBox" class="mt-3 bg-gray-900 text-green-300 rounded-lg p-4 text-xs overflow-auto max-h-72">loading...</pre>
+                </details>
+            </div>
+
+            <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Last Action</h2>
+                <div id="resultBox" class="space-y-4">
+                    <div class="text-gray-500">No command yet.</div>
+                </div>
+
+                <details class="mt-4">
+                    <summary class="cursor-pointer text-sm text-gray-500 hover:text-gray-800">Raw Result</summary>
+                    <pre id="resultRawBox" class="mt-3 bg-gray-900 text-blue-200 rounded-lg p-4 text-xs overflow-auto max-h-72">No command yet.</pre>
+                </details>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let routingData = {};
+let outbounds = [];
+
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    }[ch]));
+}
+
+function getToken() {
+    const keys = ['token', 'authToken', 'jwt', 'irangate_token'];
+    for (const k of keys) {
+        const v = localStorage.getItem(k) || sessionStorage.getItem(k);
+        if (v) return v;
+    }
+    return '';
+}
+
+async function apiRequest(path, options = {}) {
+    const token = getToken();
+    if (!token) {
+        window.location.href = 'index.html';
+        throw new Error('No auth token');
+    }
+
+    const res = await fetch('/api' + path, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token,
+            ...(options.headers || {})
+        }
+    });
+
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {raw:text}; }
+
+    if (res.status === 401 || res.status === 403) {
+        window.location.href = 'index.html';
+        throw new Error('Unauthorized');
+    }
+
+    if (!res.ok) {
+        throw new Error(data.error || data.message || ('HTTP ' + res.status));
+    }
+
+    return data;
+}
+
+function payloadData(res) {
+    return res && res.data ? res.data : res;
+}
+
+function normalizeOutboundsPayload(value) {
+    if (!value) return [];
+
+    if (Array.isArray(value)) return value;
+
+    if (value.data) return normalizeOutboundsPayload(value.data);
+
+    if (Array.isArray(value.outbounds)) return value.outbounds;
+
+    if (value.outbounds && typeof value.outbounds === 'object') {
+        return normalizeOutboundsPayload(value.outbounds);
+    }
+
+    if (Array.isArray(value.items)) return value.items;
+    if (Array.isArray(value.results)) return value.results;
+
+    return [];
+}
+
+function showMessage(msg, type = 'success') {
+    const box = document.getElementById('toast');
+    box.className = 'rounded-lg p-3 text-sm ' + (
+        type === 'error'
+            ? 'bg-red-100 text-red-700 border border-red-200'
+            : 'bg-green-100 text-green-700 border border-green-200'
+    );
+    box.textContent = msg;
+    box.classList.remove('hidden');
+    setTimeout(() => box.classList.add('hidden'), 3500);
+}
+
+function rawText(v) {
+    return typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+}
+
+function showResult(v) {
+    const raw = document.getElementById('resultRawBox');
+    if (raw) raw.textContent = rawText(v);
+
+    const box = document.getElementById('resultBox');
+    if (!box) return;
+
+    if (typeof v === 'string') {
+        box.innerHTML = `<div class="rounded-xl border bg-gray-50 p-4 whitespace-pre-wrap">${esc(v)}</div>`;
+        return;
+    }
+
+    if (v && Array.isArray(v.results)) {
+        box.innerHTML = v.results.map(renderPingResult).join('');
+        return;
+    }
+
+    const ok = !!(v && v.success !== false);
+    const cls = ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800';
+    box.innerHTML = `
+        <div class="rounded-xl border ${cls} p-4">
+            <div class="font-bold">${esc(v && v.message ? v.message : 'Command completed')}</div>
+            <div class="text-sm mt-1 opacity-80">Raw details are available below.</div>
+        </div>
+    `;
+}
+
+function parsePing(output) {
+    output = String(output || '');
+    return {
+        tag: (output.match(/Tag:\s*([^\n]+)/) || [,'-'])[1],
+        remote: (output.match(/Remote:\s*([^\n]+)/) || [,'-'])[1],
+        avg: (output.match(/Ping TCP avg:\s*([0-9.]+)/) || [,'-'])[1],
+        best: (output.match(/Ping TCP best:\s*([0-9.]+)/) || [,'-'])[1],
+        worst: (output.match(/Ping TCP worst:\s*([0-9.]+)/) || [,'-'])[1],
+        ok: output.includes('Result: reachable')
+    };
+}
+
+function renderPingResult(item) {
+    const p = parsePing(item.output || item.data?.output || '');
+    return `
+        <div class="rounded-xl border border-gray-200 overflow-hidden">
+            <div class="p-4 bg-gray-50 border-b flex justify-between gap-3">
+                <div>
+                    <div class="font-bold text-gray-800">Ping Result</div>
+                    <div class="font-mono text-xs text-gray-500">${esc(p.tag)} → ${esc(p.remote)}</div>
+                </div>
+                <div class="px-3 py-1 rounded-full text-xs font-bold ${p.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                    ${p.ok ? 'Reachable ✅' : 'Unreachable ❌'}
+                </div>
+            </div>
+            <div class="p-4 grid grid-cols-3 gap-3">
+                <div class="rounded-lg bg-gray-900 text-white p-3"><div class="text-xs opacity-70">Avg</div><div class="text-xl font-bold">${esc(p.avg)} ms</div></div>
+                <div class="rounded-lg bg-gray-900 text-white p-3"><div class="text-xs opacity-70">Best</div><div class="text-xl font-bold">${esc(p.best)} ms</div></div>
+                <div class="rounded-lg bg-gray-900 text-white p-3"><div class="text-xs opacity-70">Worst</div><div class="text-xl font-bold">${esc(p.worst)} ms</div></div>
+            </div>
+        </div>
+    `;
+}
+
+function realOutbounds() {
+    if (!Array.isArray(outbounds)) outbounds = normalizeOutboundsPayload(outbounds);
+    return outbounds.filter(o => o && !['block'].includes(o.tag));
+}
+
+function checkedTagsRaw() {
+    return Array.from(document.querySelectorAll('.outbound-check:checked')).map(x => x.value);
+}
+
+function selectedTags() {
+    const mode = document.getElementById('bindMode').value;
+    const tags = checkedTagsRaw();
+
+    if (!tags.length) throw new Error('هیچ outbound تیک نخورده.');
+
+    if (mode === 'single') return [tags[0]];
+
+    if (mode === 'failover' && tags.length < 2) {
+        throw new Error('برای failover حداقل ۲ outbound را تیک بزن.');
+    }
+
+    return tags;
+}
+
+function selectedCsv() {
+    return selectedTags().join(',');
+}
+
+function toggleBalancerStrategy() {
+    const mode = document.getElementById('bindMode').value;
+    const box = document.getElementById('balancerStrategyBox');
+    if (!box) return;
+    box.classList.toggle('hidden', mode !== 'failover');
+}
+
+function refreshSelectionPreview() {
+    const mode = document.getElementById('bindMode').value;
+    const raw = checkedTagsRaw();
+    const shown = mode === 'single' ? raw.slice(0, 1) : raw;
+    const strategy = mode === 'failover' ? document.getElementById('balancerStrategy').value : 'single';
+
+    document.getElementById('selectionPreview').textContent =
+        'mode=' + mode + '\n' +
+        'strategy=' + strategy + '\n' +
+        'selected=' + (shown.join(', ') || '-');
+}
+
+function currentSelectorFromState() {
+    const b = (((routingData.balancers || {}).balancers) || [])[0] || {};
+    return b.selector || [];
+}
+
+function renderOutbounds() {
+    const tbody = document.getElementById('outboundsTable');
+    const items = realOutbounds();
+
+    if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No outbounds configured.</td></tr>`;
+        refreshSelectionPreview();
+        return;
+    }
+
+    tbody.innerHTML = items.map(o => {
+        const disabled = o.tag === 'default-gost' || o.type === 'gost';
+        const link = o.link || o.server || o.remote || '';
+        return `
+            <tr class="border-t hover:bg-gray-50">
+                <td class="p-3">
+                    <input type="checkbox" class="outbound-check h-4 w-4" value="${esc(o.tag)}" ${disabled ? 'disabled title="GOST placeholder is not a real sing-box outbound yet"' : ''} onchange="refreshSelectionPreview()">
+                </td>
+                <td class="p-3 font-mono text-xs">${esc(o.tag)}</td>
+                <td class="p-3">${esc(o.name || '-')}</td>
+                <td class="p-3">${esc(o.type || '-')}</td>
+                <td class="p-3 font-mono text-xs text-gray-500 max-w-md truncate">${esc(maskLink(link))}</td>
+                <td class="p-3 text-right">
+                    <button onclick="pingOne('${esc(o.tag)}')" class="px-3 py-1 rounded bg-emerald-500 text-white text-xs">Ping</button>
+                    <button onclick="loadToForm('${esc(o.tag)}')" class="px-3 py-1 rounded bg-orange-500 text-white text-xs">Edit</button>
+                    <button onclick="deleteOne('${esc(o.tag)}')" class="px-3 py-1 rounded bg-red-600 text-white text-xs">Delete</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    refreshSelectionPreview();
+}
+
+function maskLink(link) {
+    link = String(link || '');
+    if (!link) return '-';
+    if (link.length <= 24) return link;
+    return link.slice(0, 14) + '...' + link.slice(-8);
+}
+
+function renderOverview() {
+    const box = document.getElementById('routeCards');
+    const badge = document.getElementById('statusBadge');
+
+    const balancers = ((routingData.balancers || {}).balancers) || [];
+    const rules = ((routingData.rules || {}).rules) || [];
+    const b = balancers.find(x => x.tag === 'bal-openvpn-443') || balancers[0] || {};
+    const r = rules.find(x => x.tag === 'route-openvpn-443') || rules[0] || {};
+
+    const selector = Array.isArray(b.selector) ? b.selector : [];
+    const strategy = b.strategy || r.mode || '-';
+    const service = routingData.service_active || routingData.routing_service || 'unknown';
+    const active = b.active || r.active_outbound || selector[0] || '-';
+
+    badge.textContent = service;
+    badge.className = 'inline-flex px-3 py-1 rounded-full text-xs ' + (
+        service === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+    );
+
+    box.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div class="rounded-xl border p-4 bg-gray-50"><div class="text-xs text-gray-500">Inbound</div><div class="font-bold">OpenVPN UDP ${esc(r.port || 443)}</div></div>
+            <div class="rounded-xl border p-4 bg-gray-50"><div class="text-xs text-gray-500">Mode/Strategy</div><div class="font-bold">${esc(strategy)}</div></div>
+            <div class="rounded-xl border p-4 bg-gray-50"><div class="text-xs text-gray-500">Active</div><div class="font-bold">${esc(active)}</div></div>
+            <div class="rounded-xl border p-4 bg-gray-50"><div class="text-xs text-gray-500">Service</div><div class="font-bold">${esc(service)}</div></div>
+        </div>
+
+        <div class="rounded-xl border p-4 bg-white">
+            <div class="text-sm font-bold text-gray-700 mb-2">Selector</div>
+            <div class="flex flex-wrap gap-2">
+                ${
+                    selector.length
+                        ? selector.map(x => `<span class="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-bold">${esc(x)}</span>`).join('')
+                        : '<span class="text-gray-500">No selector</span>'
+                }
+            </div>
+        </div>
+    `;
+}
+
+async function loadRouting(silent = false) {
+    try {
+        const statusRes = await apiRequest('/routing/status');
+        routingData = payloadData(statusRes) || {};
+
+        const outRes = await apiRequest('/routing/outbounds');
+
+        outbounds = normalizeOutboundsPayload(outRes);
+
+        if (!outbounds.length) {
+            outbounds = normalizeOutboundsPayload(routingData.outbounds);
+        }
+
+        if (!Array.isArray(outbounds)) {
+            outbounds = [];
+        }
+
+        document.getElementById('listBox').textContent = routingData.list_output || '';
+        renderOutbounds();
+        renderOverview();
+        if (!silent) showMessage('Routing loaded');
+    } catch (err) {
+        document.getElementById('outboundsTable').innerHTML =
+            `<tr><td colspan="6" class="p-6 text-center text-red-500">${esc(err.message)}</td></tr>`;
+        document.getElementById('routeCards').innerHTML =
+            `<div class="rounded-xl border border-red-200 bg-red-50 text-red-700 p-4">${esc(err.message)}</div>`;
+        document.getElementById('statusBadge').textContent = 'error';
+        if (!silent) showMessage(err.message, 'error');
+    }
+}
+
+function clearForm() {
+    document.getElementById('tagInput').value = '';
+    document.getElementById('nameInput').value = '';
+    document.getElementById('typeInput').value = 'xray';
+    document.getElementById('linkInput').value = '';
+}
+
+function loadToForm(tag) {
+    const o = outbounds.find(x => x.tag === tag);
+    if (!o) return;
+
+    document.getElementById('tagInput').value = o.tag || '';
+    document.getElementById('nameInput').value = o.name || '';
+    document.getElementById('typeInput').value = o.type || 'xray';
+    document.getElementById('linkInput').value = o.link || '';
+}
+
+function firstChecked() {
+    const tags = checkedTagsRaw();
+    if (!tags.length) throw new Error('هیچ outbound تیک نخورده.');
+    return tags[0];
+}
+
+function editChecked() {
+    try { loadToForm(firstChecked()); } catch (err) { showMessage(err.message, 'error'); }
+}
+
+async function addOutbound() {
+    try {
+        const body = formBody();
+        const res = await apiRequest('/routing/outbounds', {method:'POST', body:JSON.stringify(body)});
+        showResult(res);
+        showMessage('Outbound added');
+        clearForm();
+        await loadRouting(true);
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function updateSelected() {
+    try {
+        const tag = document.getElementById('tagInput').value.trim() || firstChecked();
+        const body = formBody();
+        const res = await apiRequest('/routing/outbounds/' + encodeURIComponent(tag), {method:'PUT', body:JSON.stringify(body)});
+        showResult(res);
+        showMessage('Outbound updated');
+        await loadRouting(true);
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+function formBody() {
+    const tag = document.getElementById('tagInput').value.trim();
+    const name = document.getElementById('nameInput').value.trim() || tag;
+    const type = document.getElementById('typeInput').value;
+    const link = document.getElementById('linkInput').value.trim();
+
+    if (!tag) throw new Error('Tag is required.');
+    if (!link && !['direct'].includes(type)) throw new Error('Share Link is required.');
+
+    return {
+        tag,
+        name,
+        type,
+        link,
+        enabled: true
+    };
+}
+
+async function pingOne(tag) {
+    const res = await apiRequest('/routing/test', {
+        method:'POST',
+        body:JSON.stringify({tag})
+    });
+    showResult({results:[payloadData(res)]});
+}
+
+async function pingChecked() {
+    try {
+        const tags = selectedTags();
+        const results = [];
+        for (const tag of tags) {
+            const res = await apiRequest('/routing/test', {
+                method:'POST',
+                body:JSON.stringify({tag})
+            });
+            results.push(payloadData(res));
+        }
+        showResult({success:true, results});
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function bindCheckedOnly() {
+    try {
+        const port = parseInt(document.getElementById('bindPort').value || '443', 10);
+        const uiMode = document.getElementById('bindMode').value;
+        const mode = uiMode === 'failover' ? document.getElementById('balancerStrategy').value : 'single';
+        const outboundsCsv = selectedCsv();
+
+        const res = await apiRequest('/routing/bind', {
+            method:'POST',
+            body:JSON.stringify({port, mode, outbounds: outboundsCsv})
+        });
+
+        showResult(res);
+        showMessage('Routing bind updated');
+        await loadRouting(true);
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function activateChecked() {
+    try {
+        const port = parseInt(document.getElementById('bindPort').value || '443', 10);
+        const uiMode = document.getElementById('bindMode').value;
+        const mode = uiMode === 'failover' ? document.getElementById('balancerStrategy').value : 'single';
+        const outboundsCsv = selectedCsv();
+
+        showResult('Step 1/3: Bind...');
+        const bind = await apiRequest('/routing/bind', {method:'POST', body:JSON.stringify({port, mode, outbounds: outboundsCsv})});
+
+        showResult('Step 2/3: Generate...');
+        const generate = await apiRequest('/routing/generate', {method:'POST', body:JSON.stringify({})});
+
+        showResult('Step 3/3: Apply...');
+        const apply = await apiRequest('/routing/apply', {method:'POST', body:JSON.stringify({})});
+
+        await loadRouting(true);
+
+        showResult({
+            success:true,
+            message:'Activated behind OpenVPN UDP ' + port,
+            mode,
+            outbounds: outboundsCsv,
+            bind,
+            generate,
+            apply,
+            current_selector: currentSelectorFromState()
+        });
+
+        showMessage('Routing activated');
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function deleteOne(tag) {
+    if (!confirm('Delete outbound "' + tag + '"?\n\nForce delete will also refresh routing.')) return;
+
+    try {
+        const res = await apiRequest('/routing/outbounds/' + encodeURIComponent(tag) + '?force=1', {method:'DELETE'});
+        showResult(res);
+        showMessage('Outbound deleted');
+        await apiRequest('/routing/generate', {method:'POST', body:JSON.stringify({})});
+        await apiRequest('/routing/apply', {method:'POST', body:JSON.stringify({})});
+        await loadRouting(true);
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function deleteChecked() {
+    try {
+        const tags = selectedTags();
+        if (!confirm('Delete checked outbounds?\n\n' + tags.join(', '))) return;
+        for (const tag of tags) await deleteOne(tag);
+    } catch (err) {
+        showResult(err.message);
+        showMessage(err.message, 'error');
+    }
+}
+
+async function bypassRouting() {
+    if (!confirm('Disable outbound routing and remove TPROXY rules?\n\nUse this for foreign/GOST mode.')) return;
+
+    try {
+        const res = await apiRequest('/routing/apply', {
+            method:'POST',
+            body:JSON.stringify({action:'bypass'})
+        });
+        showResult(res);
+        showMessage('Bypass requested. If API does not support this yet, use CLI bypass command.');
+        await loadRouting(true);
+    } catch (err) {
+        showResult(err.message);
+        showMessage('Bypass API not implemented yet; use CLI bypass command.', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    try {
+        if (typeof initSidebar === 'function') initSidebar('routing');
+    } catch (e) {
+        console.warn('sidebar init failed', e);
+    }
+
+    try {
+        if (window.particlesJS) {
+            particlesJS.load('particles-js', 'particles.json', function(){});
+        }
+    } catch (e) {}
+
+    toggleBalancerStrategy();
+    refreshSelectionPreview();
+    loadRouting(true);
+});
+</script>
+</body>
+</html>
