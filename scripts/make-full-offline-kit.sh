@@ -235,7 +235,7 @@ ensure_traffic_runtime_files() {
   mkdir -p /opt/irangate/traffic
 
   [[ -f /opt/irangate/traffic/cumulative_totals.json ]] || echo '{}' > /opt/irangate/traffic/cumulative_totals.json
-  [[ -f /opt/irangate/traffic/current_stats.json ]] || echo '{}' > /opt/irangate/traffic/current_stats.json
+  [[ -f /opt/irangate/traffic/current_stats.json ]] || echo '[]' > /opt/irangate/traffic/current_stats.json
   [[ -f /opt/irangate/traffic/node_usage_state.json ]] || echo '{}' > /opt/irangate/traffic/node_usage_state.json
   [[ -f /opt/irangate/traffic/node_current_stats.json ]] || echo '{}' > /opt/irangate/traffic/node_current_stats.json
   [[ -f /opt/irangate/traffic/global_usage_totals.json ]] || echo '{}' > /opt/irangate/traffic/global_usage_totals.json
