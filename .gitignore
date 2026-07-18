@@ -96,3 +96,4 @@ irangate-backup-v2-*.tar.gz
 backup_schedule_telegram_auto_*.gz
 webpanel/frontend/routing-v*.html
 webpanel/frontend/settings-*.html
+offline-bundles/
