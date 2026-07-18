@@ -24,22 +24,47 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1"
 }
 
-detect_go() {
-  if command -v go >/dev/null 2>&1; then command -v go; return 0; fi
-  if [[ -x /usr/local/go/bin/go ]]; then echo /usr/local/go/bin/go; return 0; fi
-  if [[ -x /usr/bin/go ]]; then echo /usr/bin/go; return 0; fi
-  if [[ -x /snap/bin/go ]]; then echo /snap/bin/go; return 0; fi
-  return 1
+port_is_free() {
+  local port="$1"
+  ! ss -lntup 2>/dev/null | awk '{print $5}' | grep -Eq "[:.]${port}$"
+}
+
+choose_webpanel_port() {
+  if port_is_free "$WEBPANEL_PORT"; then
+    echo "$WEBPANEL_PORT"
+    return 0
+  fi
+
+  warn "WEBPANEL_PORT=${WEBPANEL_PORT} is busy; trying fallback ports"
+
+  for p in 8644 8714 8814 8914 9014; do
+    if port_is_free "$p"; then
+      echo "$p"
+      return 0
+    fi
+  done
+
+  fail "No free webpanel port found"
+}
+
+ensure_dirs() {
+  mkdir -p \
+    /opt/irangate/database/clients \
+    /opt/irangate/database/devices \
+    /opt/irangate/backups/v2 \
+    /opt/irangate/routing \
+    "$FRONTEND_DIR"
 }
 
 ensure_env() {
   mkdir -p "$ENV_DIR"
 
-  if [[ ! -f "$ENV_FILE" ]]; then
-    local jwt
-    jwt="$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | awk '{print $1}')"
+  WEBPANEL_PORT="$(choose_webpanel_port)"
 
-    cat > "$ENV_FILE" <<EOF
+  local jwt
+  jwt="$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | awk '{print $1}')"
+
+  cat > "$ENV_FILE" <<EOF
 WEBPANEL_PORT=${WEBPANEL_PORT}
 SUBSCRIPTION_PORT=${SUBSCRIPTION_PORT}
 SUBSCRIPTION_PUBLIC_HOST=${SUBSCRIPTION_PUBLIC_HOST}
@@ -51,16 +76,11 @@ WEBPANEL_ADMIN_USER=${ADMIN_USER}
 WEBPANEL_ADMIN_EMAIL=${ADMIN_EMAIL}
 JWT_SECRET=${jwt}
 EOF
-    chmod 0600 "$ENV_FILE"
-    log "Created $ENV_FILE"
-  else
-    log "Keeping existing $ENV_FILE"
 
-    grep -q '^WEBPANEL_STATIC_DIR=' "$ENV_FILE" \
-      || echo "WEBPANEL_STATIC_DIR=${FRONTEND_DIR}" >> "$ENV_FILE"
-  fi
-
+  chmod 0600 "$ENV_FILE"
   printf '%s\n' "$INSTALL_DIR" > "$SOURCE_FILE"
+
+  log "Written $ENV_FILE"
 }
 
 install_source_tree() {
@@ -83,20 +103,8 @@ install_binaries() {
 
   if [[ -x "$INSTALL_DIR/offline-assets/irangate-webpanel" ]]; then
     install -m 0755 "$INSTALL_DIR/offline-assets/irangate-webpanel" /usr/local/bin/irangate-webpanel
-  elif [[ -d "$INSTALL_DIR/webpanel/backend" ]]; then
-    local go_bin
-    go_bin="$(detect_go || true)"
-    [[ -n "$go_bin" ]] || fail "No prebuilt webpanel binary and Go not found"
-
-    log "Building webpanel with $("$go_bin" version)"
-    (
-      cd "$INSTALL_DIR/webpanel/backend"
-      "$go_bin" mod tidy
-      "$go_bin" build -o /tmp/irangate-webpanel .
-    )
-    install -m 0755 /tmp/irangate-webpanel /usr/local/bin/irangate-webpanel
   else
-    fail "webpanel backend source not found"
+    fail "offline-assets/irangate-webpanel not found; rebuild offline bundle"
   fi
 
   if [[ -f "$INSTALL_DIR/scripts/ovp-panel" ]]; then
@@ -108,26 +116,46 @@ install_binaries() {
   fi
 }
 
+install_backup_core() {
+  log "Installing backup v2 core scripts"
+
+  local exp="$INSTALL_DIR/deploy/master/scripts/irangate-backup-v2-export.py"
+  local imp="$INSTALL_DIR/deploy/master/scripts/irangate-backup-v2-import.py"
+
+  if [[ -f "$exp" ]]; then
+    install -m 0755 "$exp" /usr/local/bin/irangate-backup-v2-export
+    install -m 0755 "$exp" /usr/local/bin/irangate-backup-v2-export.py
+  else
+    warn "backup export core script not found: $exp"
+  fi
+
+  if [[ -f "$imp" ]]; then
+    install -m 0755 "$imp" /usr/local/bin/irangate-backup-v2-import
+    install -m 0755 "$imp" /usr/local/bin/irangate-backup-v2-import.py
+  else
+    warn "backup import core script not found: $imp"
+  fi
+}
+
 deploy_frontend() {
   log "Deploying frontend to $FRONTEND_DIR"
 
   mkdir -p "$FRONTEND_DIR/js"
 
-  if [[ -d "$INSTALL_DIR/webpanel/frontend" ]]; then
-    find "$INSTALL_DIR/webpanel/frontend" -maxdepth 1 -type f -print0 \
-      | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/"
+  find "$INSTALL_DIR/webpanel/frontend" -maxdepth 1 -type f -print0 \
+    | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/"
 
-    if [[ -d "$INSTALL_DIR/webpanel/frontend/js" ]]; then
-      find "$INSTALL_DIR/webpanel/frontend/js" -maxdepth 1 -type f -print0 \
-        | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/js/"
-    fi
-
-    local version
-    version="$(date +%s)"
-    find "$FRONTEND_DIR" -maxdepth 1 -type f -name "*.html" -print0 \
-      | xargs -0 -r sed -i -E \
-        "s#js/sidebar\.js(\?v=[A-Za-z0-9._-]+)?#js/sidebar.js?v=offline-${version}#g"
+  if [[ -d "$INSTALL_DIR/webpanel/frontend/js" ]]; then
+    find "$INSTALL_DIR/webpanel/frontend/js" -maxdepth 1 -type f -print0 \
+      | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/js/"
   fi
+
+  local version
+  version="$(date +%s)"
+
+  find "$FRONTEND_DIR" -maxdepth 1 -type f -name "*.html" -print0 \
+    | xargs -0 -r sed -i -E \
+      "s#js/sidebar\.js(\?v=[A-Za-z0-9._-]+)?#js/sidebar.js?v=offline-${version}#g"
 }
 
 install_systemd() {
@@ -161,25 +189,17 @@ install_backup_wrappers() {
   fi
 }
 
-apply_panel_extras() {
-  if [[ -x "$INSTALL_DIR/scripts/apply-panel-extras.sh" ]]; then
-    bash "$INSTALL_DIR/scripts/apply-panel-extras.sh" || warn "panel extras apply had warnings"
-  fi
-}
-
 health_check() {
-  local port
-  port="$(grep '^WEBPANEL_PORT=' "$ENV_FILE" | cut -d= -f2 | tail -1)"
-  port="${port:-$WEBPANEL_PORT}"
-
-  sleep 2
+  sleep 3
 
   echo
   echo "===== OFFLINE INSTALL HEALTH CHECK ====="
+  echo "WEBPANEL_PORT=${WEBPANEL_PORT}"
   systemctl is-active irangate-webpanel || true
-  ss -lntp | grep ":${port}" || true
-  curl -sS -o /dev/null -w "Web Panel HTTP=%{http_code}\n" "http://127.0.0.1:${port}/dashboard.html" || true
-  curl -sS -o /dev/null -w "Routing Page HTTP=%{http_code}\n" "http://127.0.0.1:${port}/routing.html" || true
+  ss -lntup | grep -E ":${WEBPANEL_PORT}|:${SUBSCRIPTION_PORT}|:443" || true
+  curl -sS -o /dev/null -w "dashboard HTTP=%{http_code}\n" "http://127.0.0.1:${WEBPANEL_PORT}/dashboard.html" || true
+  curl -sS -o /dev/null -w "routing HTTP=%{http_code}\n" "http://127.0.0.1:${WEBPANEL_PORT}/routing.html" || true
+  curl -sS -o /dev/null -w "settings HTTP=%{http_code}\n" "http://127.0.0.1:${WEBPANEL_PORT}/settings.html" || true
 }
 
 main() {
@@ -188,13 +208,14 @@ main() {
   need_cmd curl
   need_cmd ss
 
+  ensure_dirs
   install_source_tree
   ensure_env
   install_binaries
+  install_backup_core
   deploy_frontend
   install_systemd
   install_backup_wrappers
-  apply_panel_extras
 
   systemctl restart irangate-webpanel
 
