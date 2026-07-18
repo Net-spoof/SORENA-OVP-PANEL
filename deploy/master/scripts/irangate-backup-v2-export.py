@@ -184,7 +184,7 @@ def copy_traffic_state(stage: Path) -> bool:
 
     required_defaults = {
         "cumulative_totals.json": "{}",
-        "current_stats.json": "{}",
+        "current_stats.json": "[]",
         "node_usage_state.json": "{}",
         "node_current_stats.json": "{}",
         "global_usage_totals.json": "{}",
