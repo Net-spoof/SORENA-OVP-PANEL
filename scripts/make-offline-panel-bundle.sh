@@ -135,13 +135,13 @@ for go_bin in /usr/local/go/bin/go /snap/bin/go /usr/bin/go "$(command -v go 2>/
   [[ -n "$go_bin" && -x "$go_bin" ]] || continue
   log "Trying irangate CLI build with $("$go_bin" version)"
 
-  if (cd "$SRC_DIR" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" ./cmd); then
+  if (cd "$WORK" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" ./cmd); then
     CLI_BUILT=1
     log "Built irangate CLI binary: $WORK/offline-assets/irangate-cli"
     break
   fi
 
-  if (cd "$SRC_DIR" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" .); then
+  if (cd "$WORK" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" .); then
     CLI_BUILT=1
     log "Built irangate CLI binary from root: $WORK/offline-assets/irangate-cli"
     break
