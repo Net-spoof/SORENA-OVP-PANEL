@@ -113,6 +113,10 @@ install_binaries() {
 
   if [[ -f "$INSTALL_DIR/scripts/irangate-routing" ]]; then
     install -m 0755 "$INSTALL_DIR/scripts/irangate-routing" /usr/local/bin/irangate-routing
+
+  if [[ -f "$INSTALL_DIR/offline-assets/irangate-cli" ]]; then
+    install -m 0755 "$INSTALL_DIR/offline-assets/irangate-cli" /usr/local/bin/irangate
+  fi
   fi
 }
 

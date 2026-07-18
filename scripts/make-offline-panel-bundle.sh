@@ -127,6 +127,41 @@ EOF
 
 ARCHIVE="$OUT_DIR/${NAME}.tar.gz"
 
+
+log "Building irangate CLI binary"
+CLI_BUILT=0
+
+for go_bin in /usr/local/go/bin/go /snap/bin/go /usr/bin/go "$(command -v go 2>/dev/null || true)"; do
+  [[ -n "$go_bin" && -x "$go_bin" ]] || continue
+  log "Trying irangate CLI build with $("$go_bin" version)"
+
+  if (cd "$SRC_DIR" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" ./cmd); then
+    CLI_BUILT=1
+    log "Built irangate CLI binary: $WORK/offline-assets/irangate-cli"
+    break
+  fi
+
+  if (cd "$SRC_DIR" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" .); then
+    CLI_BUILT=1
+    log "Built irangate CLI binary from root: $WORK/offline-assets/irangate-cli"
+    break
+  fi
+done
+
+if [[ "$CLI_BUILT" != "1" ]]; then
+  if [[ -x /usr/local/bin/irangate ]]; then
+    cp -a /usr/local/bin/irangate "$WORK/offline-assets/irangate-cli"
+    log "Used existing /usr/local/bin/irangate as fallback"
+  else
+    echo "[bundle][WARN] Could not build/find irangate CLI; offline panel may miss /usr/local/bin/irangate" >&2
+  fi
+fi
+
+if [[ -f "$WORK/offline-assets/irangate-cli" ]]; then
+  chmod 0755 "$WORK/offline-assets/irangate-cli"
+fi
+
+
 log "Creating archive: $ARCHIVE"
 tar -C /tmp -czf "$ARCHIVE" "$NAME"
 

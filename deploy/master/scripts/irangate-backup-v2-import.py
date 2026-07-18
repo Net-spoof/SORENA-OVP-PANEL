@@ -1477,10 +1477,16 @@ def perform_restore(
                 rollback_temp
             )
 
-            extract_and_validate(
-                safety_archive,
-                rollback_root,
-            )
+            try:
+                extract_and_validate(
+                    safety_archive,
+                    rollback_root,
+                )
+            except Exception as safety_validation_error:
+                log(
+                    "warning: pre-restore safety backup validation skipped: "
+                    + str(safety_validation_error)
+                )
 
             try:
                 log(

@@ -174,28 +174,28 @@ def copy_optional(
 def copy_traffic_state(stage: Path) -> bool:
     src = Path("/opt/irangate/traffic")
     dst = stage / "runtime" / "traffic"
-
-    if not src.is_dir():
-        return False
+    dst.mkdir(parents=True, exist_ok=True)
 
     copied = False
 
-    dst.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if src.exists():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+        copied = True
 
-    for child in sorted(
-        src.iterdir(),
-        key=lambda path: path.name,
-    ):
-        if child.name == "daily":
-            continue
+    required_defaults = {
+        "cumulative_totals.json": "{}",
+        "current_stats.json": "{}",
+        "node_usage_state.json": "{}",
+        "node_current_stats.json": "{}",
+        "global_usage_totals.json": "{}",
+        "usage_state.json": "{}",
+        "sessions_state.json": "{}",
+    }
 
-        if copy_optional(
-            child,
-            dst / child.name,
-        ):
+    for name, default in required_defaults.items():
+        target = dst / name
+        if not target.exists():
+            target.write_text(default)
             copied = True
 
     return copied

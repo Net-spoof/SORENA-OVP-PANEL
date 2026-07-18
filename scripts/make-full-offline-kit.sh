@@ -152,6 +152,97 @@ enable_postgresql() {
   fi
 }
 
+
+ensure_irangate_db_env() {
+  log "Ensuring /etc/irangate-db.env"
+
+  local db_name="${IRANGATE_DB_NAME:-irangate}"
+  local db_user="${IRANGATE_DB_USER:-irangate}"
+  local db_host="${IRANGATE_DB_HOST:-127.0.0.1}"
+  local db_port="${IRANGATE_DB_PORT:-5432}"
+  local db_pass="${IRANGATE_DB_PASSWORD:-}"
+
+  if [[ -f /etc/irangate-db.env ]]; then
+    set -a
+    . /etc/irangate-db.env || true
+    set +a
+    db_name="${IRANGATE_DB_NAME:-${DB_NAME:-${PGDATABASE:-$db_name}}}"
+    db_user="${IRANGATE_DB_USER:-${DB_USER:-${PGUSER:-$db_user}}}"
+    db_host="${IRANGATE_DB_HOST:-${DB_HOST:-${PGHOST:-$db_host}}}"
+    db_port="${IRANGATE_DB_PORT:-${DB_PORT:-${PGPORT:-$db_port}}}"
+    db_pass="${IRANGATE_DB_PASSWORD:-${DB_PASSWORD:-${PGPASSWORD:-$db_pass}}}"
+  fi
+
+  if [[ -z "$db_pass" ]]; then
+    db_pass="$(openssl rand -hex 24)"
+  fi
+
+  sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${db_user}') THEN
+    CREATE ROLE ${db_user} LOGIN PASSWORD '${db_pass}';
+  ELSE
+    ALTER ROLE ${db_user} WITH LOGIN PASSWORD '${db_pass}';
+  END IF;
+END
+\$\$;
+
+SELECT 'CREATE DATABASE ${db_name} OWNER ${db_user}'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${db_name}')\gexec
+
+GRANT ALL PRIVILEGES ON DATABASE ${db_name} TO ${db_user};
+SQL
+
+  sudo -u postgres psql -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
+ALTER SCHEMA public OWNER TO ${db_user};
+GRANT ALL ON SCHEMA public TO ${db_user};
+SQL
+
+  cat > /etc/irangate-db.env <<EOF_DB
+IRANGATE_DB_HOST=${db_host}
+IRANGATE_DB_PORT=${db_port}
+IRANGATE_DB_NAME=${db_name}
+IRANGATE_DB_USER=${db_user}
+IRANGATE_DB_PASSWORD=${db_pass}
+
+PGHOST=${db_host}
+PGPORT=${db_port}
+PGDATABASE=${db_name}
+PGUSER=${db_user}
+PGPASSWORD=${db_pass}
+
+DB_HOST=${db_host}
+DB_PORT=${db_port}
+DB_NAME=${db_name}
+DB_USER=${db_user}
+DB_PASSWORD=${db_pass}
+
+POSTGRES_HOST=${db_host}
+POSTGRES_PORT=${db_port}
+POSTGRES_DB=${db_name}
+POSTGRES_USER=${db_user}
+POSTGRES_PASSWORD=${db_pass}
+EOF_DB
+
+  chmod 600 /etc/irangate-db.env
+  chown root:root /etc/irangate-db.env
+}
+
+ensure_traffic_runtime_files() {
+  log "Ensuring traffic runtime state files"
+
+  mkdir -p /opt/irangate/traffic
+
+  [[ -f /opt/irangate/traffic/cumulative_totals.json ]] || echo '{}' > /opt/irangate/traffic/cumulative_totals.json
+  [[ -f /opt/irangate/traffic/current_stats.json ]] || echo '{}' > /opt/irangate/traffic/current_stats.json
+  [[ -f /opt/irangate/traffic/node_usage_state.json ]] || echo '{}' > /opt/irangate/traffic/node_usage_state.json
+  [[ -f /opt/irangate/traffic/node_current_stats.json ]] || echo '{}' > /opt/irangate/traffic/node_current_stats.json
+  [[ -f /opt/irangate/traffic/global_usage_totals.json ]] || echo '{}' > /opt/irangate/traffic/global_usage_totals.json
+
+  chmod 0644 /opt/irangate/traffic/*.json
+}
+
 create_openvpn_pki() {
   log "Preparing OpenVPN PKI"
 
@@ -240,7 +331,7 @@ group nogroup
 persist-key
 persist-tun
 
-status /run/openvpn-server/status-server.log
+status /etc/openvpn/openvpn-status.log
 management 127.0.0.1 7505
 management-client-auth
 
@@ -360,12 +451,15 @@ main() {
   install_deps_bundle
   ensure_base_dirs
   enable_postgresql
+  ensure_irangate_db_env
+  ensure_traffic_runtime_files
   install_panel_bundle
   create_openvpn_pki
   write_openvpn_config
   enable_routing_nat
   start_openvpn
   optional_nginx_proxy
+  ensure_traffic_runtime_files
   health_check
 
   echo
