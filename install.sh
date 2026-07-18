@@ -2114,6 +2114,14 @@ show_final_summary() {
     echo -e "${GREEN}For support and documentation, visit: https://github.com/amiridev-org/irangate-ov${NC}"
     echo ""
 }
+
+apply_panel_extras_if_available() {
+    if [[ -x "$SCRIPT_DIR/scripts/apply-panel-extras.sh" ]]; then
+        log_info "Applying panel extras: Outbounds, Proxy, Backup wrappers..."
+        bash "$SCRIPT_DIR/scripts/apply-panel-extras.sh" --restart || log_warn "Panel extras apply had warnings"
+    fi
+}
+
 main() {
     display_banner
     touch "$LOG_FILE"
@@ -2143,6 +2151,7 @@ main() {
     fix_openvpn_runtime
 
     if ! test_services; then
+apply_panel_extras_if_available
         log_warn "Installation completed with service warnings"
     fi
 

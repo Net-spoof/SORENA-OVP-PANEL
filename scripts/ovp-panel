@@ -75,6 +75,21 @@ PY
     chmod 600 "$ENV_FILE"
 }
 
+
+apply_panel_extras_after_update() {
+    local repo
+    repo="$(detect_repo 2>/dev/null || true)"
+    if [[ -z "$repo" || ! -d "$repo" ]]; then
+        repo="$(pwd)"
+    fi
+
+    if [[ -x "$repo/scripts/apply-panel-extras.sh" ]]; then
+        echo
+        echo "Applying panel extras: Outbounds, Proxy, Backup wrappers..."
+        bash "$repo/scripts/apply-panel-extras.sh" --restart || echo "Panel extras apply had warnings"
+    fi
+}
+
 detect_repo() {
     local repo=""
 
@@ -4263,7 +4278,9 @@ update_panel() {
 
         echo
         echo -e "${BLUE}==================================================${NC}"
-        echo -e "${GREEN}Update completed successfully ✅${NC}"
+        apply_panel_extras_after_update
+
+    echo -e "${GREEN}Update completed successfully ✅${NC}"
         echo -e "${BLUE}==================================================${NC}"
         echo
         echo "Branch: $branch"
