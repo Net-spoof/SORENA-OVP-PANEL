@@ -138,17 +138,17 @@ install_backup_core() {
 }
 
 deploy_frontend() {
-  log "Deploying frontend to $FRONTEND_DIR"
+  log "Deploying full frontend to $FRONTEND_DIR"
 
-  mkdir -p "$FRONTEND_DIR/js"
-
-  find "$INSTALL_DIR/webpanel/frontend" -maxdepth 1 -type f -print0 \
-    | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/"
-
-  if [[ -d "$INSTALL_DIR/webpanel/frontend/js" ]]; then
-    find "$INSTALL_DIR/webpanel/frontend/js" -maxdepth 1 -type f -print0 \
-      | xargs -0 -r -I{} install -m 0644 "{}" "$FRONTEND_DIR/js/"
+  if [[ ! -d "$INSTALL_DIR/webpanel/frontend" ]]; then
+    fail "frontend source not found: $INSTALL_DIR/webpanel/frontend"
   fi
+
+  mkdir -p "$FRONTEND_DIR"
+
+  rsync -a --delete \
+    "$INSTALL_DIR/webpanel/frontend/" \
+    "$FRONTEND_DIR/"
 
   local version
   version="$(date +%s)"
