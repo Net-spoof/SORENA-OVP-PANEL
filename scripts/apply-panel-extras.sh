@@ -54,7 +54,10 @@ find_go() {
 }
 
 build_backend() {
-    [[ "$SKIP_BUILD" -eq 0 ]] || return
+    if [[ "$SKIP_BUILD" -eq 1 ]]; then
+        log "Web panel backend build skipped"
+        return 0
+    fi
 
     local go_bin
     go_bin="$(find_go)" || {
