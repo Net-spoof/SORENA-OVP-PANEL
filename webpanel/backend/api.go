@@ -3057,6 +3057,15 @@ func subGlobalUsageTotal(clientName string) int64 {
 }
 
 func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
+	// The subscription page and all generated download links must never
+	// be reused from browser, proxy or download-manager caches.
+	w.Header().Set(
+		"Cache-Control",
+		"no-store, no-cache, must-revalidate, max-age=0",
+	)
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	token := mux.Vars(r)["token"]
 
 	clientName, clientData, err := findClientBySubscriptionToken(token)
@@ -3185,7 +3194,16 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		progressText = fmt.Sprintf("%s از %s مصرف شده است", subFormatBytes(used), subFormatBytes(limit))
 	}
 
-	downloadURL := "/sub/" + template.URLQueryEscaper(token) + "/download"
+	downloadCacheVersion := strconv.FormatInt(
+		time.Now().UnixNano(),
+		10,
+	)
+
+	downloadURL := "/sub/" +
+		template.URLQueryEscaper(token) +
+		"/download?v=" +
+		downloadCacheVersion
+
 	subURL := buildSubscriptionURL(r, token)
 
 	masterAllowed := clientHasNode(
@@ -3197,7 +3215,10 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	if !masterAllowed {
 		ikev2Cfg.Available = false
 	}
-	ikev2DownloadURL := "/sub/" + template.URLQueryEscaper(token) + "/ikev2.txt"
+	ikev2DownloadURL := "/sub/" +
+		template.URLQueryEscaper(token) +
+		"/ikev2.txt?v=" +
+		downloadCacheVersion
 
 	masterName := "Germany Master"
 	masterFlag := "🇩🇪"
@@ -3225,7 +3246,12 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 				"Name":     node.Name,
 				"Flag":     node.Flag,
 				"Location": node.Location,
-				"URL":      "/sub/" + template.URLQueryEscaper(token) + "/node/" + template.URLQueryEscaper(node.ID) + "/download",
+				"URL": "/sub/" +
+					template.URLQueryEscaper(token) +
+					"/node/" +
+					template.URLQueryEscaper(node.ID) +
+					"/download?v=" +
+					downloadCacheVersion,
 			})
 		}
 	}
@@ -3259,6 +3285,9 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>لینک ساب - {{.ClientName}}</title>
 <style>
 *{box-sizing:border-box}
@@ -3371,7 +3400,7 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
           </div>
           <div class="ike-sub">اتصال داخلی گوشی‌های اندروید و iOS بدون نیاز به فایل OVPN</div>
         </div>
-        <a class="ike-btn primary" href="{{.IKEv2DownloadURL}}">⬇️ دانلود اطلاعات IKEv2</a>
+        <a class="ike-btn primary fresh-download" href="{{.IKEv2DownloadURL}}">⬇️ دانلود اطلاعات IKEv2</a>
       </div>
 
       <div class="ike-body">
@@ -3435,10 +3464,10 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
 
       <div class="actions">
         {{if .MasterAllowed}}
-        <a class="btn btn-main" href="{{.DownloadURL}}">دانلود {{.MasterFlag}} {{.MasterName}}</a>
+        <a class="btn btn-main fresh-download" href="{{.DownloadURL}}">دانلود {{.MasterFlag}} {{.MasterName}}</a>
         {{end}}
         {{range .NodeDownloads}}
-        <a class="btn btn-ghost" href="{{.URL}}">دانلود {{.Flag}} {{.Name}}</a>
+        <a class="btn btn-ghost fresh-download" href="{{.URL}}">دانلود {{.Flag}} {{.Name}}</a>
         {{end}}
       </div>
     </div>
@@ -3496,6 +3525,27 @@ function copyIKEValue(btn) {
 }
 </script>
 
+<script>
+document.querySelectorAll(".fresh-download").forEach(function(link) {
+    link.addEventListener("click", function(event) {
+        event.preventDefault();
+
+        const freshURL = new URL(
+            link.getAttribute("href"),
+            window.location.href
+        );
+
+        freshURL.searchParams.set(
+            "v",
+            Date.now().toString()
+        );
+
+        window.location.assign(
+            freshURL.toString()
+        );
+    });
+});
+</script>
 </body>
 </html>`))
 
