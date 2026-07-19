@@ -61,10 +61,11 @@ type LoginResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 type ServerConfig struct {
-	ServerIP     string `json:"server_ip"`
-	ServerDomain string `json:"server_domain"`
-	ServerPort   int    `json:"server_port"`
-	Protocol     string `json:"protocol"`
+	ServerIP        string `json:"server_ip"`
+	IKEv2ServerHost string `json:"ikev2_server_host,omitempty"`
+	ServerDomain    string `json:"server_domain"`
+	ServerPort      int    `json:"server_port"`
+	Protocol        string `json:"protocol"`
 }
 
 type NodeConfig struct {
@@ -630,6 +631,24 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ikev2Cfg, ikev2Err := ensureIKEv2Account(req.Name, true)
+	ikev2Result := map[string]interface{}{
+		"enabled": false,
+	}
+	if ikev2Err != nil {
+		log.Printf("IKEv2 create failed for %s: %v", req.Name, ikev2Err)
+		ikev2Result["error"] = ikev2Err.Error()
+	} else {
+		ikev2Result = map[string]interface{}{
+			"enabled":    true,
+			"type":       "IKEv2/IPSec MSCHAPv2",
+			"server":     ikev2Cfg.Server,
+			"identifier": ikev2Cfg.Identifier,
+			"username":   ikev2Cfg.Username,
+			"password":   ikev2Cfg.Password,
+		}
+	}
+
 	nodeResults := []map[string]interface{}{}
 	for _, node := range activeRemoteNodesByIDs(req.Nodes) {
 		err := createClientOnNode(node, req.Name)
@@ -653,6 +672,7 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 	sendSuccess(w, "Client created successfully", map[string]interface{}{
 		"name":  req.Name,
 		"nodes": nodeResults,
+		"ikev2": ikev2Result,
 	})
 }
 func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
@@ -664,6 +684,11 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Failed to remove client: "+string(output), http.StatusInternalServerError)
 		return
 	}
+
+	if output, err := exec.Command("/usr/local/sbin/irangate-ikev2", "del", name).CombinedOutput(); err != nil {
+		log.Printf("IKEv2 delete failed for %s: %v output=%s", name, err, string(output))
+	}
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
@@ -2183,6 +2208,169 @@ func buildSubscriptionURL(r *http.Request, token string) string {
 	)
 }
 
+type IKEv2SubscriptionInfo struct {
+	Available  bool
+	Server     string
+	Identifier string
+	Username   string
+	Password   string
+	Error      string
+}
+
+func ikev2StringFromMap(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		v := strings.TrimSpace(fmt.Sprintf("%v", m[key]))
+		if v != "" && v != "<nil>" {
+			return v
+		}
+	}
+	return ""
+}
+
+func ikev2PreferredServerHost() string {
+	for _, path := range []string{
+		"/opt/irangate/webpanel/server.json",
+		"/opt/irangate/server_config.json",
+		"/opt/irangate/database/settings.json",
+	} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var m map[string]interface{}
+		if json.Unmarshal(b, &m) != nil {
+			continue
+		}
+
+		// IKEv2 can intentionally use a different public IP/domain than OpenVPN.
+		if v, ok := m["ikev2_server_host"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+
+		if v, ok := m["server_domain"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+
+		if v, ok := m["server_ip"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+
+		if v, ok := m["public_ip"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+
+	out, err := exec.Command(
+		"sh",
+		"-c",
+		`ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'`,
+	).Output()
+
+	if err == nil {
+		host := strings.TrimSpace(
+			string(out),
+		)
+
+		if host != "" {
+			return host
+		}
+	}
+
+	return ""
+}
+
+func ikev2Run(args ...string) (string, error) {
+	cmd := exec.Command("/usr/local/sbin/irangate-ikev2", args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func parseIKEv2AccountOutput(out string) IKEv2SubscriptionInfo {
+	info := IKEv2SubscriptionInfo{
+		Server:     ikev2PreferredServerHost(),
+		Identifier: ikev2PreferredServerHost(),
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+
+		if strings.HasPrefix(line, "Username:") {
+			info.Username = strings.TrimSpace(strings.TrimPrefix(line, "Username:"))
+		}
+
+		if strings.HasPrefix(line, "Password:") {
+			info.Password = strings.TrimSpace(strings.TrimPrefix(line, "Password:"))
+		}
+	}
+
+	info.Available = info.Username != "" && info.Password != ""
+	return info
+}
+
+func ensureIKEv2Account(clientName string, createIfMissing bool) (IKEv2SubscriptionInfo, error) {
+	out, err := ikev2Run("show", clientName)
+	if err == nil {
+		info := parseIKEv2AccountOutput(out)
+		if info.Available {
+			return info, nil
+		}
+	}
+
+	if !createIfMissing {
+		info := IKEv2SubscriptionInfo{
+			Server:     ikev2PreferredServerHost(),
+			Identifier: ikev2PreferredServerHost(),
+			Error:      strings.TrimSpace(out),
+		}
+		if info.Error == "" && err != nil {
+			info.Error = err.Error()
+		}
+		return info, err
+	}
+
+	out, err = ikev2Run("add", clientName)
+	if err != nil {
+		info := IKEv2SubscriptionInfo{
+			Server:     ikev2PreferredServerHost(),
+			Identifier: ikev2PreferredServerHost(),
+			Error:      strings.TrimSpace(out),
+		}
+		if info.Error == "" {
+			info.Error = err.Error()
+		}
+		return info, fmt.Errorf(info.Error)
+	}
+
+	info := parseIKEv2AccountOutput(out)
+	if !info.Available {
+		return info, fmt.Errorf("IKEv2 account output did not include username/password")
+	}
+
+	return info, nil
+}
+
+func ikev2InfoText(clientName string, info IKEv2SubscriptionInfo) string {
+	return fmt.Sprintf(`🔐 IKEv2/IPSec
+
+Type: IKEv2/IPSec MSCHAPv2
+Server: %s
+IPSec identifier: %s
+CA certificate: Do not validate
+IPSec server certificate: Received from server
+Username: %s
+Password: %s
+
+OpenVPN user: %s
+`,
+		info.Server,
+		info.Identifier,
+		info.Username,
+		info.Password,
+		clientName,
+	)
+}
+
 func findClientBySubscriptionToken(token string) (string, map[string]interface{}, error) {
 	if len(token) < 32 {
 		return "", nil, fmt.Errorf("invalid token")
@@ -2305,6 +2493,90 @@ func getClientSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	sendSuccess(w, "Subscription link retrieved", data)
 }
 
+func subIKEv2Online(clientName string) bool {
+	data, err := os.ReadFile("/opt/irangate/traffic/ikev2_current_stats.json")
+	if err != nil {
+		return false
+	}
+
+	var rows []map[string]interface{}
+	if json.Unmarshal(data, &rows) != nil {
+		return false
+	}
+
+	now := time.Now().UTC()
+
+	for _, row := range rows {
+		name := strings.TrimSpace(fmt.Sprintf("%v", row["client_name"]))
+		if name == "" {
+			name = strings.TrimSpace(fmt.Sprintf("%v", row["name"]))
+		}
+		if name == "" {
+			name = strings.TrimSpace(fmt.Sprintf("%v", row["username"]))
+		}
+
+		if name != clientName {
+			continue
+		}
+
+		connected := false
+		switch v := row["connected"].(type) {
+		case bool:
+			connected = v
+		case string:
+			s := strings.ToLower(strings.TrimSpace(v))
+			connected = s == "true" || s == "1" || s == "yes" || s == "online"
+		}
+
+		if !connected {
+			continue
+		}
+
+		lastRaw := strings.TrimSpace(fmt.Sprintf("%v", row["last_seen"]))
+		if lastRaw == "" || lastRaw == "<nil>" {
+			return true
+		}
+
+		lastSeen, err := time.Parse(time.RFC3339, lastRaw)
+		if err != nil {
+			return true
+		}
+
+		return now.Sub(lastSeen.UTC()) <= 90*time.Second
+	}
+
+	return false
+}
+
+func subGlobalUsageTotal(clientName string) int64 {
+	data, err := os.ReadFile("/opt/irangate/traffic/global_usage_totals.json")
+	if err != nil {
+		return 0
+	}
+
+	var root map[string]interface{}
+	if json.Unmarshal(data, &root) != nil {
+		return 0
+	}
+
+	totals, ok := root["totals"].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+
+	raw, ok := totals[clientName]
+	if !ok {
+		return 0
+	}
+
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return 0
+	}
+
+	return subInt64(m["total"])
+}
+
 func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	token := mux.Vars(r)["token"]
 
@@ -2345,6 +2617,10 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		used = subInt64(clientData["bytes_sent"]) + subInt64(clientData["bytes_received"])
 	}
 
+	if globalUsed := subGlobalUsageTotal(clientName); globalUsed > used {
+		used = globalUsed
+	}
+
 	left := int64(0)
 	if limit > 0 && used < limit {
 		left = limit - used
@@ -2381,6 +2657,9 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	isOnline := presence.Online
+	if subIKEv2Online(clientName) {
+		isOnline = true
+	}
 
 	onlineText := "آفلاین"
 	if isOnline {
@@ -2435,6 +2714,12 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"local",
 	)
 
+	ikev2Cfg, _ := ensureIKEv2Account(clientName, masterAllowed)
+	if !masterAllowed {
+		ikev2Cfg.Available = false
+	}
+	ikev2DownloadURL := "/sub/" + template.URLQueryEscaper(token) + "/ikev2.txt"
+
 	masterName := "Germany Master"
 	masterFlag := "🇩🇪"
 
@@ -2486,6 +2771,8 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"MasterAllowed":      masterAllowed,
 		"NodeDownloads":      subNodes,
 		"SubscriptionURL":    subURL,
+		"IKEv2":              ikev2Cfg,
+		"IKEv2DownloadURL":   ikev2DownloadURL,
 	}
 
 	tpl := template.Must(template.New("sub").Parse(`<!doctype html>
@@ -2531,6 +2818,26 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
 .btn-ghost{background:rgba(30,41,59,.8);border:1px solid rgba(148,163,184,.24);color:#e5e7eb}
 .footer{margin-top:16px;text-align:center;color:#64748b;font-size:12px}
 @media(max-width:800px){.grid{grid-template-columns:1fr}.profile,.config{flex-direction:column;align-items:stretch}.actions{justify-content:stretch}.btn{text-align:center;flex:1}.avatar{width:72px;height:72px}}
+
+.ike-card{margin-bottom:18px;padding:0;overflow:hidden;border:1px solid rgba(99,102,241,.28);background:linear-gradient(180deg,rgba(30,41,59,.62),rgba(15,23,42,.74));border-radius:18px}
+.ike-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px;border-bottom:1px solid rgba(148,163,184,.13)}
+.ike-title{display:flex;align-items:center;gap:10px;font-weight:900;color:#fff;font-size:17px}
+.ike-badge{display:inline-flex;align-items:center;justify-content:center;padding:5px 10px;border-radius:999px;background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#fff;font-size:12px;font-weight:900}
+.ike-sub{color:#94a3b8;font-size:12px;margin-top:4px}
+.ike-body{padding:16px}
+.ike-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.ike-item{background:rgba(2,6,23,.28);border:1px solid rgba(148,163,184,.13);border-radius:14px;padding:12px;min-height:72px}
+.ike-label{color:#94a3b8;font-size:12px;margin-bottom:7px}
+.ike-value{direction:ltr;text-align:left;color:#e5e7eb;font-size:14px;font-weight:800;word-break:break-all;line-height:1.7}
+.ike-value.fa{direction:rtl;text-align:right}
+.ike-password{color:#fef3c7}
+.ike-actions{display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap;margin-top:14px}
+.ike-btn{border:0;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:11px 14px;border-radius:13px;background:rgba(30,41,59,.8);color:#e5e7eb;text-decoration:none;font-weight:900;font-size:13px}
+.ike-btn.primary{background:linear-gradient(135deg,#7c3aed,#2563eb)}
+.ike-btn:hover{filter:brightness(1.12)}
+.ike-note{margin-top:12px;color:#94a3b8;font-size:12px;line-height:1.9}
+@media(max-width:720px){.ike-grid{grid-template-columns:1fr}.ike-head{align-items:flex-start;flex-direction:column}.ike-actions{justify-content:stretch}.ike-btn{width:100%;justify-content:center}}
+
 </style>
 </head>
 <body>
@@ -2574,7 +2881,66 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
   </div>
 
   <div class="section">
-    <div class="section-title">OpenVPN</div>
+
+{{if .IKEv2.Available}}
+    <div class="ike-card">
+      <div class="ike-head">
+        <div>
+          <div class="ike-title">
+            <span>🔐 IKEv2 / IPSec</span>
+            <span class="ike-badge">MSCHAPv2</span>
+          </div>
+          <div class="ike-sub">اتصال داخلی گوشی‌های اندروید و iOS بدون نیاز به فایل OVPN</div>
+        </div>
+        <a class="ike-btn primary" href="{{.IKEv2DownloadURL}}">⬇️ دانلود اطلاعات IKEv2</a>
+      </div>
+
+      <div class="ike-body">
+        <div class="ike-grid">
+          <div class="ike-item">
+            <div class="ike-label">نوع اتصال</div>
+            <div class="ike-value fa">IKEv2/IPSec MSCHAPv2</div>
+          </div>
+
+          <div class="ike-item">
+            <div class="ike-label">Server</div>
+            <div class="ike-value">{{.IKEv2.Server}}</div>
+          </div>
+
+          <div class="ike-item">
+            <div class="ike-label">IPSec identifier</div>
+            <div class="ike-value">{{.IKEv2.Identifier}}</div>
+          </div>
+
+          <div class="ike-item">
+            <div class="ike-label">Username</div>
+            <div class="ike-value">{{.IKEv2.Username}}</div>
+          </div>
+
+          <div class="ike-item">
+            <div class="ike-label">Password</div>
+            <div class="ike-value ike-password">{{.IKEv2.Password}}</div>
+          </div>
+
+          <div class="ike-item">
+            <div class="ike-label">Certificate</div>
+            <div class="ike-value fa">CA: Do not validate<br>Server: Received from server</div>
+          </div>
+        </div>
+
+        <div class="ike-actions">
+          <button class="ike-btn" type="button" data-copy="{{.IKEv2.Server}}" onclick="copyIKEValue(this)">کپی Server</button>
+          <button class="ike-btn" type="button" data-copy="{{.IKEv2.Identifier}}" onclick="copyIKEValue(this)">کپی Identifier</button>
+          <button class="ike-btn" type="button" data-copy="{{.IKEv2.Username}}" onclick="copyIKEValue(this)">کپی Username</button>
+          <button class="ike-btn" type="button" data-copy="{{.IKEv2.Password}}" onclick="copyIKEValue(this)">کپی Password</button>
+        </div>
+
+        <div class="ike-note">در تنظیمات VPN گوشی، نوع اتصال را روی <b>IKEv2/IPSec MSCHAPv2</b> بگذارید. مقدار CA را روی <b>Do not validate</b> و Server certificate را روی <b>Received from server</b> قرار دهید.</div>
+      </div>
+    </div>
+{{end}}
+
+<div class="section-title">OpenVPN</div>
 
     <div class="config">
       <div>
@@ -2602,11 +2968,91 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
   </div>
 </div>
 
+
+<script>
+function copyIKEValue(btn) {
+  var value = btn.getAttribute('data-copy') || '';
+  var oldText = btn.textContent;
+
+  function show(ok) {
+    btn.textContent = ok ? 'کپی شد ✅' : 'کپی نشد ❌';
+    setTimeout(function () {
+      btn.textContent = oldText;
+    }, 1400);
+  }
+
+  function fallbackCopy() {
+    var ta = document.createElement('textarea');
+    ta.value = value;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.left = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+
+    var ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (e) {
+      ok = false;
+    }
+
+    document.body.removeChild(ta);
+    show(ok);
+  }
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(value).then(function () {
+      show(true);
+    }).catch(function () {
+      fallbackCopy();
+    });
+  } else {
+    fallbackCopy();
+  }
+}
+</script>
+
 </body>
 </html>`))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	tpl.Execute(w, pageData)
+}
+
+func subscriptionIKEv2DownloadHandler(w http.ResponseWriter, r *http.Request) {
+	token := mux.Vars(r)["token"]
+
+	clientName, clientData, err := findClientBySubscriptionToken(token)
+	if err != nil {
+		http.Error(w, "Subscription not found", http.StatusNotFound)
+		return
+	}
+
+	if !clientHasNode(clientData, "local") {
+		http.Error(w, "Node access denied", http.StatusForbidden)
+		return
+	}
+
+	info, err := ensureIKEv2Account(clientName, true)
+	if err != nil || !info.Available {
+		msg := "IKEv2 config is not ready"
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		http.Error(w, msg, http.StatusInternalServerError)
+		return
+	}
+
+	safeName := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(clientName)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-ikev2.txt\"", safeName))
+	_, _ = w.Write([]byte(ikev2InfoText(clientName, info)))
 }
 
 func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -2739,6 +3185,7 @@ func main() {
 	r := rootRouter
 	r.HandleFunc("/ws", wsHandler)
 	r.HandleFunc("/sub/{token}", subscriptionPageHandler).Methods("GET")
+	r.HandleFunc("/sub/{token}/ikev2.txt", subscriptionIKEv2DownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/node/{node}/download", subscriptionNodeDownloadHandler).Methods("GET")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
@@ -3135,10 +3582,11 @@ func getServerConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 func updateServerConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ServerIP     string `json:"server_ip"`
-		ServerDomain string `json:"server_domain"`
-		UseDomain    bool   `json:"use_domain"`
-		AutoDetectIP bool   `json:"auto_detect_ip"`
+		ServerIP        string `json:"server_ip"`
+		IKEv2ServerHost string `json:"ikev2_server_host,omitempty"`
+		ServerDomain    string `json:"server_domain"`
+		UseDomain       bool   `json:"use_domain"`
+		AutoDetectIP    bool   `json:"auto_detect_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)

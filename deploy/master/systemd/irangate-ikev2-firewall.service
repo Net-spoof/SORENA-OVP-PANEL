@@ -1,0 +1,12 @@
+[Unit]
+Description=IranGate IKEv2 Firewall and NAT
+After=network-online.target strongswan.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-ikev2-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

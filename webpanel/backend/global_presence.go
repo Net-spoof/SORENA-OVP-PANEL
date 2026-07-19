@@ -286,6 +286,9 @@ func loadGlobalPresence() map[string]GlobalClientPresence {
 			Freshness:       2 * time.Minute,
 		},
 		{
+			Path: "/opt/irangate/traffic/ikev2_current_stats.json",
+		},
+		{
 			Path:      "/opt/irangate/traffic/node_current_stats.json",
 			Freshness: 45 * time.Second,
 		},
@@ -398,6 +401,82 @@ func loadGlobalPresence() map[string]GlobalClientPresence {
 	return result
 }
 
+func latestIKEv2HistoryPresenceTime(
+	name string,
+) time.Time {
+
+	data, err := os.ReadFile(
+		"/opt/irangate/traffic/ikev2_last_seen.json",
+	)
+
+	if err != nil {
+		return time.Time{}
+	}
+
+	var rows []map[string]interface{}
+
+	if err := json.Unmarshal(
+		data,
+		&rows,
+	); err != nil {
+		return time.Time{}
+	}
+
+	wanted := strings.ToLower(
+		strings.TrimSpace(name),
+	)
+
+	if wanted == "" {
+		return time.Time{}
+	}
+
+	var latest time.Time
+
+	for _, row := range rows {
+		rowName := strings.TrimSpace(
+			presenceString(
+				row["client_name"],
+			),
+		)
+
+		if rowName == "" {
+			rowName = strings.TrimSpace(
+				presenceString(
+					row["name"],
+				),
+			)
+		}
+
+		if rowName == "" {
+			rowName = strings.TrimSpace(
+				presenceString(
+					row["username"],
+				),
+			)
+		}
+
+		if strings.ToLower(rowName) != wanted {
+			continue
+		}
+
+		for _, key := range []string{
+			"last_seen",
+			"last_connection",
+			"updated_at",
+		} {
+			t := presenceTimeValue(
+				row[key],
+			)
+
+			if t.After(latest) {
+				latest = t
+			}
+		}
+	}
+
+	return latest
+}
+
 func globalPresenceForClient(
 	name string,
 	clientData map[string]interface{},
@@ -436,6 +515,18 @@ func globalPresenceForClient(
 	) {
 		result.LastSeen =
 			historySeen
+	}
+
+	ikev2HistorySeen :=
+		latestIKEv2HistoryPresenceTime(
+			name,
+		)
+
+	if ikev2HistorySeen.After(
+		result.LastSeen,
+	) {
+		result.LastSeen =
+			ikev2HistorySeen
 	}
 
 	return result

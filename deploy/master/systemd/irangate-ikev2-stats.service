@@ -1,0 +1,6 @@
+[Unit]
+Description=IranGate IKEv2 current stats snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-ikev2-stats-snapshot

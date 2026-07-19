@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+
+set -u
+
+CONN_NAME="irangate-ikev2-mschapv2"
+
+
+preferred_host() {
+  python3 - <<'PY_HOST'
+import json
+import re
+import subprocess
+from pathlib import Path
+from urllib.parse import urlparse
+
+paths = [
+    Path("/opt/irangate/webpanel/server.json"),
+    Path("/opt/irangate/server_config.json"),
+    Path("/opt/irangate/database/settings.json"),
+]
+
+keys = (
+    "ikev2_server_host",
+    "server_domain",
+    "server_ip",
+    "public_ip",
+)
+
+def normalize(value):
+    value = str(value or "").strip()
+
+    if not value:
+        return ""
+
+    if "://" in value:
+        parsed = urlparse(value)
+        value = parsed.hostname or ""
+
+    value = value.strip().strip("[]")
+
+    if value.count(":") == 1:
+        host, port = value.rsplit(":", 1)
+        if port.isdigit():
+            value = host
+
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+        return ""
+
+    return value
+
+for path in paths:
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+
+    if not isinstance(data, dict):
+        continue
+
+    for key in keys:
+        value = normalize(data.get(key))
+        if value:
+            print(value)
+            raise SystemExit
+
+try:
+    output = subprocess.check_output(
+        ["ip", "-4", "route", "get", "1.1.1.1"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+
+    fields = output.split()
+
+    if "src" in fields:
+        value = normalize(fields[fields.index("src") + 1])
+        if value:
+            print(value)
+            raise SystemExit
+except Exception:
+    pass
+
+print("127.0.0.1")
+PY_HOST
+}
+
+
+BASE_DIR="/opt/irangate/ikev2"
+USERS_DB="$BASE_DIR/users.tsv"
+USERS_CONF="/etc/swanctl/conf.d/irangate-ikev2-users.conf"
+
+mkdir -p "$BASE_DIR"
+touch "$USERS_DB"
+chmod 600 "$USERS_DB"
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+valid_user() {
+  [[ "$1" =~ ^[a-zA-Z0-9._-]{3,64}$ ]]
+}
+
+valid_pass() {
+  [[ "$1" =~ ^[a-zA-Z0-9._@%+=:-]{8,128}$ ]]
+}
+
+gen_pass() {
+  openssl rand -base64 24 | tr -d '=+/' | cut -c1-22
+}
+
+render_users_conf() {
+  {
+    echo "secrets {"
+    awk -F'\t' '$4=="active" {
+      user=$1
+      pass=$2
+      key=user
+      gsub(/[^a-zA-Z0-9_-]/, "_", key)
+      print "    eap-" key " {"
+      print "        id = \"" user "\""
+      print "        secret = \"" pass "\""
+      print "    }"
+    }' "$USERS_DB"
+    echo "}"
+  } > "$USERS_CONF"
+
+  chmod 600 "$USERS_CONF"
+}
+
+reload_swanctl() {
+  swanctl --load-all --noprompt >/dev/null 2>&1 || {
+    echo "WARNING: swanctl reload failed" >&2
+    swanctl --load-all --noprompt 2>&1 || true
+  }
+}
+
+terminate_user() {
+  local target="${1:-}"
+  [ -n "$target" ] || die "usage: irangate-ikev2 terminate USER"
+  valid_user "$target" || die "invalid username"
+
+  local out
+  out="$(swanctl --list-sas 2>/dev/null || true)"
+
+  local ike_id=""
+  local found=0
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[^[:space:]].*#([0-9]+), ]]; then
+      ike_id="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$line" == *"EAP: '$target'"* ]]; then
+      found=1
+      echo "terminating user=$target ike_id=$ike_id"
+      swanctl --terminate --ike-id "$ike_id" 2>&1 || true
+    fi
+  done <<< "$out"
+
+  if [ "$found" -eq 0 ]; then
+    echo "no active session for $target"
+  fi
+}
+
+set_status() {
+  local user="${1:-}"
+  local status="${2:-}"
+
+  [ -n "$user" ] || die "usage: irangate-ikev2 status USER active|blocked"
+  valid_user "$user" || die "invalid username"
+
+  [[ "$status" == "active" || "$status" == "blocked" ]] || die "invalid status"
+
+  local row pass created old_status
+  row="$(awk -F'\t' -v u="$user" '$1==u {print; exit}' "$USERS_DB")"
+
+  if [ -z "$row" ]; then
+    echo "IKEv2 user not found; nothing to change: $user"
+    return 0
+  fi
+
+  pass="$(echo "$row" | awk -F'\t' '{print $2}')"
+  created="$(echo "$row" | awk -F'\t' '{print $3}')"
+  old_status="$(echo "$row" | awk -F'\t' '{print $4}')"
+
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+  mv "$USERS_DB.tmp" "$USERS_DB"
+
+  printf "%s\t%s\t%s\t%s\n" "$user" "$pass" "$created" "$status" >> "$USERS_DB"
+  chmod 600 "$USERS_DB"
+
+  render_users_conf
+  reload_swanctl
+
+  if [ "$status" = "blocked" ]; then
+    terminate_user "$user" >/dev/null 2>&1 || true
+  fi
+
+  echo "IKEv2 user status changed ✅ user=$user old=$old_status new=$status"
+}
+
+add_user() {
+  local user="${1:-}"
+  local pass="${2:-}"
+
+  [ -n "$user" ] || die "usage: irangate-ikev2 add USER [PASSWORD]"
+  valid_user "$user" || die "invalid username. allowed: a-z A-Z 0-9 . _ - length 3-64"
+
+  if [ -z "$pass" ]; then
+    pass="$(gen_pass)"
+  fi
+
+  valid_pass "$pass" || die "invalid password. min 8, no spaces or quotes"
+
+  local created
+  created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+  mv "$USERS_DB.tmp" "$USERS_DB"
+
+  printf "%s\t%s\t%s\tactive\n" "$user" "$pass" "$created" >> "$USERS_DB"
+  chmod 600 "$USERS_DB"
+
+  render_users_conf
+  reload_swanctl
+
+  echo "IKEv2 user created ✅"
+  echo
+  show_config "$user"
+}
+
+delete_user() {
+  local user="${1:-}"
+  [ -n "$user" ] || die "usage: irangate-ikev2 del USER"
+  valid_user "$user" || die "invalid username"
+
+  terminate_user "$user" >/dev/null 2>&1 || true
+
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+  mv "$USERS_DB.tmp" "$USERS_DB"
+  chmod 600 "$USERS_DB"
+
+  render_users_conf
+  reload_swanctl
+
+  echo "IKEv2 user deleted ✅ $user"
+}
+
+list_users() {
+  echo "===== IKEv2 USERS ====="
+  if [ ! -s "$USERS_DB" ]; then
+    echo "no users"
+    return 0
+  fi
+
+  awk -F'\t' 'BEGIN {
+    printf "%-24s %-10s %-22s\n", "USERNAME", "STATUS", "CREATED"
+  }
+  {
+    printf "%-24s %-10s %-22s\n", $1, $4, $3
+  }' "$USERS_DB"
+}
+
+sessions() {
+  local out
+  out="$(swanctl --list-sas 2>/dev/null || true)"
+
+  if [ -z "$out" ]; then
+    echo "no active IKEv2 sessions"
+    return 0
+  fi
+
+  local ike_id=""
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[^[:space:]].*#([0-9]+), ]]; then
+      ike_id="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$line" == *" EAP: '"* ]]; then
+      user="${line#*EAP: \'}"
+      user="${user%%\'*}"
+      ip="${line##*[}"
+      ip="${ip%%]*}"
+      echo "ike_id=$ike_id user=$user ip=$ip"
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]+in[[:space:]] ]]; then
+      echo "$line"
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]+out[[:space:]] ]]; then
+      echo "$line"
+    fi
+  done <<< "$out"
+}
+
+terminate_all() {
+  swanctl --terminate --ike "$CONN_NAME" 2>&1 || true
+}
+
+show_config() {
+  local user="${1:-}"
+  [ -n "$user" ] || die "usage: irangate-ikev2 show USER"
+  valid_user "$user" || die "invalid username"
+
+  local row pass status
+  row="$(awk -F'\t' -v u="$user" '$1==u {print; exit}' "$USERS_DB")"
+  [ -n "$row" ] || die "user not found"
+
+  pass="$(echo "$row" | awk -F'\t' '{print $2}')"
+  status="$(echo "$row" | awk -F'\t' '{print $4}')"
+
+  local public_host
+  public_host="$(preferred_host)"
+
+  # Show credentials even when blocked/expired.
+  # Authentication is still disabled because blocked users are not rendered into swanctl secrets.
+  echo "Status: $status"
+
+  echo "Type: IKEv2/IPSec MSCHAPv2"
+  echo "Server: $public_host"
+  echo "IPSec identifier: $public_host"
+  echo "CA certificate: Do not validate"
+  echo "IPSec server certificate: Received from server"
+  echo "Username: $user"
+  echo "Password: $pass"
+}
+
+case "${1:-}" in
+  add)
+    add_user "${2:-}" "${3:-}"
+    ;;
+  del|delete|remove)
+    delete_user "${2:-}"
+    ;;
+  block)
+    set_status "${2:-}" "blocked"
+    ;;
+  unblock)
+    set_status "${2:-}" "active"
+    ;;
+  list)
+    list_users
+    ;;
+  sessions|online)
+    sessions
+    ;;
+  terminate|kill)
+    terminate_user "${2:-}"
+    ;;
+  terminate-all|kill-all)
+    terminate_all
+    ;;
+  show|config)
+    show_config "${2:-}"
+    ;;
+  reload)
+    render_users_conf
+    reload_swanctl
+    echo "IKEv2 users reloaded ✅"
+    ;;
+  *)
+    cat <<USAGE
+IranGate IKEv2 user manager
+
+Usage:
+  irangate-ikev2 add USER [PASSWORD]
+  irangate-ikev2 del USER
+  irangate-ikev2 block USER
+  irangate-ikev2 unblock USER
+  irangate-ikev2 list
+  irangate-ikev2 sessions
+  irangate-ikev2 terminate USER
+  irangate-ikev2 terminate-all
+  irangate-ikev2 show USER
+  irangate-ikev2 reload
+USAGE
+    ;;
+esac

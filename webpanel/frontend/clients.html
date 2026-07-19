@@ -1158,9 +1158,17 @@
 
 
                 if (!nodes.length) {
-                    box.innerHTML =
-                        '<div class="text-xs text-red-600">No enabled nodes available</div>';
-
+                    container.innerHTML = `
+                        <label class="flex items-center justify-between gap-3 rounded-lg border border-cyan-500/40 bg-slate-900/70 p-3">
+                            <div class="flex items-center gap-3">
+                                <input type="checkbox" value="local" checked disabled class="edit-node-checkbox h-4 w-4 accent-cyan-400">
+                                <div>
+                                    <div class="text-sm font-semibold text-white">🇩🇪 Germany Master</div>
+                                    <div class="text-xs text-slate-400">Master / Local node</div>
+                                </div>
+                            </div>
+                            <span class="text-xs text-emerald-300">Default</span>
+                        </label>`;
                     return;
                 }
 
@@ -1306,11 +1314,7 @@
                 getSelectedEditClientNodes();
 
             if (!selectedNodes.length) {
-                showToast(
-                    'Select at least one node',
-                    'error'
-                );
-                return;
+                selectedNodes.push('local');
             }
 
 
@@ -1344,7 +1348,7 @@
                         connection_limit: connectionLimit,
                         active: document.getElementById('editActive').checked,
                         reset_traffic: resetTraffic,
-                        nodes: selectedNodes
+                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local'])
                     })
                 });
 
@@ -1438,7 +1442,7 @@
                         expiration_days: expirationDays,
                         traffic_limit_bytes: trafficLimitBytes,
                         connection_limit: connectionLimit,
-                        nodes: selectedNodes
+                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local'])
                     })
                 });
                 

@@ -29,7 +29,7 @@
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Outbounds</h1>
-                <p class="text-gray-500 mt-1">Route OpenVPN UDP traffic through selected outbound strategies.</p>
+                <p class="text-gray-500 mt-1">Select an inbound VPN port, then route it through selected outbound strategies.</p>
             </div>
 
             <div class="flex flex-wrap gap-2">
@@ -92,12 +92,38 @@
             </div>
 
             <div class="bg-white rounded-xl shadow p-6">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Bind to OpenVPN UDP</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Bind / Route Inbound</h2>
+
+                <div id="inboundBindSelector" class="mb-4 rounded-xl border border-cyan-500/30 bg-slate-950/30 p-4">
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Inbound</label>
+                    <select id="inboundPortSelect" class="w-full rounded-lg bg-slate-800 border border-slate-600 px-3 py-3 text-white focus:border-cyan-400 focus:outline-none">
+                        <option value="443" selected>OpenVPN — UDP 443</option>
+                        <option value="500">IKEv2 / IPSec — UDP 500</option>
+                        <option value="4500">IKEv2 NAT-T — UDP 4500</option>
+                    </select>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 text-sm">
+                        <div class="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <div class="text-xs text-gray-500">Selected</div>
+                            <div id="selectedInboundName" class="font-bold text-white mt-1">OpenVPN</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <div class="text-xs text-gray-500">Port</div>
+                            <div id="selectedInboundPortText" class="font-bold text-cyan-300 mt-1">UDP 443</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <div class="text-xs text-gray-500">Usage</div>
+                            <div id="selectedInboundNote" class="font-bold text-white mt-1">OpenVPN traffic</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- /inboundBindSelector -->
+
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-gray-600 mb-1">Port</label>
-                        <input id="bindPort" type="number" value="443" class="w-full border rounded-lg px-3 py-2">
+                        <input id="bindPort" type="number" value="443" class="w-full border rounded-lg px-3 py-2" readonly>
                     </div>
 
                     <div>
@@ -124,7 +150,7 @@
                     </div>
 
                     <div class="md:col-span-2 bg-gray-900 rounded-lg p-3 text-xs text-green-300 font-mono">
-                        <div class="text-gray-400 mb-1">Selected Route Preview</div>
+                        <div class="text-gray-400 mb-1">Selected Inbound Route Preview</div>
                         <pre id="selectionPreview">mode=single
 strategy=single
 selected=-</pre>
@@ -742,5 +768,331 @@ document.addEventListener('DOMContentLoaded', () => {
     loadRouting(true);
 });
 </script>
+
+<script id="irangate-routing-inbound-static-js">
+(function () {
+    const profiles = {
+        "443": {
+            name: "OpenVPN",
+            portText: "UDP 443",
+            note: "OpenVPN traffic"
+        },
+        "500": {
+            name: "IKEv2 / IPSec",
+            portText: "UDP 500",
+            note: "IKE negotiation / auth"
+        },
+        "4500": {
+            name: "IKEv2 NAT-T",
+            portText: "UDP 4500",
+            note: "Main IPSec traffic"
+        }
+    };
+
+    function syncInboundSelection() {
+        const select = document.getElementById("inboundPortSelect");
+        const portInput = document.getElementById("bindPort");
+        if (!select || !portInput) return;
+
+        const p = profiles[select.value] || profiles["443"];
+
+        portInput.value = select.value;
+        portInput.dispatchEvent(new Event("input", { bubbles: true }));
+        portInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+        const name = document.getElementById("selectedInboundName");
+        const portText = document.getElementById("selectedInboundPortText");
+        const note = document.getElementById("selectedInboundNote");
+
+        if (name) name.textContent = p.name;
+        if (portText) portText.textContent = p.portText;
+        if (note) note.textContent = p.note;
+
+        const preview = document.querySelector("#routePreview, #listBox");
+        if (preview && preview.textContent !== undefined) {
+            // فقط input پورت را ست می‌کنیم؛ preview اصلی خود صفحه با eventهای قبلی آپدیت می‌شود.
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        const select = document.getElementById("inboundPortSelect");
+        const portInput = document.getElementById("bindPort");
+
+        if (portInput && select) {
+            if (profiles[String(portInput.value || "443")]) {
+                select.value = String(portInput.value || "443");
+            }
+
+            select.addEventListener("change", syncInboundSelection);
+            syncInboundSelection();
+        }
+    });
+})();
+</script>
+
+
+<script id="irangate-routing-overview-selected-inbound">
+(function () {
+  const inboundMap = {
+    "443":  { name: "OpenVPN",       title: "OpenVPN UDP 443",       badge: "OVPN"  },
+    "500":  { name: "IKEv2 / IPSec",  title: "IKEv2 UDP 500",         badge: "IKE"   },
+    "4500": { name: "IKEv2 NAT-T",    title: "IKEv2 NAT-T UDP 4500",  badge: "NAT-T" }
+  };
+
+  function ready(fn) {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
+    else fn();
+  }
+
+  function txt(el) {
+    return (el && el.textContent ? el.textContent : "").trim();
+  }
+
+  function findHeading(label) {
+    label = label.toLowerCase();
+    return Array.from(document.querySelectorAll("h1,h2,h3"))
+      .find(h => txt(h).toLowerCase().includes(label));
+  }
+
+  function cardOf(el) {
+    return el ? (el.closest(".card") || el.closest('[class*="card"]') || el.parentElement) : null;
+  }
+
+  function getSelectedPort() {
+    const sel = document.getElementById("inboundPortSelect");
+    if (sel && sel.value) return String(sel.value);
+
+    const port = document.getElementById("bindPort");
+    if (port && port.value) return String(port.value);
+
+    return "443";
+  }
+
+  function getMode() {
+    const candidates = [
+      document.getElementById("bindMode"),
+      document.querySelector('select[name="mode"]'),
+      ...Array.from(document.querySelectorAll("select"))
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      const v = String(el.value || "").trim();
+      if (["single", "failover", "random", "roundrobin", "leastping", "leastload"].includes(v.toLowerCase())) {
+        return v;
+      }
+    }
+
+    return "single";
+  }
+
+  function getStrategy() {
+    const candidates = [
+      document.getElementById("strategy"),
+      document.getElementById("bindStrategy"),
+      document.querySelector('select[name="strategy"]')
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      if (el.value) return String(el.value);
+    }
+
+    const text = document.body.innerText || "";
+    if (text.includes("Least Ping")) return "leastPing";
+    return getMode();
+  }
+
+  function getCheckedOutbounds() {
+    const rows = Array.from(document.querySelectorAll("#outboundsTable tr"));
+    const selected = [];
+
+    for (const row of rows) {
+      const cb = row.querySelector('input[type="checkbox"]');
+      if (!cb || !cb.checked) continue;
+
+      const cells = Array.from(row.querySelectorAll("td")).map(td => txt(td)).filter(Boolean);
+
+      // معمولا ستون‌ها: Use / Tag / Name / Type / Link / Actions
+      const tag = cells[1] || cb.value || "";
+      const name = cells[2] || tag || "";
+      const type = cells[3] || "";
+
+      selected.push({
+        tag: tag.trim(),
+        name: name.trim(),
+        type: type.trim()
+      });
+    }
+
+    return selected.filter(x => x.tag || x.name);
+  }
+
+  function routeSummary(selected, mode) {
+    if (!selected.length) {
+      return {
+        active: "direct",
+        html: '<div class="ir-route-pill direct">direct</div>',
+        detail: "No outbound selected. Traffic uses the server default route."
+      };
+    }
+
+    if (selected.length === 1 || mode === "single") {
+      const o = selected[0];
+      return {
+        active: o.tag || o.name,
+        html: '<div class="ir-route-pill">' + escapeHtml(o.tag || o.name) + '</div>',
+        detail: escapeHtml(o.name || o.tag) + (o.type ? " / " + escapeHtml(o.type) : "")
+      };
+    }
+
+    const items = selected.map((o, i) =>
+      '<div class="ir-route-option"><span>#' + (i + 1) + '</span><b>' +
+      escapeHtml(o.tag || o.name) + '</b><small>' +
+      escapeHtml(o.name || "") + (o.type ? " / " + escapeHtml(o.type) : "") +
+      '</small></div>'
+    ).join("");
+
+    return {
+      active: selected.length + " outbounds",
+      html: '<details class="ir-route-dropdown" open><summary>' + selected.length +
+            ' selected outbounds</summary>' + items + '</details>',
+      detail: "Failover / multi outbound route"
+    };
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function ensureStyle() {
+    if (document.getElementById("irRouteOverviewStyle")) return;
+
+    const st = document.createElement("style");
+    st.id = "irRouteOverviewStyle";
+    st.textContent = `
+      #irSelectedInboundRouteBox{margin-top:16px;border:1px solid rgba(34,211,238,.28);border-radius:14px;background:rgba(2,6,23,.28);padding:14px}
+      .ir-route-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+      .ir-route-stat{border:1px solid rgba(148,163,184,.25);border-radius:12px;padding:12px;background:rgba(15,23,42,.5)}
+      .ir-route-label{font-size:12px;color:#94a3b8;margin-bottom:6px}
+      .ir-route-value{font-weight:900;color:#fff;word-break:break-word}
+      .ir-route-value.cyan{color:#67e8f9}
+      .ir-route-selector{margin-top:12px;border:1px solid rgba(148,163,184,.16);border-radius:12px;padding:12px;background:rgba(15,23,42,.45)}
+      .ir-route-pill{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.28);color:#cffafe;font-weight:900}
+      .ir-route-pill.direct{background:rgba(16,185,129,.11);border-color:rgba(16,185,129,.28);color:#bbf7d0}
+      .ir-route-dropdown{border:1px solid rgba(148,163,184,.18);border-radius:12px;padding:10px;background:rgba(15,23,42,.48)}
+      .ir-route-dropdown summary{cursor:pointer;font-weight:900;color:#cffafe}
+      .ir-route-option{margin-top:8px;display:grid;grid-template-columns:38px 1fr 1.6fr;gap:8px;align-items:center;border-top:1px solid rgba(148,163,184,.12);padding-top:8px}
+      .ir-route-option span{color:#67e8f9;font-weight:900}
+      .ir-route-option b{color:#fff}
+      .ir-route-option small{color:#94a3b8}
+      @media(max-width:900px){.ir-route-grid{grid-template-columns:1fr 1fr}.ir-route-option{grid-template-columns:32px 1fr}}
+      @media(max-width:640px){.ir-route-grid{grid-template-columns:1fr}}
+    `;
+    document.head.appendChild(st);
+  }
+
+  function ensureBox() {
+    const h = findHeading("Routing Overview");
+    const card = cardOf(h);
+    if (!card) return null;
+
+    let box = document.getElementById("irSelectedInboundRouteBox");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "irSelectedInboundRouteBox";
+      card.appendChild(box);
+    }
+
+    return box;
+  }
+
+  function updateOverview() {
+    ensureStyle();
+
+    const port = getSelectedPort();
+    const inbound = inboundMap[port] || inboundMap["443"];
+    const mode = getMode();
+    const strategy = getStrategy();
+    const selected = getCheckedOutbounds();
+    const summary = routeSummary(selected, mode);
+
+    const box = ensureBox();
+    if (!box) return;
+
+    box.innerHTML = `
+      <div class="ir-route-grid">
+        <div class="ir-route-stat">
+          <div class="ir-route-label">Selected Inbound</div>
+          <div class="ir-route-value cyan">${escapeHtml(inbound.title)}</div>
+        </div>
+        <div class="ir-route-stat">
+          <div class="ir-route-label">Mode / Strategy</div>
+          <div class="ir-route-value">${escapeHtml(mode)}${strategy && strategy !== mode ? " / " + escapeHtml(strategy) : ""}</div>
+        </div>
+        <div class="ir-route-stat">
+          <div class="ir-route-label">Active Route</div>
+          <div class="ir-route-value">${escapeHtml(summary.active)}</div>
+        </div>
+        <div class="ir-route-stat">
+          <div class="ir-route-label">Port</div>
+          <div class="ir-route-value">${escapeHtml(port)} UDP</div>
+        </div>
+      </div>
+
+      <div class="ir-route-selector">
+        <div class="ir-route-label">Outbound selector for this inbound</div>
+        ${summary.html}
+        <div class="ir-route-label" style="margin-top:10px">${summary.detail}</div>
+      </div>
+    `;
+
+    // کارت‌های قدیمی overview را هم تا حد ممکن با inbound انتخاب‌شده sync کن.
+    const h = findHeading("Routing Overview");
+    const card = cardOf(h);
+    if (card) {
+      Array.from(card.querySelectorAll("div")).forEach(d => {
+        if (txt(d) === "OpenVPN UDP 443" || txt(d).startsWith("OpenVPN UDP")) {
+          d.textContent = inbound.title;
+        }
+      });
+    }
+  }
+
+  function bindEvents() {
+    const ids = ["inboundPortSelect", "bindPort", "bindMode", "strategy", "bindStrategy"];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("input", updateOverview);
+        el.addEventListener("change", updateOverview);
+      }
+    });
+
+    document.addEventListener("change", function (e) {
+      if (e.target && e.target.matches('#outboundsTable input[type="checkbox"], select, input')) {
+        setTimeout(updateOverview, 0);
+      }
+    });
+
+    document.addEventListener("click", function (e) {
+      if (e.target && (e.target.closest("#outboundsTable") || e.target.closest("#inboundBindSelector"))) {
+        setTimeout(updateOverview, 80);
+      }
+    });
+  }
+
+  ready(function () {
+    bindEvents();
+    updateOverview();
+    setTimeout(updateOverview, 500);
+    setTimeout(updateOverview, 1500);
+  });
+})();
+</script>
+
 </body>
 </html>

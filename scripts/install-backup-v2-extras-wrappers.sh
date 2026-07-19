@@ -1,36 +1,35 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-EXPORT_LIVE="/usr/local/bin/irangate-backup-v2-export"
-EXPORT_REAL="/usr/local/bin/irangate-backup-v2-export.real"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-IMPORT_LIVE="/usr/local/bin/irangate-backup-v2-import"
-IMPORT_REAL="/usr/local/bin/irangate-backup-v2-import.real"
+EXPORT_CORE="$REPO_DIR/deploy/master/scripts/irangate-backup-v2-export.py"
+IMPORT_CORE="$REPO_DIR/deploy/master/scripts/irangate-backup-v2-import.py"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WRAPPER_DIR="$SCRIPT_DIR/backup-v2"
+[[ -f "$EXPORT_CORE" ]] || {
+    echo "Missing export core: $EXPORT_CORE" >&2
+    exit 1
+}
 
-echo "===== Installing Backup v2 extras wrappers ====="
+[[ -f "$IMPORT_CORE" ]] || {
+    echo "Missing import core: $IMPORT_CORE" >&2
+    exit 1
+}
 
-if [[ ! -x "$EXPORT_LIVE" ]]; then
-  echo "$EXPORT_LIVE not found or not executable ❌"
-  exit 1
-fi
+install -m 0755 \
+    "$EXPORT_CORE" \
+    /usr/local/bin/irangate-backup-v2-export.py
 
-if [[ ! -e "$EXPORT_REAL" ]]; then
-  cp -a "$EXPORT_LIVE" "$EXPORT_REAL"
-fi
+install -m 0755 \
+    "$IMPORT_CORE" \
+    /usr/local/bin/irangate-backup-v2-import.py
 
-install -m 0755 "$WRAPPER_DIR/irangate-backup-v2-export-wrapper" "$EXPORT_LIVE"
+install -m 0755 \
+    "$REPO_DIR/scripts/backup-v2/irangate-backup-v2-export-wrapper" \
+    /usr/local/bin/irangate-backup-v2-export
 
-if [[ -x "$IMPORT_LIVE" ]]; then
-  if [[ ! -e "$IMPORT_REAL" ]]; then
-    cp -a "$IMPORT_LIVE" "$IMPORT_REAL"
-  fi
+install -m 0755 \
+    "$REPO_DIR/scripts/backup-v2/irangate-backup-v2-import-wrapper" \
+    /usr/local/bin/irangate-backup-v2-import
 
-  install -m 0755 "$WRAPPER_DIR/irangate-backup-v2-import-wrapper" "$IMPORT_LIVE"
-else
-  echo "$IMPORT_LIVE not found; import wrapper skipped ⚠️"
-fi
-
-echo "Backup v2 extras wrappers installed ✅"
+echo "Backup v2 unified wrappers installed ✅"

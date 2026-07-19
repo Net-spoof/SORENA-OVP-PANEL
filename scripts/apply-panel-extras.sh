@@ -1,105 +1,169 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-RESTART=0
-if [[ "${1:-}" == "--restart" ]]; then
-  RESTART=1
-fi
+set -Eeuo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_DIR"
 
-log() { echo "[panel-extras] $*"; }
-warn() { echo "[panel-extras][WARN] $*" >&2; }
+RESTART=0
+SKIP_BUILD=0
+NO_PACKAGES=0
+NO_SING_BOX_DOWNLOAD=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --restart)
+            RESTART=1
+            shift
+            ;;
+        --skip-build)
+            SKIP_BUILD=1
+            shift
+            ;;
+        --no-packages)
+            NO_PACKAGES=1
+            shift
+            ;;
+        --no-sing-box-download)
+            NO_SING_BOX_DOWNLOAD=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+    esac
+done
+
+log() {
+    echo "[panel-extras] $*"
+}
 
 find_go() {
-  if command -v go >/dev/null 2>&1; then command -v go; return 0; fi
-  if [[ -x /usr/local/go/bin/go ]]; then echo /usr/local/go/bin/go; return 0; fi
-  if [[ -x /usr/bin/go ]]; then echo /usr/bin/go; return 0; fi
-  if [[ -x /snap/bin/go ]]; then echo /snap/bin/go; return 0; fi
-  return 1
-}
+    for path in \
+        "$(command -v go 2>/dev/null || true)" \
+        /usr/local/go/bin/go \
+        /usr/bin/go \
+        /snap/bin/go
+    do
+        [[ -n "$path" && -x "$path" ]] && {
+            echo "$path"
+            return
+        }
+    done
 
-cache_bust_sidebar() {
-  local dir="$1"
-  [[ -d "$dir" ]] || return 0
-
-  local version
-  version="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || date +%s)-$(date +%s)"
-
-  find "$dir" -maxdepth 1 -type f -name "*.html" -print0 2>/dev/null \
-    | xargs -0 -r sed -i -E \
-      "s#js/sidebar\.js(\?v=[A-Za-z0-9._-]+)?#js/sidebar.js?v=${version}#g"
-}
-
-deploy_frontend() {
-  local src="$REPO_DIR/webpanel/frontend"
-  [[ -d "$src" ]] || { warn "frontend source not found: $src"; return 0; }
-
-  for dst in /opt/irangate/webpanel/frontend /var/www/html; do
-    if [[ -d "$dst" ]]; then
-      log "Deploying frontend to $dst"
-      mkdir -p "$dst/js"
-
-      # Copy all top-level frontend assets if present.
-      find "$src" -maxdepth 1 -type f -print0 \
-        | xargs -0 -r -I{} install -m 0644 "{}" "$dst/"
-
-      if [[ -d "$src/js" ]]; then
-        find "$src/js" -maxdepth 1 -type f -print0 \
-          | xargs -0 -r -I{} install -m 0644 "{}" "$dst/js/"
-      fi
-
-      cache_bust_sidebar "$dst"
-    fi
-  done
+    return 1
 }
 
 build_backend() {
-  local backend="$REPO_DIR/webpanel/backend"
-  [[ -d "$backend" ]] || { warn "backend source not found: $backend"; return 0; }
+    [[ "$SKIP_BUILD" -eq 0 ]] || return
 
-  local go_bin
-  if ! go_bin="$(find_go)"; then
-    warn "Go not found; skipping backend build"
-    return 0
-  fi
+    local go_bin
+    go_bin="$(find_go)" || {
+        echo "Go compiler not found" >&2
+        exit 1
+    }
 
-  log "Using Go: $("$go_bin" version)"
-  cd "$backend"
+    local output
+    output="$(mktemp)"
 
-  "$go_bin" mod tidy
-  "$go_bin" build -o /tmp/irangate-webpanel .
+    (
+        cd "$REPO_DIR/webpanel/backend"
+        "$go_bin" build -trimpath -o "$output" .
+    )
 
-  install -m 0755 /tmp/irangate-webpanel /usr/local/bin/irangate-webpanel
-  cd "$REPO_DIR"
+    test -s "$output"
+
+    install -m 0755 \
+        "$output" \
+        /usr/local/bin/irangate-webpanel
+
+    rm -f "$output"
+
+    log "Web panel backend deployed"
 }
 
-install_cli_and_wrappers() {
-  if [[ -f "$REPO_DIR/scripts/irangate-routing" ]]; then
-    install -m 0755 "$REPO_DIR/scripts/irangate-routing" /usr/local/bin/irangate-routing
-    log "Installed irangate-routing"
-  fi
+install_master_runtimes() {
+    local file
 
-  if [[ -x "$REPO_DIR/scripts/install-backup-v2-extras-wrappers.sh" ]]; then
-    bash "$REPO_DIR/scripts/install-backup-v2-extras-wrappers.sh" || warn "backup wrapper installer had warnings"
-  fi
+    for file in "$REPO_DIR"/deploy/master/scripts/*.py; do
+        [[ -f "$file" ]] || continue
+
+        install -m 0755 \
+            "$file" \
+            "/usr/local/bin/$(basename "$file")"
+    done
+
+    if [[ -f "$REPO_DIR/scripts/ovp-panel" ]]; then
+        install -m 0755 \
+            "$REPO_DIR/scripts/ovp-panel" \
+            /usr/local/bin/ovp-panel
+    fi
+}
+
+deploy_frontend() {
+    local src="$REPO_DIR/webpanel/frontend"
+    local dst
+
+    [[ -d "$src" ]] || return
+
+    for dst in \
+        /opt/irangate/webpanel/frontend \
+        /var/www/html
+    do
+        [[ -d "$dst" ]] || continue
+
+        mkdir -p "$dst/js"
+
+        find "$src" \
+            -maxdepth 1 \
+            -type f \
+            -print0 |
+        xargs -0 -r -I{} \
+            install -m 0644 "{}" "$dst/"
+
+        if [[ -d "$src/js" ]]; then
+            find "$src/js" \
+                -maxdepth 1 \
+                -type f \
+                -print0 |
+            xargs -0 -r -I{} \
+                install -m 0644 "{}" "$dst/js/"
+        fi
+    done
 }
 
 main() {
-  log "Applying panel extras from $REPO_DIR"
+    cd "$REPO_DIR"
 
-  build_backend
-  install_cli_and_wrappers
-  deploy_frontend
+    build_backend
+    install_master_runtimes
 
-  systemctl daemon-reload || true
+    bash "$REPO_DIR/scripts/install-backup-v2-extras-wrappers.sh"
 
-  if [[ "$RESTART" == "1" ]]; then
-    systemctl restart irangate-webpanel || warn "failed to restart irangate-webpanel"
-  fi
+    ike_args=()
 
-  log "Done"
+    [[ "$NO_PACKAGES" -eq 0 ]] ||
+        ike_args+=(--no-packages)
+
+    bash "$REPO_DIR/scripts/install-ikev2.sh" \
+        "${ike_args[@]}"
+
+    routing_args=()
+
+    [[ "$NO_SING_BOX_DOWNLOAD" -eq 0 ]] ||
+        routing_args+=(--no-download)
+
+    bash "$REPO_DIR/scripts/install-routing-extras.sh" \
+        "${routing_args[@]}"
+
+    deploy_frontend
+
+    systemctl daemon-reload
+
+    if [[ "$RESTART" -eq 1 ]]; then
+        systemctl restart irangate-webpanel
+    fi
+
+    log "All panel extras applied ✅"
 }
 
 main "$@"

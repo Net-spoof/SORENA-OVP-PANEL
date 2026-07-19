@@ -531,7 +531,7 @@ install_golang() {
 validate_pki() {
     local pki_dir="/etc/openvpn/easy-rsa"
     local missing_files=()
-    
+
     local required_files=(
         "$pki_dir/pki/ca.crt"
         "$pki_dir/pki/issued/server.crt"
@@ -539,13 +539,13 @@ validate_pki() {
         "$pki_dir/pki/dh.pem"
         "$pki_dir/pki/tc.key"
     )
-    
+
     for file in "${required_files[@]}"; do
         if [[ ! -f "$file" ]]; then
             missing_files+=("$file")
         fi
     done
-    
+
     if [[ ${#missing_files[@]} -eq 0 ]]; then
         return 0
     else
@@ -560,13 +560,13 @@ validate_pki() {
 setup_pki() {
     local pki_dir="/etc/openvpn/easy-rsa"
     local backup_dir="/opt/irangate/database/backups/pki-$(date +%Y%m%d-%H%M%S)"
-    
+
     # Check if easy-rsa is installed
     if [[ ! -d "/usr/share/easy-rsa" && ! -d "/usr/share/easy-rsa/3" ]]; then
         log_error "easy-rsa is not installed. Please install it first."
         exit 1
     fi
-    
+
     # If PKI directory exists, validate it first
     if [[ -d "$pki_dir" ]]; then
         log_info "Existing PKI directory found, validating..."
@@ -586,11 +586,11 @@ setup_pki() {
             rm -rf "$pki_dir"
         fi
     fi
-    
+
     # Setup Easy-RSA
     log_info "Setting up Easy-RSA PKI..."
     mkdir -p "$pki_dir"
-    
+
     if [[ "$os" = "debian" || "$os" = "ubuntu" ]]; then
         if [[ -d "/usr/share/easy-rsa" ]]; then
             cp -r /usr/share/easy-rsa/* "$pki_dir/" 2>/dev/null || {
@@ -612,12 +612,12 @@ setup_pki() {
             exit 1
         fi
     fi
-    
+
     cd "$pki_dir" || {
         log_error "Failed to change directory to $pki_dir"
         exit 1
     }
-    
+
     # Initialize PKI
     log_info "Initializing PKI..."
     if ! ./easyrsa init-pki << EOF
@@ -626,41 +626,41 @@ EOF
         log_error "Failed to initialize PKI"
         exit 1
     fi
-    
+
     # Build CA
     log_info "Building Certificate Authority..."
     if ! ./easyrsa --batch build-ca nopass; then
         log_error "Failed to build CA certificate"
         exit 1
     fi
-    
+
     # Generate DH parameters
     log_info "Generating DH parameters (this may take a few minutes)..."
     if ! ./easyrsa gen-dh; then
         log_error "Failed to generate DH parameters"
         exit 1
     fi
-    
+
     # Build server certificate
     log_info "Building server certificate..."
     if ! ./easyrsa --batch build-server-full server nopass; then
         log_error "Failed to build server certificate"
         exit 1
     fi
-    
+
     # Generate TLS crypt key
     log_info "Generating TLS crypt key..."
     if ! openvpn --genkey --secret "$pki_dir/pki/tc.key"; then
         log_error "Failed to generate TLS crypt key"
         exit 1
     fi
-    
+
     # Validate PKI after setup
     if ! validate_pki; then
         log_error "PKI setup completed but validation failed"
         exit 1
     fi
-    
+
     # Create symlink for easyrsa command so web panel can find it
     log_info "Creating easyrsa symlink for easy access..."
     if [[ -f "$pki_dir/easyrsa" && ! -f "/usr/local/bin/easyrsa" ]]; then
@@ -669,23 +669,23 @@ EOF
     elif [[ -f "/usr/local/bin/easyrsa" ]]; then
         log_info "easyrsa already exists at /usr/local/bin/easyrsa"
     fi
-    
+
     log_info "PKI setup completed successfully"
 }
 
 install_openvpn_core() {
     log_step "Step 1/5: Installing OpenVPN Server Core..."
-    
+
     if ! command -v openvpn &> /dev/null; then
         log_error "OpenVPN is not installed"
         exit 1
     fi
-    
+
     mkdir -p /etc/openvpn/server
     mkdir -p /etc/openvpn/client
     mkdir -p /etc/openvpn/ccd
     mkdir -p /etc/openvpn/logs
-    
+
     setup_pki
     case "$DNS" in
         1) DNS1="8.8.8.8"; DNS2="8.8.4.4" ;;
@@ -700,7 +700,7 @@ install_openvpn_core() {
             ;;
     esac
     log_info "Creating OpenVPN server configuration..."
-    
+
     if [[ "$PROTOCOL" == "udp" ]]; then
         cat > /etc/openvpn/server.conf << EOF
 port $PORT
@@ -767,7 +767,7 @@ EOF
         exit 1
     fi
     log_info "All PKI certificates validated successfully"
-    
+
     log_info "Testing OpenVPN configuration..."
     if openvpn --config /etc/openvpn/server.conf --test-crypto > /tmp/openvpn-test.log 2>&1; then
         log_info "OpenVPN configuration test passed"
@@ -777,7 +777,7 @@ EOF
         cat /tmp/openvpn-test.log | tail -20 || true
         log_warn "Attempting to continue anyway..."
     fi
-    
+
     log_info "Setting certificate file permissions..."
     chmod 644 /etc/openvpn/easy-rsa/pki/ca.crt 2>/dev/null || true
     chmod 644 /etc/openvpn/easy-rsa/pki/issued/server.crt 2>/dev/null || true
@@ -840,7 +840,7 @@ EOF
         exit 1
     fi
     log_info "IPTables service started successfully"
-    
+
     log_info "Testing OpenVPN configuration..."
     if timeout 5 openvpn --config /etc/openvpn/server.conf --test-crypto > /tmp/openvpn-test.log 2>&1; then
         log_info "OpenVPN configuration test passed"
@@ -855,7 +855,7 @@ EOF
             log_info "Configuration syntax appears valid"
         fi
     fi
-    
+
     cat > /etc/systemd/system/openvpn@server.service << EOF
 [Unit]
 Description=OpenVPN connection to %i
@@ -880,7 +880,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    
+
     systemctl stop openvpn@server 2>/dev/null || true
     ensure_openvpn_privileged_port_capability
     # Legacy connection guard disabled; PostgreSQL enforcer is authoritative
@@ -890,16 +890,16 @@ EOF
         log_error "Failed to start openvpn@server service"
         log_warn "Checking service status..."
         systemctl status openvpn@server.service --no-pager -l || true
-        
+
         log_warn "Checking OpenVPN logs..."
         if [[ -f "/etc/openvpn/logs/openvpn.log" ]]; then
             log_warn "OpenVPN log file contents:"
             tail -30 /etc/openvpn/logs/openvpn.log || true
         fi
-        
+
         log_warn "Checking journalctl logs..."
         journalctl -u openvpn@server.service --no-pager -n 30 || true
-        
+
         log_warn "Checking for common configuration issues..."
         if ! grep -q "^ca " /etc/openvpn/server.conf; then
             log_error "Missing 'ca' directive in server.conf"
@@ -910,7 +910,7 @@ EOF
         if ! grep -q "^key " /etc/openvpn/server.conf; then
             log_error "Missing 'key' directive in server.conf"
         fi
-        
+
         log_warn "OpenVPN service failed to start. Continuing installation, but please check the logs manually."
         log_warn "You can try starting manually with: openvpn --config /etc/openvpn/server.conf"
     else
@@ -951,7 +951,7 @@ EOF
         local client_crt=$(cat pki/issued/${CLIENT_NAME}.crt 2>/dev/null)
         local client_key=$(cat pki/private/${CLIENT_NAME}.key 2>/dev/null)
         local tc_key=$(cat pki/tc.key 2>/dev/null)
-        
+
         if [[ -z "$ca_crt" ]]; then
             log_error "Failed to read CA certificate"
             exit 1
@@ -968,7 +968,7 @@ EOF
             log_error "Failed to read TLS crypt key"
             exit 1
         fi
-        
+
         cat > /opt/irangate/clients/${CLIENT_NAME}.ovpn << CLIENT_EOF
 client
 dev tun
@@ -995,12 +995,12 @@ $client_key
 $tc_key
 </tls-crypt>
 CLIENT_EOF
-        
+
         if [[ ! -f "/opt/irangate/clients/${CLIENT_NAME}.ovpn" ]]; then
             log_error "Failed to create client configuration file"
             exit 1
         fi
-        
+
         chmod 644 /opt/irangate/clients/${CLIENT_NAME}.ovpn
         log_info "Client configuration saved to: /opt/irangate/clients/${CLIENT_NAME}.ovpn"
     else
@@ -1047,14 +1047,14 @@ install_irangate_cli() {
         exit 1
     }
     export PATH="/usr/local/go/bin:$PATH"
-    
+
     # Check if go.mod exists
     if [[ ! -f "go.mod" ]]; then
         log_error "go.mod not found in $SCRIPT_DIR"
         log_error "Please ensure you're running the installer from the correct directory"
         exit 1
     fi
-    
+
     # Verify Go is working
     if ! command -v go &> /dev/null; then
         log_error "Go is not in PATH. Trying to source /etc/profile..."
@@ -1065,19 +1065,19 @@ install_irangate_cli() {
             exit 1
         fi
     fi
-    
+
     log_info "Using Go: $(go version)"
-    
+
     # Set Go proxy if needed (for environments with restricted internet)
     export GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
     export GOSUMDB=${GOSUMDB:-sum.golang.org}
-    
+
     log_info "Go environment: GOPROXY=$GOPROXY, GOSUMDB=$GOSUMDB"
-    
+
     log_info "Downloading Go dependencies..."
     log_info "Go version: $(go version 2>&1 || echo 'unknown')"
     log_info "GOPROXY: $GOPROXY"
-    
+
     # Try downloading with better error handling
     log_info "Running go mod download..."
     local download_output
@@ -1087,7 +1087,7 @@ install_irangate_cli() {
     else
         download_status=$?
     fi
-    
+
     if [[ $download_status -eq 0 ]]; then
         log_info "Go dependencies downloaded successfully"
         # Check for warnings in output
@@ -1099,7 +1099,7 @@ install_irangate_cli() {
         log_warn "go mod download returned non-zero status, checking output..."
         log_info "Download output:"
         echo "$download_output" | grep -v "^go:" || echo "$download_output"
-        
+
         # Check for common issues
         log_info "Checking network connectivity to Go proxy..."
         if ! curl -s --connect-timeout 5 https://proxy.golang.org > /dev/null 2>&1; then
@@ -1112,11 +1112,11 @@ install_irangate_cli() {
                 download_status=$?
             fi
         fi
-        
+
         # Try go mod tidy to fix issues
         log_info "Running go mod tidy to fix dependency issues..."
         go mod tidy 2>&1 | grep -v "^go:" || true
-        
+
         # Try download again after tidy
         log_info "Retrying go mod download after tidy..."
         if download_output=$(go mod download 2>&1); then
@@ -1124,7 +1124,7 @@ install_irangate_cli() {
         else
             download_status=$?
         fi
-        
+
         if [[ $download_status -ne 0 ]]; then
             log_error "Failed to download Go dependencies after retries"
             log_error "Last output:"
@@ -1143,7 +1143,7 @@ install_irangate_cli() {
         log_error "main.go not found in $SCRIPT_DIR"
         exit 1
     fi
-    
+
     log_info "Building IranGate CLI..."
     if go build -o /usr/local/bin/irangate ./main.go 2>&1; then
         chmod +x /usr/local/bin/irangate
@@ -1179,17 +1179,17 @@ install_webpanel() {
             exit 1
         }
         export PATH="/usr/local/go/bin:$PATH"
-        
+
         # Check if go.mod exists
         if [[ ! -f "go.mod" ]]; then
             log_warn "go.mod not found, initializing..."
             go mod init irangate-webpanel || log_warn "go mod init failed (may already exist)"
         fi
-        
+
         log_info "Downloading Go dependencies..."
         go mod download 2>&1 | grep -v "^go:" || true
         go mod tidy
-        
+
         log_info "Building webpanel binary..."
         if go build -o /usr/local/bin/irangate-webpanel . 2>&1; then
             chmod +x /usr/local/bin/irangate-webpanel
@@ -2147,11 +2147,18 @@ main() {
     install_webpanel
     configure_webpanel_access
     install_master_postgres_stack
+
+    # IRANGATE_UNIFIED_EXTRAS_INSTALL
+    log_info "Installing IKEv2, outbound routing and unified Backup v2 extras..."
+
+    if ! bash "$SCRIPT_DIR/scripts/apply-panel-extras.sh" --skip-build; then
+        log_error "Failed to install IranGate unified extras"
+        exit 1
+    fi
     install_panel_manager
     fix_openvpn_runtime
 
     if ! test_services; then
-apply_panel_extras_if_available
         log_warn "Installation completed with service warnings"
     fi
 

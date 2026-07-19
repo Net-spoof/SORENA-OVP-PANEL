@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -16,6 +17,28 @@ const (
 	backupV2Root      = "/opt/irangate/backups/v2"
 	backupV2MaxUpload = int64(512 << 20)
 )
+
+var backupV2ArchivePathRE = regexp.MustCompile(`/[^\s]+irangate-backup-v2-[^\s]+\.tar\.gz`)
+
+func extractBackupV2ArchivePath(output string) string {
+	matches := backupV2ArchivePathRE.FindAllString(output, -1)
+	if len(matches) == 0 {
+		return strings.TrimSpace(output)
+	}
+
+	return strings.TrimSpace(matches[len(matches)-1])
+}
+
+func extractBackupV2JSONPayload(output []byte) []byte {
+	start := bytes.IndexByte(output, '{')
+	end := bytes.LastIndexByte(output, '}')
+
+	if start < 0 || end < start {
+		return output
+	}
+
+	return output[start : end+1]
+}
 
 func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command(
@@ -47,7 +70,7 @@ func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backupPath := filepath.Clean(
-		strings.TrimSpace(string(output)),
+		extractBackupV2ArchivePath(string(output)),
 	)
 
 	root := filepath.Clean(
@@ -258,7 +281,7 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	var result map[string]interface{}
 
 	jsonErr := json.Unmarshal(
-		output,
+		extractBackupV2JSONPayload(output),
 		&result,
 	)
 

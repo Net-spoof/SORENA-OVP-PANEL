@@ -145,6 +145,48 @@ def local_kill_session(real_address):
     return True
 
 
+
+def ikev2_cmd(*args):
+    cmd = ["/usr/local/sbin/irangate-ikev2"] + list(args)
+
+    try:
+        r = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+        )
+    except Exception as e:
+        msg = f"IKEV2 CMD EXCEPTION {' '.join(cmd)}: {e}"
+        print(msg)
+        return False, msg
+
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if out:
+        print(out[:1000])
+
+    return r.returncode == 0, out[:1000]
+
+
+def ikev2_block(name):
+    ok, msg = ikev2_cmd("block", name)
+    print(f"IKEV2 BLOCK {name}: {ok}")
+    return ok, msg
+
+
+def ikev2_unblock(name):
+    ok, msg = ikev2_cmd("unblock", name)
+    print(f"IKEV2 UNBLOCK {name}: {ok}")
+    return ok, msg
+
+
+def ikev2_terminate(name):
+    ok, msg = ikev2_cmd("terminate", name)
+    print(f"IKEV2 TERMINATE {name}: {ok}")
+    return ok, msg
+
+
 def local_unblock(name):
     try:
         (BLOCK_DIR / name).unlink()
@@ -155,13 +197,20 @@ def local_unblock(name):
     return True
 
 def unblock_everywhere(name):
-    results = {"local": None, "nodes": []}
+    results = {"local": None, "ikev2": None, "nodes": []}
 
     try:
         results["local"] = local_unblock(name)
     except Exception as e:
         print(f"LOCAL UNBLOCK FAIL {name}: {e}")
         results["local"] = False
+
+    try:
+        ok, msg = ikev2_unblock(name)
+        results["ikev2"] = {"ok": ok, "message": msg}
+    except Exception as e:
+        print(f"IKEV2 UNBLOCK FAIL {name}: {e}")
+        results["ikev2"] = {"ok": False, "message": str(e)}
 
     for node in get_nodes():
         if node.get("is_local"):
@@ -177,13 +226,20 @@ def unblock_everywhere(name):
     return results
 
 def block_everywhere(name):
-    results = {"local": None, "nodes": []}
+    results = {"local": None, "ikev2": None, "nodes": []}
 
     try:
         results["local"] = local_block(name)
     except Exception as e:
         print(f"LOCAL BLOCK FAIL {name}: {e}")
         results["local"] = False
+
+    try:
+        ok, msg = ikev2_block(name)
+        results["ikev2"] = {"ok": ok, "message": msg}
+    except Exception as e:
+        print(f"IKEV2 BLOCK FAIL {name}: {e}")
+        results["ikev2"] = {"ok": False, "message": str(e)}
 
     for node in get_nodes():
         if node.get("is_local"):
@@ -229,6 +285,12 @@ with conn.cursor() as cur:
 
     for name, used, limitb, expire_at, is_blocked, reason in rows:
         action = "SKIP_ALREADY_BLOCKED" if is_blocked else "WOULD_BLOCK"
+        if args.apply:
+            print(f"RECONCILE_ALREADY_BLOCKED name={name} reason={reason}")
+            try:
+                block_everywhere(name)
+            except Exception as e:
+                print(f"RECONCILE_ALREADY_BLOCKED_FAIL name={name}: {e}")
         print(f"{action} name={name} reason={reason} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
         if args.apply and not is_blocked:
@@ -400,6 +462,21 @@ with conn.cursor() as cur:
                           AND client_name = %s
                           AND session_fingerprint = %s
                     """, (source_id, client_name, session_fp))
+
+                elif str(source_id) == "ikev2":
+                    ok, msg = ikev2_terminate(client_name)
+                    result["action"] = "ikev2_terminate"
+                    result["ok"] = bool(ok)
+                    result["message"] = msg
+
+                    if ok:
+                        cur.execute("""
+                            DELETE FROM active_sessions
+                            WHERE source_id = %s
+                              AND client_name = %s
+                              AND session_fingerprint = %s
+                        """, (source_id, client_name, session_fp))
+
                 else:
                     ok, msg = node_temp_kick_session(source_id, name)
                     result["action"] = "node_temp_block_unblock"

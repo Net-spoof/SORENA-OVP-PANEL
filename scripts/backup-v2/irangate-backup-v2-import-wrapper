@@ -1,173 +1,276 @@
-#!/usr/bin/env python3
-import json
-import os
-import shutil
-import subprocess
-import sys
-import tarfile
-from pathlib import Path
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-REAL = "/usr/local/bin/irangate-backup-v2-import.real"
-EXTRA_PREFIX = "irangate-extra/files/"
+BASE="/usr/local/bin/irangate-backup-v2-import.py"
 
-RESTORE_MAP_PREFIXES = {
-    "opt/irangate/panel-proxy.env": "/opt/irangate/panel-proxy.env",
+ARCHIVE=""
+VALIDATE_ONLY=0
+CORE_LOG="$(mktemp)"
+TMP=""
 
-    "opt/irangate/routing/engine.json": "/opt/irangate/routing/engine.json",
-    "opt/irangate/routing/outbounds.json": "/opt/irangate/routing/outbounds.json",
-    "opt/irangate/routing/balancers.json": "/opt/irangate/routing/balancers.json",
-    "opt/irangate/routing/rules.json": "/opt/irangate/routing/rules.json",
+cleanup() {
+    rm -f "$CORE_LOG" 2>/dev/null || true
 
-    "etc/sing-box/irangate-routing.json": "/etc/sing-box/irangate-routing.json",
-    "etc/systemd/system/irangate-routing.service": "/etc/systemd/system/irangate-routing.service",
-    "etc/systemd/system/irangate-routing-rules.service": "/etc/systemd/system/irangate-routing-rules.service",
-    "etc/systemd/system/irangate-webpanel.service.d/proxy.conf": "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
+    if [[ -n "$TMP" ]]; then
+        rm -rf "$TMP" 2>/dev/null || true
+    fi
 }
 
+trap cleanup EXIT
 
-def is_validate_mode(args):
-    joined = " ".join(args).lower()
-    return "validate" in joined or "--check" in joined or "--dry-run" in joined
+verify_runtime_integrity() {
+    local root="$1"
+    local checksums="$root/SHA256SUMS"
 
+    if [[ ! -d "$root" ]]; then
+        return 0
+    fi
 
-def clean_member(name):
-    name = str(name or "").replace("\\", "/")
-    while name.startswith("/"):
-        name = name[1:]
-    while name.startswith("./"):
-        name = name[2:]
-    if ".." in name.split("/"):
-        return ""
-    return name
+    if [[ ! -f "$checksums" ]]; then
+        echo \
+            "[backup-extras] legacy extras archive: SHA256SUMS missing" \
+            >&2
 
+        return 0
+    fi
 
-def find_archive_arg(args):
-    for arg in args:
-        if arg.endswith((".tar.gz", ".tgz", ".gz")) and Path(arg).exists():
-            return arg
-    return ""
+    if ! (
+        cd "$root"
 
-
-def run(cmd):
-    try:
-        p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        return p.returncode, p.stdout.strip(), p.stderr.strip()
-    except Exception as exc:
-        return 1, "", str(exc)
-
-
-def extract_extras(archive_path):
-    archive_path = Path(archive_path)
-
-    if not archive_path.exists() or not tarfile.is_tarfile(archive_path):
-        return {
-            "restored": [],
-            "skipped": [],
-            "error": f"not a valid tar archive: {archive_path}",
-        }
-
-    restored = []
-    skipped = []
-
-    with tarfile.open(archive_path, "r:*") as tar:
-        names = tar.getnames()
-
-        for member in tar.getmembers():
-            safe_name = clean_member(member.name)
-            if not safe_name.startswith(EXTRA_PREFIX):
-                continue
-
-            rel = safe_name[len(EXTRA_PREFIX):]
-            target = RESTORE_MAP_PREFIXES.get(rel)
-
-            if not target:
-                skipped.append(rel)
-                continue
-
-            if not member.isfile():
-                skipped.append(rel + " (not file)")
-                continue
-
-            target_path = Path(target)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            src = tar.extractfile(member)
-            if src is None:
-                skipped.append(rel + " (no fileobj)")
-                continue
-
-            tmp = target_path.with_suffix(target_path.suffix + ".restore-tmp")
-            with open(tmp, "wb") as f:
-                shutil.copyfileobj(src, f)
-
-            shutil.move(str(tmp), str(target_path))
-
-            if target.endswith("panel-proxy.env"):
-                os.chmod(target_path, 0o600)
-            elif target.endswith(".json"):
-                os.chmod(target_path, 0o600)
-            elif target.endswith(".service") or target.endswith(".conf"):
-                os.chmod(target_path, 0o644)
-            else:
-                os.chmod(target_path, 0o600)
-
-            restored.append(target)
-
-    # Reload services/configs after restore.
-    run(["systemctl", "daemon-reload"])
-
-    if "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf" in restored or "/opt/irangate/panel-proxy.env" in restored:
-        # Do not restart irangate-webpanel from inside an import launched by the webpanel itself.
-        # Restarting here kills the HTTP request and makes the UI show "Failed to import backup"
-        # even when the restore succeeded. The admin can restart later after the response is sent.
-        marker = "/opt/irangate/panel-proxy-restart-required"
-        try:
-            Path(marker).write_text("restart irangate-webpanel.service to apply restored panel proxy\n")
-        except Exception:
-            pass
-
-    if any(x.startswith("/opt/irangate/routing/") for x in restored):
-        if Path("/usr/local/bin/irangate-routing").exists():
-            run(["/usr/local/bin/irangate-routing", "generate-engine", "--write", "--check"])
-
-    return {
-        "restored": restored,
-        "skipped": skipped,
-    }
-
-
-def main():
-    if not os.path.exists(REAL):
-        print(json.dumps({
-            "success": False,
-            "error": f"real importer missing: {REAL}",
-        }))
-        return 1
-
-    args = sys.argv[1:]
-    archive = find_archive_arg(args)
-    validate = is_validate_mode(args)
-
-    proc = subprocess.run(
-        [REAL] + args,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        sha256sum \
+            --check \
+            --strict \
+            SHA256SUMS
     )
+    then
+        echo \
+            "[backup-extras] runtime extras integrity check failed" \
+            >&2
 
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
+        return 1
+    fi
 
-    stdout = proc.stdout or ""
+    echo \
+        "[backup-extras] runtime extras integrity verified ✅" \
+        >&2
+}
 
-    # Never restore extras during validation/check mode.
-    if proc.returncode == 0 and archive and not validate:
-        result = extract_extras(archive)
-        print("[backup-v2-import-wrapper] extras restore: " + json.dumps(result, ensure_ascii=False), file=sys.stderr)
+for arg in "$@"; do
+    case "$arg" in
+        --validate-only|--dry-run|validate-only)
+            VALIDATE_ONLY=1
+            ;;
+        *.tar.gz|*.tgz)
+            [[ -f "$arg" ]] && ARCHIVE="$arg"
+            ;;
+    esac
+done
 
-    sys.stdout.write(stdout)
-    return proc.returncode
+[[ -x "$BASE" ]] || {
+    echo "Backup core missing: $BASE" >&2
+    exit 1
+}
 
+set +e
+"$BASE" "$@" >"$CORE_LOG" 2>&1
+RC=$?
+set -e
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+cat "$CORE_LOG"
+
+[[ "$RC" -eq 0 ]] || exit "$RC"
+
+if [[ -z "$ARCHIVE" ||
+      ! -f "$ARCHIVE" ]]
+then
+    exit 0
+fi
+
+TMP="$(mktemp -d)"
+
+python3 - "$ARCHIVE" "$TMP" <<'PY_EXTRACT'
+import os
+import shutil
+import sys
+import tarfile
+from pathlib import Path, PurePosixPath
+
+archive = Path(sys.argv[1])
+root = Path(sys.argv[2]).resolve()
+
+allowed = (
+    "extras/runtime/",
+    "extras/ikev2/",
+)
+
+with tarfile.open(archive, "r:*") as tar:
+    for member in tar.getmembers():
+        raw = str(member.name or "").replace("\\", "/")
+
+        while raw.startswith("./"):
+            raw = raw[2:]
+
+        path = PurePosixPath(raw)
+
+        if path.is_absolute() or ".." in path.parts:
+            continue
+
+        if not any(raw.startswith(prefix) for prefix in allowed):
+            continue
+
+        if member.issym() or member.islnk():
+            continue
+
+        destination = (root / raw).resolve()
+
+        if root not in destination.parents and destination != root:
+            continue
+
+        if member.isdir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+
+        if not member.isfile():
+            continue
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        source = tar.extractfile(member)
+        if source is None:
+            continue
+
+        with destination.open("wb") as output:
+            shutil.copyfileobj(source, output)
+
+        os.chmod(destination, member.mode & 0o777)
+PY_EXTRACT
+
+ROOT=""
+
+for candidate in \
+    "$TMP/extras/runtime" \
+    "$TMP/extras/ikev2"
+do
+    if [[ -d "$candidate" ]]; then
+        ROOT="$candidate"
+        break
+    fi
+done
+
+[[ -n "$ROOT" ]] || exit 0
+
+verify_runtime_integrity "$ROOT"
+
+if [[ "$VALIDATE_ONLY" -eq 1 ]]; then
+    echo         "[backup-extras] validate-only integrity check complete ✅"         >&2
+
+    exit 0
+fi
+
+restore_item() {
+    local rel="$1"
+    local src="$ROOT$rel"
+    local dst="$rel"
+
+    if [[ ! -e "$src" ]]; then
+        return
+    fi
+
+    mkdir -p "$(dirname "$dst")"
+    rm -rf "$dst"
+    cp -a "$src" "$dst"
+
+    echo "[backup-extras] restored $dst" >&2
+}
+
+# IKEv2
+# Restore only IranGate-owned strongSwan files.
+restore_item /etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf
+restore_item /etc/swanctl/conf.d/irangate-ikev2-users.conf
+restore_item /etc/swanctl/private/irangate-ca-key.pem
+restore_item /etc/swanctl/private/irangate-server-key.pem
+restore_item /etc/swanctl/x509ca/irangate-ca-cert.pem
+restore_item /etc/swanctl/x509/irangate-server-cert.pem
+restore_item /etc/sysctl.d/99-irangate-ikev2.conf
+restore_item /opt/irangate/ikev2
+restore_item /opt/irangate/traffic/ikev2_current_stats.json
+restore_item /opt/irangate/traffic/ikev2_last_seen.json
+restore_item /opt/irangate/traffic/global_usage_totals.json
+restore_item /opt/irangate/webpanel/server.json
+restore_item /usr/local/sbin/irangate-ikev2
+restore_item /usr/local/sbin/irangate-ikev2-stats-snapshot
+restore_item /usr/local/sbin/irangate-ikev2-firewall.sh
+restore_item /etc/systemd/system/irangate-ikev2-firewall.service
+restore_item /etc/systemd/system/irangate-ikev2-stats.service
+restore_item /etc/systemd/system/irangate-ikev2-stats.timer
+
+# Routing
+restore_item /opt/irangate/routing
+restore_item /etc/sing-box/irangate-routing.json
+restore_item /usr/local/bin/irangate-routing
+restore_item /etc/systemd/system/irangate-routing.service
+restore_item /etc/systemd/system/irangate-routing-rules.service
+
+# Proxy
+restore_item /opt/irangate/panel-proxy.env
+restore_item /etc/systemd/system/irangate-webpanel.service.d/proxy.conf
+
+chmod 0755 \
+    /usr/local/sbin/irangate-ikev2 \
+    /usr/local/sbin/irangate-ikev2-stats-snapshot \
+    /usr/local/sbin/irangate-ikev2-firewall.sh \
+    /usr/local/bin/irangate-routing \
+    2>/dev/null || true
+
+chmod 0600 \
+    /opt/irangate/ikev2/users.tsv \
+    2>/dev/null || true
+
+find /etc/swanctl/private \
+    -type f \
+    -exec chmod 0600 {} \; \
+    2>/dev/null || true
+
+systemctl daemon-reload || true
+sysctl --system >/dev/null 2>&1 || true
+
+if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
+    systemctl enable --now strongswan \
+        >/dev/null 2>&1 || true
+
+    systemctl enable --now irangate-ikev2-firewall.service \
+        >/dev/null 2>&1 || true
+
+    systemctl enable --now irangate-ikev2-stats.timer \
+        >/dev/null 2>&1 || true
+
+    /usr/local/sbin/irangate-ikev2 reload \
+        >/dev/null 2>&1 || true
+fi
+
+if [[ -x /usr/local/bin/irangate-routing &&
+      -x "$(command -v sing-box 2>/dev/null || true)" ]]
+then
+    /usr/local/bin/irangate-routing \
+        generate-engine \
+        --write \
+        --check \
+        >/dev/null 2>&1 || true
+
+    if systemctl is-enabled --quiet irangate-routing.service ||
+       systemctl is-active --quiet irangate-routing.service
+    then
+        systemctl restart irangate-routing.service \
+            >/dev/null 2>&1 || true
+    fi
+fi
+
+if [[ -f /opt/irangate/panel-proxy.env ||
+      -f /etc/systemd/system/irangate-webpanel.service.d/proxy.conf ]]
+then
+    printf '%s\n' \
+        'restart irangate-webpanel.service to apply restored proxy settings' \
+        >/opt/irangate/panel-proxy-restart-required
+fi
+
+echo "[backup-extras] runtime extras restored ✅" >&2

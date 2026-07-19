@@ -8,6 +8,7 @@ import psycopg2
 ENV = Path("/etc/irangate-db.env")
 LOCAL = Path("/opt/irangate/traffic/current_stats.json")
 NODE = Path("/opt/irangate/traffic/node_current_stats.json")
+IKEV2 = Path("/opt/irangate/traffic/ikev2_current_stats.json")
 GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
 
 def load_env():
@@ -107,6 +108,10 @@ for x in load_json(NODE):
     x["_source_id"] = str(
         pick(x, "source_id", "node_id", "node_name", "node") or "node"
     )
+    items.append(x)
+
+for x in load_json(IKEV2):
+    x["_source_id"] = str(pick(x, "source_id") or "ikev2")
     items.append(x)
 
 env = load_env()
