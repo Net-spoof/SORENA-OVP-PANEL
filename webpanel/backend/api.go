@@ -1851,7 +1851,222 @@ func syncServerSettingsForCLI(server ServerConfig) error {
 	}
 	dbSettings["updated_at"] = now
 
-	return writeJSONMap(dbSettingsPath, dbSettings, 0600)
+	if err := writeJSONMap(dbSettingsPath, dbSettings, 0600); err != nil {
+		return err
+	}
+
+	openVPNHost := serverIP
+	if openVPNHost == "" {
+		openVPNHost = serverDomain
+	}
+
+	if openVPNHost != "" {
+		updated, err := syncExistingOpenVPNRemoteHost(openVPNHost)
+		if err != nil {
+			return fmt.Errorf(
+				"sync existing OpenVPN client configs: %w",
+				err,
+			)
+		}
+
+		fmt.Printf(
+			"Synced OpenVPN public host in %d existing client configs\n",
+			updated,
+		)
+	}
+
+	return nil
+}
+
+func syncExistingOpenVPNRemoteHost(host string) (int, error) {
+	host = strings.TrimSpace(host)
+
+	if host == "" {
+		return 0, nil
+	}
+
+	if strings.Contains(host, "://") ||
+		strings.ContainsAny(host, " \t\r\n/") {
+		return 0, fmt.Errorf("invalid OpenVPN public host")
+	}
+
+	type configSnapshot struct {
+		data []byte
+		mode os.FileMode
+	}
+
+	roots := []string{
+		"/etc/openvpn/client",
+		"/etc/openvpn/clients",
+		filepath.Join(DataBaseDir, "clients"),
+	}
+
+	snapshots := make(map[string]configSnapshot)
+	files := make([]string, 0)
+
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+
+			return 0, fmt.Errorf(
+				"stat client config directory %s: %w",
+				root,
+				err,
+			)
+		}
+
+		err := filepath.Walk(
+			root,
+			func(
+				path string,
+				info os.FileInfo,
+				walkErr error,
+			) error {
+				if walkErr != nil {
+					return walkErr
+				}
+
+				if info == nil ||
+					info.IsDir() ||
+					info.Mode()&os.ModeSymlink != 0 ||
+					!strings.EqualFold(
+						filepath.Ext(path),
+						".ovpn",
+					) {
+					return nil
+				}
+
+				if _, exists := snapshots[path]; exists {
+					return nil
+				}
+
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+
+				snapshots[path] = configSnapshot{
+					data: append([]byte(nil), data...),
+					mode: info.Mode().Perm(),
+				}
+
+				files = append(files, path)
+
+				return nil
+			},
+		)
+
+		if err != nil {
+			return 0, fmt.Errorf(
+				"scan client config directory %s: %w",
+				root,
+				err,
+			)
+		}
+	}
+
+	changedPaths := make([]string, 0)
+
+	rollback := func() {
+		for index := len(changedPaths) - 1; index >= 0; index-- {
+			path := changedPaths[index]
+			snapshot := snapshots[path]
+
+			temp := fmt.Sprintf(
+				"%s.irangate-rollback-%d",
+				path,
+				os.Getpid(),
+			)
+
+			if err := os.WriteFile(
+				temp,
+				snapshot.data,
+				snapshot.mode,
+			); err != nil {
+				continue
+			}
+
+			_ = os.Rename(temp, path)
+		}
+	}
+
+	updated := 0
+
+	for _, path := range files {
+		snapshot := snapshots[path]
+		lines := strings.Split(string(snapshot.data), "\n")
+		changed := false
+
+		for index, line := range lines {
+			trimmed := strings.TrimLeft(line, " \t")
+			fields := strings.Fields(trimmed)
+
+			if len(fields) < 2 || fields[0] != "remote" {
+				continue
+			}
+
+			indentLength := len(line) - len(trimmed)
+			replacement := line[:indentLength] +
+				"remote " +
+				host
+
+			if len(fields) > 2 {
+				replacement += " " +
+					strings.Join(fields[2:], " ")
+			}
+
+			if replacement == line {
+				continue
+			}
+
+			lines[index] = replacement
+			changed = true
+		}
+
+		if !changed {
+			continue
+		}
+
+		output := []byte(strings.Join(lines, "\n"))
+
+		temp := fmt.Sprintf(
+			"%s.irangate-tmp-%d",
+			path,
+			os.Getpid(),
+		)
+
+		if err := os.WriteFile(
+			temp,
+			output,
+			snapshot.mode,
+		); err != nil {
+			rollback()
+
+			return updated, fmt.Errorf(
+				"write temporary client config %s: %w",
+				path,
+				err,
+			)
+		}
+
+		if err := os.Rename(temp, path); err != nil {
+			_ = os.Remove(temp)
+			rollback()
+
+			return updated, fmt.Errorf(
+				"replace client config %s: %w",
+				path,
+				err,
+			)
+		}
+
+		changedPaths = append(changedPaths, path)
+		updated++
+	}
+
+	return updated, nil
 }
 
 func readJSONMapAllowMissing(path string) (map[string]interface{}, error) {
