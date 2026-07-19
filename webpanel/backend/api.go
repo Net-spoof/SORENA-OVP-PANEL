@@ -1493,39 +1493,303 @@ func ensureClientOnNode(node NodeConfig, clientName string) {
 	_ = createClientOnNode(node, clientName)
 }
 
-func downloadClientFromNode(w http.ResponseWriter, r *http.Request, node NodeConfig, clientName string) {
+func configuredOpenVPNDownloadHost() (string, error) {
+	paths := []string{
+		ServerDBPath,
+		filepath.Join(DataBaseDir, "server_config.json"),
+		filepath.Join(DataBaseDir, "database", "settings.json"),
+	}
+
+	validateHost := func(host string) (string, error) {
+		host = strings.TrimSpace(host)
+
+		if host == "" {
+			return "", nil
+		}
+
+		if strings.Contains(host, "://") ||
+			strings.ContainsAny(host, " \t\r\n/") {
+			return "", fmt.Errorf(
+				"invalid configured OpenVPN public host",
+			)
+		}
+
+		return host, nil
+	}
+
+	for _, configPath := range paths {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+
+			return "", fmt.Errorf(
+				"read OpenVPN server settings %s: %w",
+				configPath,
+				err,
+			)
+		}
+
+		var config map[string]interface{}
+		if err := json.Unmarshal(data, &config); err != nil {
+			continue
+		}
+
+		serverIP := strings.TrimSpace(
+			fmt.Sprintf("%v", config["server_ip"]),
+		)
+		serverDomain := strings.TrimSpace(
+			fmt.Sprintf("%v", config["server_domain"]),
+		)
+
+		if serverIP == "<nil>" {
+			serverIP = ""
+		}
+		if serverDomain == "<nil>" {
+			serverDomain = ""
+		}
+
+		useDomain := false
+
+		if settings, ok := config["settings"].(map[string]interface{}); ok {
+			if value, ok := settings["use_domain"].(bool); ok {
+				useDomain = value
+			}
+		}
+
+		if value, ok := config["use_domain"].(bool); ok {
+			useDomain = value
+		}
+
+		if useDomain && serverDomain != "" {
+			return validateHost(serverDomain)
+		}
+
+		if serverIP != "" {
+			return validateHost(serverIP)
+		}
+
+		if serverDomain != "" {
+			return validateHost(serverDomain)
+		}
+	}
+
+	return "", fmt.Errorf(
+		"OpenVPN public IP or domain is not configured",
+	)
+}
+
+func rewriteOpenVPNProfileHost(
+	profile []byte,
+	host string,
+) ([]byte, int, error) {
+	host = strings.TrimSpace(host)
+
+	if host == "" ||
+		strings.Contains(host, "://") ||
+		strings.ContainsAny(host, " \t\r\n/") {
+		return nil, 0, fmt.Errorf(
+			"invalid OpenVPN public host",
+		)
+	}
+
+	lines := strings.Split(string(profile), "\n")
+	updated := 0
+
+	for index, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		fields := strings.Fields(trimmed)
+
+		if len(fields) < 2 ||
+			strings.ToLower(fields[0]) != "remote" {
+			continue
+		}
+
+		indentLength := len(line) - len(trimmed)
+
+		replacement := line[:indentLength] +
+			"remote " +
+			host
+
+		if len(fields) > 2 {
+			replacement += " " +
+				strings.Join(fields[2:], " ")
+		}
+
+		if replacement == line {
+			continue
+		}
+
+		lines[index] = replacement
+		updated++
+	}
+
+	return []byte(strings.Join(lines, "\n")), updated, nil
+}
+
+func writeOpenVPNProfile(
+	w http.ResponseWriter,
+	filename string,
+	profile []byte,
+) {
+	w.Header().Set(
+		"Content-Type",
+		"application/x-openvpn-profile",
+	)
+	w.Header().Set(
+		"Content-Disposition",
+		fmt.Sprintf(
+			"attachment; filename=\"%s\"",
+			filename,
+		),
+	)
+
+	// Never allow an old downloaded profile to be reused from cache.
+	w.Header().Set(
+		"Cache-Control",
+		"no-store, no-cache, must-revalidate, max-age=0",
+	)
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	_, _ = w.Write(profile)
+}
+
+func downloadClientFromNode(
+	w http.ResponseWriter,
+	r *http.Request,
+	node NodeConfig,
+	clientName string,
+) {
 	ensureClientOnNode(node, clientName)
 
-	req, err := http.NewRequest("GET", strings.TrimRight(node.AgentURL, "/")+"/clients/"+clientName+"/download", nil)
+	req, err := http.NewRequest(
+		"GET",
+		strings.TrimRight(node.AgentURL, "/")+
+			"/clients/"+
+			clientName+
+			"/download",
+		nil,
+	)
 	if err != nil {
-		http.Error(w, "Invalid node agent URL", http.StatusBadRequest)
+		http.Error(
+			w,
+			"Invalid node agent URL",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
 	if node.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+node.Token)
+		req.Header.Set(
+			"Authorization",
+			"Bearer "+node.Token,
+		)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, "Node download failed: "+err.Error(), http.StatusBadGateway)
+		http.Error(
+			w,
+			"Node download failed: "+err.Error(),
+			http.StatusBadGateway,
+		)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		http.Error(w, fmt.Sprintf("Node download failed: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(b))), http.StatusBadGateway)
+		body, _ := io.ReadAll(
+			io.LimitReader(
+				resp.Body,
+				2048,
+			),
+		)
+
+		http.Error(
+			w,
+			fmt.Sprintf(
+				"Node download failed: HTTP %d %s",
+				resp.StatusCode,
+				strings.TrimSpace(string(body)),
+			),
+			http.StatusBadGateway,
+		)
 		return
 	}
 
-	safeName := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(clientName)
-	safeNode := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(node.ID)
+	profile, err := io.ReadAll(
+		io.LimitReader(
+			resp.Body,
+			32<<20,
+		),
+	)
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to read node config: "+err.Error(),
+			http.StatusBadGateway,
+		)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/x-openvpn-profile")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s.ovpn\"", safeName, safeNode))
-	io.Copy(w, resp.Body)
+	host, err := configuredOpenVPNDownloadHost()
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to resolve OpenVPN public host: "+
+				err.Error(),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	profile, updated, err := rewriteOpenVPNProfileHost(
+		profile,
+		host,
+	)
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to rewrite OpenVPN config: "+
+				err.Error(),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	log.Printf(
+		"Subscription node profile host resolved: client=%s node=%s host=%s updated_lines=%d",
+		clientName,
+		node.ID,
+		host,
+		updated,
+	)
+
+	safeName := strings.NewReplacer(
+		"\\", "_",
+		"\"", "_",
+		"\r", "_",
+		"\n", "_",
+	).Replace(clientName)
+
+	safeNode := strings.NewReplacer(
+		"\\", "_",
+		"\"", "_",
+		"\r", "_",
+		"\n", "_",
+	).Replace(node.ID)
+
+	writeOpenVPNProfile(
+		w,
+		safeName+"-"+safeNode+".ovpn",
+		profile,
+	)
 }
 
 func getNodesHandler(w http.ResponseWriter, r *http.Request) {
@@ -3270,12 +3534,21 @@ func subscriptionIKEv2DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(ikev2InfoText(clientName, info)))
 }
 
-func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
+func subscriptionDownloadHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	token := mux.Vars(r)["token"]
 
-	clientName, clientData, err := findClientBySubscriptionToken(token)
+	clientName, clientData, err :=
+		findClientBySubscriptionToken(token)
+
 	if err != nil {
-		http.Error(w, "Subscription not found", http.StatusNotFound)
+		http.Error(
+			w,
+			"Subscription not found",
+			http.StatusNotFound,
+		)
 		return
 	}
 
@@ -3291,17 +3564,74 @@ func subscriptionDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configPath := filepath.Join("/etc/openvpn/client", clientName+".ovpn")
-	if _, err := os.Stat(configPath); err != nil {
-		http.Error(w, "Config file not found", http.StatusNotFound)
+	configPath := filepath.Join(
+		"/etc/openvpn/client",
+		clientName+".ovpn",
+	)
+
+	profile, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(
+				w,
+				"Config file not found",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		http.Error(
+			w,
+			"Failed to read config file: "+err.Error(),
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
-	safeName := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_").Replace(clientName)
+	host, err := configuredOpenVPNDownloadHost()
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to resolve OpenVPN public host: "+
+				err.Error(),
+			http.StatusInternalServerError,
+		)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/x-openvpn-profile")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.ovpn\"", safeName))
-	http.ServeFile(w, r, configPath)
+	profile, updated, err := rewriteOpenVPNProfileHost(
+		profile,
+		host,
+	)
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to rewrite OpenVPN config: "+
+				err.Error(),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	log.Printf(
+		"Subscription master profile host resolved: client=%s host=%s updated_lines=%d",
+		clientName,
+		host,
+		updated,
+	)
+
+	safeName := strings.NewReplacer(
+		"\\", "_",
+		"\"", "_",
+		"\r", "_",
+		"\n", "_",
+	).Replace(clientName)
+
+	writeOpenVPNProfile(
+		w,
+		safeName+".ovpn",
+		profile,
+	)
 }
 
 func subscriptionNodeDownloadHandler(w http.ResponseWriter, r *http.Request) {
