@@ -77,7 +77,7 @@ func runRoutingCommand(r *http.Request, timeout time.Duration, args ...string) (
 			result.ExitCode = exitErr.ExitCode()
 		}
 		if result.Output != "" {
-			return result, fmt.Errorf(result.Output)
+			return result, fmt.Errorf("%s", result.Output)
 		}
 		return result, err
 	}

@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONF="/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf"
+CERT="/etc/swanctl/x509/irangate-server-cert.pem"
+SERVER_KEY="/etc/swanctl/private/irangate-server-key.pem"
+CA_CERT="/etc/swanctl/x509ca/irangate-ca-cert.pem"
+CA_KEY="/etc/swanctl/private/irangate-ca-key.pem"
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+normalize_host() {
+    python3 - "${1:-}" <<'PY'
+import ipaddress
+import re
+import sys
+
+value = sys.argv[1].strip()
+
+if not value:
+    raise SystemExit(1)
+
+if "://" in value or "/" in value or any(ch.isspace() for ch in value):
+    raise SystemExit(1)
+
+value = value.strip("[]").rstrip(".")
+
+try:
+    ipaddress.ip_address(value)
+except ValueError:
+    if len(value) > 253:
+        raise SystemExit(1)
+
+    labels = value.split(".")
+
+    pattern = re.compile(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    )
+
+    if not labels or not all(pattern.fullmatch(label) for label in labels):
+        raise SystemExit(1)
+
+    value = value.lower()
+
+print(value)
+PY
+}
+
+current_identity() {
+    local identity=""
+
+    if [[ -s "$CONF" ]]; then
+        identity="$(
+            awk '
+                /^[[:space:]]*local[[:space:]]*\{/ {
+                    in_local = 1
+                    next
+                }
+
+                in_local &&
+                /^[[:space:]]*id[[:space:]]*=/ {
+                    line = $0
+                    sub(/^[[:space:]]*id[[:space:]]*=[[:space:]]*/, "", line)
+                    sub(/[[:space:]]*$/, "", line)
+                    print line
+                    exit
+                }
+
+                in_local && /^[[:space:]]*\}/ {
+                    in_local = 0
+                }
+            ' "$CONF"
+        )"
+    fi
+
+    if [[ -z "$identity" && -s "$CERT" ]]; then
+        identity="$(
+            openssl x509 \
+                -in "$CERT" \
+                -noout \
+                -subject \
+                -nameopt RFC2253 2>/dev/null |
+            sed -n 's/^subject=CN=//p'
+        )"
+    fi
+
+    printf '%s\n' "$identity"
+}
+
+check_required_files() {
+    local file
+
+    for file in \
+        "$CONF" \
+        "$CERT" \
+        "$SERVER_KEY" \
+        "$CA_CERT" \
+        "$CA_KEY"
+    do
+        [[ -s "$file" ]] || die "required file missing: $file"
+    done
+
+    command -v python3 >/dev/null || die "python3 is missing"
+    command -v openssl >/dev/null || die "openssl is missing"
+    command -v pki >/dev/null || die "strongSwan pki is missing"
+    command -v swanctl >/dev/null || die "swanctl is missing"
+}
+
+certificate_matches_host() {
+    local cert="$1"
+    local host="$2"
+
+    if python3 - "$host" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+PY
+    then
+        openssl x509 \
+            -in "$cert" \
+            -noout \
+            -checkip "$host" >/dev/null 2>&1
+    else
+        openssl x509 \
+            -in "$cert" \
+            -noout \
+            -checkhost "$host" >/dev/null 2>&1
+    fi
+}
+
+key_matches_certificate() {
+    local key="$1"
+    local cert="$2"
+    local key_hash cert_hash
+
+    key_hash="$(
+        openssl pkey \
+            -in "$key" \
+            -pubout 2>/dev/null |
+        sha256sum |
+        awk '{print $1}'
+    )"
+
+    cert_hash="$(
+        openssl x509 \
+            -in "$cert" \
+            -pubkey \
+            -noout 2>/dev/null |
+        sha256sum |
+        awk '{print $1}'
+    )"
+
+    [[ -n "$key_hash" && "$key_hash" == "$cert_hash" ]]
+}
+
+reload_identity() {
+    swanctl --load-creds
+    swanctl --load-conns
+}
+
+verify_loaded_identity() {
+    local host="$1"
+    local loaded
+
+    loaded="$(
+        swanctl --list-conns 2>&1 |
+        sed -n '/irangate-ikev2-mschapv2:/,/remote EAP/p'
+    )"
+
+    printf '%s\n' "$loaded"
+
+    grep -Fq "id: $host" <<<"$loaded"
+    grep -Fq "certs: CN=$host" <<<"$loaded"
+}
+
+sync_identity() (
+    set -Eeuo pipefail
+
+    local requested="${1:-}"
+    local host current backup tmp reload_output
+
+    host="$(normalize_host "$requested")" ||
+        die "invalid IKEv2 host: $requested"
+
+    check_required_files
+
+    current="$(current_identity || true)"
+
+    if [[ "$current" == "$host" ]] &&
+       certificate_matches_host "$CERT" "$host" &&
+       key_matches_certificate "$SERVER_KEY" "$CERT"
+    then
+        echo "IKEv2 identity already matches: $host ✅"
+        verify_loaded_identity "$host"
+        exit 0
+    fi
+
+    backup="/root/irangate-ikev2-identity-before-$(date +%Y%m%d-%H%M%S)"
+    tmp="$(mktemp -d)"
+
+    cleanup() {
+        rm -rf "$tmp"
+    }
+
+    rollback() {
+        echo "Rolling back IKEv2 identity..." >&2
+
+        cp -a "$backup/irangate-ikev2-mschapv2.conf" "$CONF"
+        cp -a "$backup/irangate-server-cert.pem" "$CERT"
+        cp -a "$backup/irangate-server-key.pem" "$SERVER_KEY"
+
+        chmod 0600 "$CONF" "$SERVER_KEY"
+        chmod 0644 "$CERT"
+
+        swanctl --load-creds >/dev/null 2>&1 || true
+        swanctl --load-conns >/dev/null 2>&1 || true
+    }
+
+    trap cleanup EXIT
+
+    mkdir -p "$backup"
+    chmod 0700 "$backup"
+
+    cp -a "$CONF" \
+        "$backup/irangate-ikev2-mschapv2.conf"
+
+    cp -a "$CERT" \
+        "$backup/irangate-server-cert.pem"
+
+    cp -a "$SERVER_KEY" \
+        "$backup/irangate-server-key.pem"
+
+    echo "Backup: $backup"
+
+    pki --gen \
+        --type rsa \
+        --size 4096 \
+        --outform pem \
+        >"$tmp/server-key.pem"
+
+    pki --pub \
+        --in "$tmp/server-key.pem" \
+        --type rsa |
+    pki --issue \
+        --lifetime 1825 \
+        --cacert "$CA_CERT" \
+        --cakey "$CA_KEY" \
+        --dn "CN=$host" \
+        --san "$host" \
+        --flag serverAuth \
+        --flag ikeIntermediate \
+        --outform pem \
+        >"$tmp/server-cert.pem"
+
+    cp -a "$CONF" "$tmp/connection.conf"
+
+    python3 - "$tmp/connection.conf" "$host" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+host = sys.argv[2]
+
+lines = path.read_text(encoding="utf-8").splitlines()
+inside_local = False
+replaced = 0
+result = []
+
+for line in lines:
+    if re.match(r"^\s*local\s*\{\s*$", line):
+        inside_local = True
+        result.append(line)
+        continue
+
+    if inside_local and re.match(r"^\s*id\s*=", line):
+        indent = line[:len(line) - len(line.lstrip())]
+        result.append(f"{indent}id = {host}")
+        replaced += 1
+        continue
+
+    if inside_local and re.match(r"^\s*\}\s*$", line):
+        inside_local = False
+
+    result.append(line)
+
+if replaced != 1:
+    raise SystemExit(
+        f"expected one local identity line, replaced={replaced}"
+    )
+
+path.write_text("\n".join(result) + "\n", encoding="utf-8")
+PY
+
+    openssl verify \
+        -CAfile "$CA_CERT" \
+        "$tmp/server-cert.pem"
+
+    certificate_matches_host \
+        "$tmp/server-cert.pem" \
+        "$host" ||
+        die "new certificate SAN does not match $host"
+
+    key_matches_certificate \
+        "$tmp/server-key.pem" \
+        "$tmp/server-cert.pem" ||
+        die "new certificate and private key do not match"
+
+    install \
+        -m 0600 \
+        -o root \
+        -g root \
+        "$tmp/server-key.pem" \
+        "$SERVER_KEY"
+
+    install \
+        -m 0644 \
+        -o root \
+        -g root \
+        "$tmp/server-cert.pem" \
+        "$CERT"
+
+    install \
+        -m 0600 \
+        -o root \
+        -g root \
+        "$tmp/connection.conf" \
+        "$CONF"
+
+    if ! reload_output="$(
+        {
+            reload_identity
+            verify_loaded_identity "$host"
+        } 2>&1
+    )"
+    then
+        printf '%s\n' "$reload_output" >&2
+        rollback
+        die "failed to load new IKEv2 identity"
+    fi
+
+    printf '%s\n' "$reload_output"
+
+    echo
+    echo "IKEv2 identity synchronized ✅"
+    echo "Identity: $host"
+    echo "Existing OpenVPN services were not touched."
+)
+
+case "${1:-}" in
+    current)
+        current_identity
+        ;;
+
+    sync)
+        sync_identity "${2:-}"
+        ;;
+
+    *)
+        cat <<'USAGE'
+Usage:
+  irangate-ikev2-identity-sync current
+  irangate-ikev2-identity-sync sync HOST
+USAGE
+        exit 1
+        ;;
+esac

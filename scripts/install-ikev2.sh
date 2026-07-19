@@ -342,6 +342,10 @@ main() {
         /usr/local/sbin/irangate-ikev2
 
     install -m 0755 \
+        "$SOURCE_DIR/irangate-ikev2-identity-sync" \
+        /usr/local/sbin/irangate-ikev2-identity-sync
+
+    install -m 0755 \
         "$SOURCE_DIR/irangate-ikev2-stats-snapshot.py" \
         /usr/local/sbin/irangate-ikev2-stats-snapshot
 
@@ -369,6 +373,11 @@ net.ipv4.conf.default.accept_redirects=0
 net.ipv4.conf.default.send_redirects=0
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
+
+# GOST delivers IKEv2/NAT-T to 127.0.0.1.
+net.ipv4.conf.lo.disable_policy=0
+net.ipv4.conf.lo.disable_xfrm=0
+net.ipv4.conf.lo.rp_filter=0
 EOF
 
     generate_ca_if_missing
@@ -386,7 +395,12 @@ EOF
     systemctl daemon-reload
     sysctl --system >/dev/null
 
-    systemctl enable --now strongswan
+    # Use only the swanctl/charon-systemd service.
+    # Running strongswan-starter simultaneously creates duplicate daemons.
+    systemctl disable --now strongswan-starter.service \
+        >/dev/null 2>&1 || true
+
+    systemctl enable --now strongswan.service
 
     /usr/local/sbin/irangate-ikev2 reload
 

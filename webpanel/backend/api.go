@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -2016,35 +2017,286 @@ func getServerSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSuccess(w, "Server settings retrieved", server)
 }
+
+var serverSettingsUpdateMu sync.Mutex
+
+func effectiveIKEv2ServerHost(server ServerConfig) string {
+	if host := strings.TrimSpace(server.IKEv2ServerHost); host != "" {
+		return host
+	}
+
+	if host := strings.TrimSpace(server.ServerDomain); host != "" {
+		return host
+	}
+
+	return strings.TrimSpace(server.ServerIP)
+}
+
+func ikev2IdentitySyncAvailable() bool {
+	required := []string{
+		"/usr/local/sbin/irangate-ikev2-identity-sync",
+		"/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf",
+		"/etc/swanctl/x509/irangate-server-cert.pem",
+		"/etc/swanctl/private/irangate-server-key.pem",
+	}
+
+	for _, path := range required {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+func runIKEv2IdentityCommand(args ...string) (string, error) {
+	const helper = "/usr/local/sbin/irangate-ikev2-identity-sync"
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		90*time.Second,
+	)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, helper, args...)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return text, fmt.Errorf("IKEv2 identity synchronization timed out")
+	}
+
+	if err != nil {
+		if text == "" {
+			text = err.Error()
+		}
+
+		return text, fmt.Errorf(
+			"IKEv2 identity synchronization failed: %s",
+			text,
+		)
+	}
+
+	return text, nil
+}
+
+func currentIKEv2Identity() (string, error) {
+	output, err := runIKEv2IdentityCommand("current")
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(output), nil
+}
+
+func syncIKEv2Identity(host string) error {
+	host = strings.TrimSpace(host)
+
+	if host == "" {
+		return nil
+	}
+
+	_, err := runIKEv2IdentityCommand("sync", host)
+	return err
+}
+
+func restoreServerSettingsFile(
+	data []byte,
+	existed bool,
+) error {
+	if existed {
+		return os.WriteFile(ServerDBPath, data, 0600)
+	}
+
+	err := os.Remove(ServerDBPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+
+	return err
+}
+
+func rollbackServerSettingsUpdate(
+	previous ServerConfig,
+	previousData []byte,
+	previousExists bool,
+	previousIdentity string,
+) error {
+	var rollbackErrors []string
+
+	if previousIdentity != "" {
+		if err := syncIKEv2Identity(previousIdentity); err != nil {
+			rollbackErrors = append(
+				rollbackErrors,
+				"restore IKEv2 identity: "+err.Error(),
+			)
+		}
+	}
+
+	if previousExists {
+		if err := syncServerSettingsForCLI(previous); err != nil {
+			rollbackErrors = append(
+				rollbackErrors,
+				"restore CLI settings: "+err.Error(),
+			)
+		}
+	}
+
+	if err := restoreServerSettingsFile(
+		previousData,
+		previousExists,
+	); err != nil {
+		rollbackErrors = append(
+			rollbackErrors,
+			"restore panel settings: "+err.Error(),
+		)
+	}
+
+	if len(rollbackErrors) > 0 {
+		return fmt.Errorf("%s", strings.Join(rollbackErrors, "; "))
+	}
+
+	return nil
+}
+
 func updateServerSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	serverSettingsUpdateMu.Lock()
+	defer serverSettingsUpdateMu.Unlock()
+
 	var server ServerConfig
 	if err := json.NewDecoder(r.Body).Decode(&server); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	server.ServerIP = strings.TrimSpace(server.ServerIP)
+	server.ServerDomain = strings.TrimSpace(server.ServerDomain)
+	server.IKEv2ServerHost = strings.TrimSpace(server.IKEv2ServerHost)
+	server.Protocol = strings.TrimSpace(server.Protocol)
+
 	data, err := json.MarshalIndent(server, "", "  ")
 	if err != nil {
-		sendError(w, "Failed to serialize server settings", http.StatusInternalServerError)
+		sendError(
+			w,
+			"Failed to serialize server settings",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(ServerDBPath), 0755); err != nil {
-		sendError(w, "Failed to create webpanel config directory", http.StatusInternalServerError)
+		sendError(
+			w,
+			"Failed to create webpanel config directory",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	previousData, readErr := os.ReadFile(ServerDBPath)
+	previousExists := readErr == nil
+
+	if readErr != nil && !os.IsNotExist(readErr) {
+		sendError(
+			w,
+			"Failed to read existing server settings",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	var previous ServerConfig
+
+	if previousExists {
+		if err := json.Unmarshal(previousData, &previous); err != nil {
+			sendError(
+				w,
+				"Failed to parse existing server settings",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+	}
+
+	previousIdentity := ""
+	newIdentity := effectiveIKEv2ServerHost(server)
+	identityChanged := false
+
+	if ikev2IdentitySyncAvailable() {
+		previousIdentity, err = currentIKEv2Identity()
+		if err != nil {
+			sendError(
+				w,
+				err.Error(),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		identityChanged =
+			newIdentity != "" &&
+				newIdentity != previousIdentity
+
+		if identityChanged {
+			if err := syncIKEv2Identity(newIdentity); err != nil {
+				sendError(
+					w,
+					err.Error(),
+					http.StatusInternalServerError,
+				)
+				return
+			}
+		}
+	}
+
+	failWithRollback := func(message string, cause error) {
+		rollbackErr := rollbackServerSettingsUpdate(
+			previous,
+			previousData,
+			previousExists,
+			func() string {
+				if identityChanged {
+					return previousIdentity
+				}
+
+				return ""
+			}(),
+		)
+
+		fullMessage := message + ": " + cause.Error()
+
+		if rollbackErr != nil {
+			fullMessage += "; rollback failed: " + rollbackErr.Error()
+		}
+
+		sendError(
+			w,
+			fullMessage,
+			http.StatusInternalServerError,
+		)
+	}
+
+	if err := syncServerSettingsForCLI(server); err != nil {
+		failWithRollback(
+			"Failed to sync server settings with CLI",
+			err,
+		)
 		return
 	}
 
 	if err := os.WriteFile(ServerDBPath, data, 0600); err != nil {
-		sendError(w, "Failed to save server settings", http.StatusInternalServerError)
+		failWithRollback(
+			"Failed to save server settings",
+			err,
+		)
 		return
 	}
 
-	if err := syncServerSettingsForCLI(server); err != nil {
-		sendError(w, "Failed to sync server settings with CLI: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	sendSuccess(w, "Server settings updated and synced with CLI", server)
+	sendSuccess(
+		w,
+		"Server settings and IKEv2 identity updated successfully",
+		server,
+	)
 }
 
 func syncServerSettingsForCLI(server ServerConfig) error {
@@ -2052,6 +2304,7 @@ func syncServerSettingsForCLI(server ServerConfig) error {
 
 	serverIP := strings.TrimSpace(server.ServerIP)
 	serverDomain := strings.TrimSpace(server.ServerDomain)
+	ikev2ServerHost := strings.TrimSpace(server.IKEv2ServerHost)
 	protocol := strings.ToLower(strings.TrimSpace(server.Protocol))
 
 	serverConfigPath := filepath.Join(DataBaseDir, "server_config.json")
@@ -2065,6 +2318,12 @@ func syncServerSettingsForCLI(server ServerConfig) error {
 		serverConfig["auto_detect_ip"] = false
 	}
 	serverConfig["server_domain"] = serverDomain
+
+	if ikev2ServerHost != "" {
+		serverConfig["ikev2_server_host"] = ikev2ServerHost
+	} else {
+		delete(serverConfig, "ikev2_server_host")
+	}
 
 	if server.ServerPort > 0 {
 		serverConfig["server_port"] = server.ServerPort
@@ -2107,6 +2366,13 @@ func syncServerSettingsForCLI(server ServerConfig) error {
 	if serverIP != "" {
 		dbSettings["server_ip"] = serverIP
 	}
+
+	if ikev2ServerHost != "" {
+		dbSettings["ikev2_server_host"] = ikev2ServerHost
+	} else {
+		delete(dbSettings, "ikev2_server_host")
+	}
+
 	if server.ServerPort > 0 {
 		dbSettings["server_port"] = server.ServerPort
 	}
@@ -2818,7 +3084,7 @@ func ensureIKEv2Account(clientName string, createIfMissing bool) (IKEv2Subscript
 		if info.Error == "" {
 			info.Error = err.Error()
 		}
-		return info, fmt.Errorf(info.Error)
+		return info, fmt.Errorf("%s", info.Error)
 	}
 
 	info := parseIKEv2AccountOutput(out)
