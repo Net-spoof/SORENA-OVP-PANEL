@@ -34,6 +34,7 @@ Authenticated endpoints include:
 - client profile creation
 - client profile download
 - `GET /backup/export` using timestamped HMAC authentication
+- `POST /backup/restore` using checksum-bound timestamped HMAC authentication
 
 The Agent port is selected during installation.
 
@@ -52,6 +53,19 @@ the shared Node token. Snapshot creation and client certificate generation
 share `/run/irangate-node-pki.lock` so Easy-RSA state is captured consistently.
 The response is encrypted with AES-256-CBC/PBKDF2 and includes SHA256 and
 response-HMAC headers for Master-side verification.
+
+## Node snapshot restore
+
+The Agent can validate or apply encrypted snapshots through `POST /backup/restore`.
+The request signature binds the timestamp and encrypted payload SHA256 to the
+shared Node token. Validation checks archive paths, size limits, manifest format,
+all internal SHA256 entries, essential PKI files, and every OpenVPN file referenced
+by `server.conf`. `crl.pem` is required only when `server.conf` uses `crl-verify`.
+
+Before a real restore, the node creates a local safety copy. PKI, server files,
+client profiles, CCD files, and block markers are replaced under the shared PKI
+lock. OpenVPN configuration is tested before restart; failures trigger rollback.
+The Master may use validate-only mode without changing files or restarting OpenVPN.
 
 ## Node Control API
 

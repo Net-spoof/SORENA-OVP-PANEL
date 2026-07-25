@@ -516,6 +516,585 @@ NODE_BACKUP_HELPER_EOF
   chmod 0755 /usr/local/sbin/irangate-node-backup-v1
 }
 
+write_restore_helper() {
+  cat > /usr/local/sbin/irangate-node-restore-v1 <<'NODE_RESTORE_HELPER_EOF'
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path, PurePosixPath
+
+LOCK_PATH = Path("/run/irangate-node-pki.lock")
+SAFETY_ROOT = Path("/opt/irangate-node-agent/restore-safety")
+BACKUP_HELPER = Path("/usr/local/sbin/irangate-node-backup-v1")
+SNAPSHOT_FORMAT = "irangate-node-snapshot-v1"
+OPENVPN_SERVICE = "openvpn-server@server.service"
+MAX_MEMBERS = 50000
+MAX_EXTRACTED = 4 * 1024 * 1024 * 1024
+MAX_SINGLE_FILE = 2 * 1024 * 1024 * 1024
+
+DIRECTORY_MAPPINGS = (
+    (
+        Path("payload/etc/openvpn/easy-rsa/pki"),
+        Path("/etc/openvpn/easy-rsa/pki"),
+    ),
+    (
+        Path("payload/etc/openvpn/server"),
+        Path("/etc/openvpn/server"),
+    ),
+    (
+        Path("payload/etc/openvpn/blocked-clients"),
+        Path("/etc/openvpn/blocked-clients"),
+    ),
+    (
+        Path("payload/etc/openvpn/node-denied-clients"),
+        Path("/etc/openvpn/node-denied-clients"),
+    ),
+    (
+        Path("payload/etc/openvpn/ccd"),
+        Path("/etc/openvpn/ccd"),
+    ),
+    (
+        Path("payload/opt/irangate-node-agent/clients"),
+        Path("/opt/irangate-node-agent/clients"),
+    ),
+)
+
+FILE_MAPPINGS = (
+    (
+        Path("payload/etc/openvpn/irangate-client-connect.sh"),
+        Path("/etc/openvpn/irangate-client-connect.sh"),
+    ),
+)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_inside(root: Path, target: Path) -> None:
+    try:
+        target.resolve(strict=False).relative_to(root.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"unsafe archive target: {target}") from exc
+
+
+def safe_extract(archive_path: Path, destination: Path) -> None:
+    total = 0
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+
+        if len(members) > MAX_MEMBERS:
+            raise RuntimeError("snapshot contains too many members")
+
+        for member in members:
+            name = PurePosixPath(member.name)
+
+            if name.is_absolute() or ".." in name.parts:
+                raise RuntimeError(
+                    "unsafe snapshot path: " + member.name
+                )
+
+            target = destination / member.name
+            ensure_inside(destination, target)
+
+            if member.ischr() or member.isblk() or member.isfifo():
+                raise RuntimeError(
+                    "special snapshot member rejected: " + member.name
+                )
+
+            if member.issym():
+                ensure_inside(target.parent, target.parent / member.linkname)
+
+            if member.islnk():
+                ensure_inside(destination, destination / member.linkname)
+
+            if member.isfile():
+                if member.size > MAX_SINGLE_FILE:
+                    raise RuntimeError(
+                        "snapshot member too large: " + member.name
+                    )
+
+                total += member.size
+
+                if total > MAX_EXTRACTED:
+                    raise RuntimeError(
+                        "snapshot extracted size limit exceeded"
+                    )
+
+        archive.extractall(destination, members=members)
+
+
+def verify_checksums(root: Path) -> int:
+    checksum_path = root / "SHA256SUMS"
+
+    if not checksum_path.is_file():
+        raise RuntimeError("snapshot checksum list is missing")
+
+    checked = 0
+
+    for raw in checksum_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+
+        if not line:
+            continue
+
+        digest, separator, relative = line.partition("  ")
+
+        if not separator or len(digest) != 64:
+            raise RuntimeError("invalid snapshot checksum entry")
+
+        relative_path = PurePosixPath(relative)
+
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RuntimeError("unsafe snapshot checksum path")
+
+        target = root / relative
+        ensure_inside(root, target)
+
+        if not target.is_file():
+            raise RuntimeError(
+                "snapshot checksum target missing: " + relative
+            )
+
+        if sha256_file(target) != digest.lower():
+            raise RuntimeError(
+                "snapshot checksum mismatch: " + relative
+            )
+
+        checked += 1
+
+    if checked == 0:
+        raise RuntimeError("snapshot checksum list is empty")
+
+    return checked
+
+
+def decrypt_snapshot(encrypted: Path, passphrase: str, output: Path) -> None:
+    env = os.environ.copy()
+    env["IRANGATE_BACKUP_PASSPHRASE"] = passphrase
+
+    result = subprocess.run(
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-md",
+            "sha256",
+            "-pass",
+            "env:IRANGATE_BACKUP_PASSPHRASE",
+            "-in",
+            str(encrypted),
+            "-out",
+            str(output),
+        ],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "snapshot decryption failed: " + result.stderr.strip()
+        )
+
+    output.chmod(0o600)
+
+
+def validate_snapshot(encrypted: Path, passphrase: str, work: Path) -> tuple[Path, dict, int]:
+    raw = work / "snapshot.tar.gz"
+    extracted = work / "extracted"
+    extracted.mkdir(parents=True)
+
+    decrypt_snapshot(encrypted, passphrase, raw)
+    safe_extract(raw, extracted)
+
+    manifest_path = extracted / "manifest.json"
+
+    if not manifest_path.is_file():
+        raise RuntimeError("snapshot manifest is missing")
+
+    manifest = json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )
+
+    if manifest.get("format") != SNAPSHOT_FORMAT:
+        raise RuntimeError("unsupported snapshot format")
+
+    if manifest.get("snapshot_version") != 1:
+        raise RuntimeError("unsupported snapshot version")
+
+    required = (
+        "payload/etc/openvpn/easy-rsa/pki/ca.crt",
+        "payload/etc/openvpn/easy-rsa/pki/private/ca.key",
+        "payload/etc/openvpn/easy-rsa/pki/index.txt",
+        "payload/etc/openvpn/easy-rsa/pki/serial",
+        "payload/etc/openvpn/server/server.conf",
+    )
+
+    for relative in required:
+        target = extracted / relative
+
+        if not target.is_file() or target.stat().st_size == 0:
+            raise RuntimeError(
+                "required snapshot file missing: " + relative
+            )
+
+    server_conf = (
+        extracted
+        / "payload/etc/openvpn/server/server.conf"
+    )
+
+    referenced_directives = {
+        "ca",
+        "cert",
+        "key",
+        "dh",
+        "tls-auth",
+        "tls-crypt",
+        "tls-crypt-v2",
+        "crl-verify",
+    }
+
+    for raw_line in server_conf.read_text(
+        encoding="utf-8",
+        errors="replace",
+    ).splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith(("#", ";")):
+            continue
+
+        parts = line.split()
+
+        if len(parts) < 2:
+            continue
+
+        directive = parts[0].lower()
+
+        if directive not in referenced_directives:
+            continue
+
+        raw_path = parts[1].strip("\"'")
+
+        if not raw_path or raw_path.lower() in {"none", "[inline]"}:
+            continue
+
+        if raw_path.startswith("/etc/openvpn/"):
+            relative = "payload" + raw_path
+        elif raw_path.startswith("/"):
+            raise RuntimeError(
+                "unsupported external OpenVPN file reference: "
+                + raw_path
+            )
+        else:
+            relative = (
+                "payload/etc/openvpn/server/"
+                + raw_path
+            )
+
+        target = extracted / relative
+
+        if not target.is_file() or target.stat().st_size == 0:
+            raise RuntimeError(
+                "OpenVPN referenced file missing: "
+                + relative
+            )
+
+    checksum_count = verify_checksums(extracted)
+
+    return extracted, manifest, checksum_count
+
+
+def copy_current_to_safety(safety: Path) -> None:
+    for relative, destination in DIRECTORY_MAPPINGS:
+        target = safety / relative
+
+        if destination.is_dir():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(destination, target, symlinks=True)
+
+    for relative, destination in FILE_MAPPINGS:
+        target = safety / relative
+
+        if destination.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(destination, target)
+
+
+def replace_path(source: Path, destination: Path, is_directory: bool) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged = destination.parent / (
+        "." + destination.name + ".restore-" + os.urandom(5).hex()
+    )
+
+    if staged.exists() or staged.is_symlink():
+        if staged.is_dir() and not staged.is_symlink():
+            shutil.rmtree(staged)
+        else:
+            staged.unlink()
+
+    if source.exists():
+        if is_directory:
+            shutil.copytree(source, staged, symlinks=True)
+        else:
+            shutil.copy2(source, staged)
+    elif is_directory:
+        staged.mkdir(parents=True)
+        staged.chmod(0o755)
+    else:
+        if destination.exists() or destination.is_symlink():
+            if destination.is_dir() and not destination.is_symlink():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+        return
+
+    if destination.exists() or destination.is_symlink():
+        if destination.is_dir() and not destination.is_symlink():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+
+    os.replace(staged, destination)
+
+
+def apply_payload(extracted: Path) -> None:
+    for relative, destination in DIRECTORY_MAPPINGS:
+        replace_path(
+            extracted / relative,
+            destination,
+            True,
+        )
+
+    for relative, destination in FILE_MAPPINGS:
+        replace_path(
+            extracted / relative,
+            destination,
+            False,
+        )
+
+    Path("/etc/openvpn/blocked-clients").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    Path("/etc/openvpn/node-denied-clients").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    Path("/etc/openvpn/ccd").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    Path("/opt/irangate-node-agent/clients").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    guard = Path("/etc/openvpn/irangate-client-connect.sh")
+    if guard.is_file():
+        guard.chmod(0o755)
+
+
+def service_active() -> bool:
+    return subprocess.run(
+        ["systemctl", "is-active", "--quiet", OPENVPN_SERVICE],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
+def restart_openvpn() -> None:
+    result = subprocess.run(
+        ["systemctl", "restart", OPENVPN_SERVICE],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if result.returncode != 0 or not service_active():
+        raise RuntimeError(
+            "OpenVPN restart failed: " + result.stderr.strip()
+        )
+
+
+def create_persistent_safety(passphrase: str) -> Path:
+    env = os.environ.copy()
+    env["IRANGATE_BACKUP_PASSPHRASE"] = passphrase
+
+    result = subprocess.run(
+        [str(BACKUP_HELPER)],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "pre-restore node safety backup failed: "
+            + result.stderr.strip()
+        )
+
+    source = Path(result.stdout.strip().splitlines()[-1])
+
+    if not source.is_file():
+        raise RuntimeError("node safety snapshot is missing")
+
+    SAFETY_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = SAFETY_ROOT / (
+        "pre-restore-"
+        + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        + "-"
+        + os.urandom(4).hex()
+        + ".tar.gz.enc"
+    )
+    shutil.copy2(source, destination)
+    destination.chmod(0o600)
+    source.unlink(missing_ok=True)
+
+    return destination
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--validate-only", action="store_true")
+    args = parser.parse_args()
+
+    passphrase = os.environ.get("IRANGATE_BACKUP_PASSPHRASE", "")
+
+    if len(passphrase) < 16:
+        raise RuntimeError("restore passphrase is missing or too short")
+
+    if not args.archive.is_file() or args.archive.stat().st_size == 0:
+        raise RuntimeError("restore archive is missing or empty")
+
+    with tempfile.TemporaryDirectory(
+        prefix="irangate-node-restore-v1-"
+    ) as temp_dir:
+        work = Path(temp_dir)
+        extracted, manifest, checksum_count = validate_snapshot(
+            args.archive,
+            passphrase,
+            work / "incoming",
+        )
+
+        if args.validate_only:
+            print(
+                json.dumps(
+                    {
+                        "success": True,
+                        "validated_only": True,
+                        "format": manifest.get("format"),
+                        "created_at": manifest.get("created_at"),
+                        "checksum_files": checksum_count,
+                        "counts": manifest.get("counts", {}),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 0
+
+        safety_archive = create_persistent_safety(passphrase)
+
+        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        with LOCK_PATH.open("a+") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            was_active = service_active()
+
+            if was_active:
+                subprocess.run(
+                    ["systemctl", "stop", OPENVPN_SERVICE],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+
+            try:
+                apply_payload(extracted)
+                restart_openvpn()
+
+            except Exception as restore_error:
+                rollback_root = work / "rollback"
+                rollback_extracted, _, _ = validate_snapshot(
+                    safety_archive,
+                    passphrase,
+                    rollback_root,
+                )
+                apply_payload(rollback_extracted)
+
+                if was_active:
+                    restart_openvpn()
+
+                raise RuntimeError(
+                    "node restore failed and rollback was applied: "
+                    + str(restore_error)
+                ) from restore_error
+
+        print(
+            json.dumps(
+                {
+                    "success": True,
+                    "restored": True,
+                    "created_at": manifest.get("created_at"),
+                    "counts": manifest.get("counts", {}),
+                    "checksum_files": checksum_count,
+                    "safety_backup": str(safety_archive),
+                    "openvpn_active": service_active(),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+NODE_RESTORE_HELPER_EOF
+
+  chmod 0755 /usr/local/sbin/irangate-node-restore-v1
+}
+
 write_agent() {
   cat > "$AGENT_DIR/agent.py" <<'AGENT_PY_EOF'
 #!/usr/bin/env python3
@@ -682,6 +1261,140 @@ def irangate_handle_backup_export(handler):
             os.unlink(resolved)
         except FileNotFoundError:
             pass
+# ===== IRANGATE_NODE_BACKUP_RESTORE_V1 =====
+BACKUP_RESTORE_PATH = "/backup/restore"
+BACKUP_RESTORE_HELPER = "/usr/local/sbin/irangate-node-restore-v1"
+BACKUP_RESTORE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def irangate_backup_restore_request_ok(handler, digest):
+    if not TOKEN or len(TOKEN) < 16:
+        return False
+
+    raw_timestamp = handler.headers.get("X-IranGate-Timestamp", "").strip()
+    signature = handler.headers.get("X-IranGate-Signature", "").strip().lower()
+
+    try:
+        timestamp = int(raw_timestamp)
+    except Exception:
+        return False
+
+    if abs(int(time.time()) - timestamp) > BACKUP_MAX_CLOCK_SKEW:
+        return False
+
+    expected = irangate_backup_hmac(
+        f"POST\n{BACKUP_RESTORE_PATH}\n{timestamp}\n{digest}"
+    )
+    return hmac.compare_digest(signature, expected)
+
+
+def irangate_handle_backup_restore(handler):
+    expected_digest = handler.headers.get(
+        "X-IranGate-Content-SHA256",
+        "",
+    ).strip().lower()
+
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        return send_json(
+            handler,
+            400,
+            {"success": False, "message": "Invalid restore checksum"},
+        )
+
+    if not irangate_backup_restore_request_ok(handler, expected_digest):
+        return send_json(
+            handler,
+            401,
+            {"success": False, "message": "Unauthorized restore request"},
+        )
+
+    try:
+        content_length = int(
+            handler.headers.get("Content-Length", "0") or "0"
+        )
+    except Exception:
+        content_length = 0
+
+    if content_length <= 0 or content_length > BACKUP_RESTORE_MAX_BYTES:
+        return send_json(
+            handler,
+            413,
+            {"success": False, "message": "Restore payload size is invalid"},
+        )
+
+    restore_root = Path("/run/irangate-node-restore")
+    restore_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    upload_path = restore_root / (
+        "restore-" + str(int(time.time())) + "-" + os.urandom(5).hex() + ".enc"
+    )
+    digest = hashlib.sha256()
+    remaining = content_length
+
+    try:
+        with upload_path.open("wb") as handle:
+            while remaining > 0:
+                chunk = handler.rfile.read(min(1024 * 1024, remaining))
+
+                if not chunk:
+                    raise RuntimeError("Restore upload ended early")
+
+                handle.write(chunk)
+                digest.update(chunk)
+                remaining -= len(chunk)
+
+        upload_path.chmod(0o600)
+        actual_digest = digest.hexdigest()
+
+        if not hmac.compare_digest(actual_digest, expected_digest):
+            return send_json(
+                handler,
+                400,
+                {"success": False, "message": "Restore payload checksum mismatch"},
+            )
+
+        env = os.environ.copy()
+        env["IRANGATE_BACKUP_PASSPHRASE"] = TOKEN
+        command = [BACKUP_RESTORE_HELPER, str(upload_path)]
+
+        if handler.headers.get("X-IranGate-Restore-Mode", "").strip() == "validate":
+            command.append("--validate-only")
+
+        result = subprocess.run(
+            command,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=600,
+            check=False,
+        )
+
+        output_text = result.stdout.strip()
+        error_text = result.stderr.strip()
+
+        try:
+            payload = json.loads(output_text or error_text)
+        except Exception:
+            payload = {
+                "success": result.returncode == 0,
+                "message": output_text or error_text,
+            }
+
+        if result.returncode != 0:
+            return send_json(handler, 500, payload)
+
+        return send_json(handler, 200, payload)
+
+    except Exception as exc:
+        return send_json(
+            handler,
+            500,
+            {"success": False, "message": str(exc)},
+        )
+
+    finally:
+        upload_path.unlink(missing_ok=True)
+# ===== /IRANGATE_NODE_BACKUP_RESTORE_V1 =====
 # ===== /IRANGATE_NODE_BACKUP_EXPORT_V1 =====
 
 
@@ -836,10 +1549,13 @@ class Handler(BaseHTTPRequestHandler):
         return send_json(self, 404, {"success": False, "message": "Not found"})
 
     def do_POST(self):
+        path = urlparse(self.path).path
+
+        if path == BACKUP_RESTORE_PATH:
+            return irangate_handle_backup_restore(self)
+
         if not self.auth_ok():
             return send_json(self, 401, {"success": False, "message": "Unauthorized"})
-
-        path = urlparse(self.path).path
 
         if path == "/clients":
             data = self.read_json()
@@ -1171,6 +1887,9 @@ uninstall_node() {
   rm -f /etc/systemd/system/irangate-node-nat.service
   rm -f /usr/local/bin/irangate-node-client
   rm -f /usr/local/sbin/irangate-node-backup-v1
+  rm -f /usr/local/sbin/irangate-node-restore-v1
+  rm -rf /run/irangate-node-restore
+  rm -rf /opt/irangate-node-agent/restore-safety
   rm -f /run/irangate-node-pki.lock
   rm -rf /run/irangate-node-backup
   rm -f /usr/local/bin/irangate-node-nat
@@ -1263,6 +1982,7 @@ main() {
   write_client_tool
   write_client_connect_guard
   write_backup_helper
+  write_restore_helper
   write_agent
   write_control_server
   write_systemd
