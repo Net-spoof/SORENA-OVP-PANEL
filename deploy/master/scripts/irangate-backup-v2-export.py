@@ -185,6 +185,63 @@ def copy_optional(
 
 
 # IRANGATE_BACKUP_SINGLE_PASS_V1
+# IRANGATE_BACKUP_EXCLUDE_OPENVPN_LOGS_V2
+def copy_openvpn_state(stage: Path) -> bool:
+    src = Path("/etc/openvpn")
+    dst = stage / "openvpn"
+
+    if not src.is_dir():
+        return False
+
+    def ignore_transient(
+        directory,
+        names,
+    ):
+        directory_path = Path(directory)
+        ignored = set()
+
+        for name in names:
+            candidate = directory_path / name
+
+            try:
+                relative = candidate.relative_to(src)
+            except ValueError:
+                continue
+
+            parts = relative.parts
+            lowered = name.lower()
+
+            # Runtime logs/status are not required for restore.
+            if parts and parts[0] == "logs":
+                ignored.add(name)
+                continue
+
+            if (
+                lowered == "openvpn-status.log"
+                or lowered.endswith(".log")
+                or ".log." in lowered
+                or lowered.endswith(".pid")
+                or lowered.endswith(".tmp")
+            ):
+                ignored.add(name)
+
+        return ignored
+
+    shutil.copytree(
+        src,
+        dst,
+        symlinks=True,
+        dirs_exist_ok=True,
+        ignore=ignore_transient,
+    )
+
+    log(
+        "excluded OpenVPN logs/status files from backup"
+    )
+
+    return True
+
+
 def copy_traffic_state(stage: Path) -> bool:
     src = Path("/opt/irangate/traffic")
     dst = stage / "runtime" / "traffic"
@@ -1317,10 +1374,7 @@ def main() -> int:
                 "panel-config"
             )
 
-            if copy_optional(
-                Path("/etc/openvpn"),
-                stage / "openvpn",
-            ):
+            if copy_openvpn_state(stage):
                 components.append(
                     "openvpn-runtime-pki"
                 )

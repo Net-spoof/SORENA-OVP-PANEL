@@ -686,6 +686,22 @@ install_openvpn_core() {
     mkdir -p /etc/openvpn/ccd
     mkdir -p /etc/openvpn/logs
 
+    # IRANGATE_OPENVPN_LOGROTATE_V2
+    cat >/etc/logrotate.d/irangate-openvpn <<'LOGROTATE'
+/etc/openvpn/logs/openvpn.log {
+    daily
+    maxsize 20M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    copytruncate
+    su root root
+}
+LOGROTATE
+
+    chmod 0644 /etc/logrotate.d/irangate-openvpn
+
     setup_pki
     case "$DNS" in
         1) DNS1="8.8.8.8"; DNS2="8.8.4.4" ;;
