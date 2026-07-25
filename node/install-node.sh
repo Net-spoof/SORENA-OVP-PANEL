@@ -29,7 +29,7 @@ ask() {
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt update
-  apt install -y openvpn easy-rsa curl jq python3 python3-pip iptables netcat-openbsd openssl
+  apt install -y openvpn easy-rsa curl jq python3 python3-pip iptables netcat-openbsd openssl util-linux
 }
 
 write_env() {
@@ -222,6 +222,15 @@ if [ -z "$SAFE_NAME" ]; then
   exit 1
 fi
 
+
+# IRANGATE_NODE_PKI_LOCK_V1
+mkdir -p /run
+exec 9>/run/irangate-node-pki.lock
+flock -w 120 9 || {
+  echo "Timed out waiting for PKI lock" >&2
+  exit 1
+}
+
 set -a
 . /etc/irangate-node-agent.env
 set +a
@@ -311,10 +320,206 @@ CONNECT_GUARD_EOF
   chmod +x /etc/openvpn/irangate-client-connect.sh
 }
 
+
+write_backup_helper() {
+  cat > /usr/local/sbin/irangate-node-backup-v1 <<'NODE_BACKUP_HELPER_EOF'
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+FORMAT = "irangate-node-snapshot-v1"
+LOCK_PATH = Path("/run/irangate-node-pki.lock")
+OUTPUT_DIR = Path("/run/irangate-node-backup")
+
+SOURCES = (
+    (Path("/etc/openvpn/easy-rsa/pki"), Path("payload/etc/openvpn/easy-rsa/pki")),
+    (Path("/etc/openvpn/server"), Path("payload/etc/openvpn/server")),
+    (Path("/etc/openvpn/blocked-clients"), Path("payload/etc/openvpn/blocked-clients")),
+    (Path("/etc/openvpn/node-denied-clients"), Path("payload/etc/openvpn/node-denied-clients")),
+    (Path("/etc/openvpn/ccd"), Path("payload/etc/openvpn/ccd")),
+    (Path("/etc/openvpn/irangate-client-connect.sh"), Path("payload/etc/openvpn/irangate-client-connect.sh")),
+    (Path("/opt/irangate-node-agent/clients"), Path("payload/opt/irangate-node-agent/clients")),
+)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def copy_item(source: Path, destination: Path) -> bool:
+    if not source.exists() and not source.is_symlink():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, destination, symlinks=True)
+    elif source.is_symlink():
+        os.symlink(os.readlink(source), destination)
+    else:
+        shutil.copy2(source, destination)
+    return True
+
+
+def count_files(path: Path, pattern: str = "*") -> int:
+    if not path.is_dir():
+        return 0
+    return sum(1 for item in path.glob(pattern) if item.is_file())
+
+
+def write_checksums(stage: Path) -> None:
+    checksum_path = stage / "SHA256SUMS"
+    files = sorted(
+        (
+            item
+            for item in stage.rglob("*")
+            if item.is_file() and not item.is_symlink() and item != checksum_path
+        ),
+        key=lambda item: item.relative_to(stage).as_posix(),
+    )
+    with checksum_path.open("w", encoding="utf-8") as handle:
+        for item in files:
+            relative = item.relative_to(stage).as_posix()
+            handle.write(f"{sha256_file(item)}  {relative}\n")
+    checksum_path.chmod(0o600)
+
+
+def create_archive(stage: Path, output: Path) -> None:
+    with tarfile.open(output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+        for child in sorted(stage.iterdir(), key=lambda item: item.name):
+            archive.add(child, arcname=child.name, recursive=True)
+    output.chmod(0o600)
+
+
+def main() -> int:
+    passphrase = os.environ.get("IRANGATE_BACKUP_PASSPHRASE", "")
+    if len(passphrase) < 16:
+        raise RuntimeError("backup passphrase is missing or too short")
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(OUTPUT_DIR, 0o700)
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with LOCK_PATH.open("a+") as lock_handle:
+        import fcntl
+
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+        with tempfile.TemporaryDirectory(prefix="irangate-node-snapshot-") as temp_dir:
+            temp_root = Path(temp_dir)
+            stage = temp_root / "snapshot"
+            stage.mkdir(parents=True)
+
+            included = []
+            for source, relative in SOURCES:
+                if copy_item(source, stage / relative):
+                    included.append(str(source))
+
+            manifest = {
+                "format": FORMAT,
+                "snapshot_version": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "source_hostname": socket.gethostname(),
+                "node_name": os.environ.get("NODE_NAME", ""),
+                "node_location": os.environ.get("NODE_LOCATION", ""),
+                "node_public_host": os.environ.get("NODE_PUBLIC_HOST", ""),
+                "node_ovpn_port": os.environ.get("NODE_OVPN_PORT", ""),
+                "node_ovpn_proto": os.environ.get("NODE_OVPN_PROTO", ""),
+                "included_paths": included,
+                "counts": {
+                    "generated_clients": count_files(Path("/opt/irangate-node-agent/clients"), "*.ovpn"),
+                    "issued_certificates": count_files(Path("/etc/openvpn/easy-rsa/pki/issued"), "*.crt"),
+                    "private_keys": count_files(Path("/etc/openvpn/easy-rsa/pki/private"), "*.key"),
+                    "blocked_clients": count_files(Path("/etc/openvpn/blocked-clients")),
+                    "node_denied_clients": count_files(Path("/etc/openvpn/node-denied-clients")),
+                },
+                "secrets": {
+                    "node_environment_included": False,
+                    "pki_private_material_included": True,
+                    "transport_encrypted": True,
+                },
+            }
+            (stage / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (stage / "manifest.json").chmod(0o600)
+            write_checksums(stage)
+
+            raw_archive = temp_root / "snapshot.tar.gz"
+            create_archive(stage, raw_archive)
+
+            output = OUTPUT_DIR / (
+                "node-snapshot-"
+                + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+                + "-"
+                + os.urandom(4).hex()
+                + ".tar.gz.enc"
+            )
+
+            env = os.environ.copy()
+            env["IRANGATE_BACKUP_PASSPHRASE"] = passphrase
+            result = subprocess.run(
+                [
+                    "openssl",
+                    "enc",
+                    "-aes-256-cbc",
+                    "-salt",
+                    "-pbkdf2",
+                    "-iter",
+                    "200000",
+                    "-md",
+                    "sha256",
+                    "-pass",
+                    "env:IRANGATE_BACKUP_PASSPHRASE",
+                    "-in",
+                    str(raw_archive),
+                    "-out",
+                    str(output),
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError("snapshot encryption failed: " + result.stderr.strip())
+            output.chmod(0o600)
+            print(output)
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"irangate-node-backup-v1: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+NODE_BACKUP_HELPER_EOF
+
+  chmod 0755 /usr/local/sbin/irangate-node-backup-v1
+}
+
 write_agent() {
   cat > "$AGENT_DIR/agent.py" <<'AGENT_PY_EOF'
 #!/usr/bin/env python3
-import json, os, re, subprocess
+import hashlib, hmac, json, os, re, subprocess, time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -347,6 +552,137 @@ def send_file(h, code, content, filename):
     h.send_header("Content-Length", str(len(body)))
     h.end_headers()
     h.wfile.write(body)
+
+
+# ===== IRANGATE_NODE_BACKUP_EXPORT_V1 =====
+BACKUP_EXPORT_PATH = "/backup/export"
+BACKUP_HELPER = "/usr/local/sbin/irangate-node-backup-v1"
+BACKUP_MAX_CLOCK_SKEW = 300
+
+
+def irangate_backup_hmac(message):
+    return hmac.new(
+        TOKEN.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def irangate_backup_request_ok(handler, method, path):
+    if not TOKEN or len(TOKEN) < 16:
+        return False
+
+    raw_timestamp = handler.headers.get("X-IranGate-Timestamp", "").strip()
+    signature = handler.headers.get("X-IranGate-Signature", "").strip().lower()
+
+    try:
+        timestamp = int(raw_timestamp)
+    except Exception:
+        return False
+
+    if abs(int(time.time()) - timestamp) > BACKUP_MAX_CLOCK_SKEW:
+        return False
+
+    expected = irangate_backup_hmac(f"{method}\n{path}\n{timestamp}\n")
+    return hmac.compare_digest(signature, expected)
+
+
+def irangate_file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def irangate_send_binary_file(handler, path, filename):
+    size = os.path.getsize(path)
+    digest = irangate_file_sha256(path)
+    response_timestamp = int(time.time())
+    response_signature = irangate_backup_hmac(
+        f"RESPONSE\n{BACKUP_EXPORT_PATH}\n{response_timestamp}\n{digest}"
+    )
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/octet-stream")
+    handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+    handler.send_header("Content-Length", str(size))
+    handler.send_header("X-IranGate-Content-SHA256", digest)
+    handler.send_header("X-IranGate-Response-Timestamp", str(response_timestamp))
+    handler.send_header("X-IranGate-Response-Signature", response_signature)
+    handler.end_headers()
+
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            handler.wfile.write(chunk)
+
+
+def irangate_handle_backup_export(handler):
+    if not irangate_backup_request_ok(handler, "GET", BACKUP_EXPORT_PATH):
+        return send_json(
+            handler,
+            401,
+            {"success": False, "message": "Unauthorized backup request"},
+        )
+
+    env = os.environ.copy()
+    env["IRANGATE_BACKUP_PASSPHRASE"] = TOKEN
+
+    result = subprocess.run(
+        [BACKUP_HELPER],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=180,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return send_json(
+            handler,
+            500,
+            {
+                "success": False,
+                "message": "Node snapshot export failed",
+                "error": result.stderr[-2000:],
+            },
+        )
+
+    output = result.stdout.strip().splitlines()
+    if not output:
+        return send_json(
+            handler,
+            500,
+            {"success": False, "message": "Node snapshot path missing"},
+        )
+
+    snapshot_path = output[-1].strip()
+    allowed_root = os.path.realpath("/run/irangate-node-backup")
+    resolved = os.path.realpath(snapshot_path)
+
+    if not resolved.startswith(allowed_root + os.sep) or not os.path.isfile(resolved):
+        return send_json(
+            handler,
+            500,
+            {"success": False, "message": "Invalid node snapshot path"},
+        )
+
+    try:
+        return irangate_send_binary_file(
+            handler,
+            resolved,
+            os.path.basename(resolved),
+        )
+    finally:
+        try:
+            os.unlink(resolved)
+        except FileNotFoundError:
+            pass
+# ===== /IRANGATE_NODE_BACKUP_EXPORT_V1 =====
 
 
 # ===== IranGate node usage endpoint patch =====
@@ -464,6 +800,11 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n).decode() or "{}")
 
     def do_GET(self):
+        request_path = urlparse(self.path).path
+
+        if request_path == BACKUP_EXPORT_PATH:
+            return irangate_handle_backup_export(self)
+
         if self.path.split("?")[0] in ("/usage", "/clients", "/openvpn/status"):
             return irangate_handle_usage(self)
 
@@ -829,6 +1170,9 @@ uninstall_node() {
   rm -f /etc/systemd/system/irangate-node-control.service
   rm -f /etc/systemd/system/irangate-node-nat.service
   rm -f /usr/local/bin/irangate-node-client
+  rm -f /usr/local/sbin/irangate-node-backup-v1
+  rm -f /run/irangate-node-pki.lock
+  rm -rf /run/irangate-node-backup
   rm -f /usr/local/bin/irangate-node-nat
   rm -f /usr/local/bin/ovp-node
   rm -f /etc/openvpn/irangate-client-connect.sh
@@ -918,6 +1262,7 @@ main() {
   setup_network
   write_client_tool
   write_client_connect_guard
+  write_backup_helper
   write_agent
   write_control_server
   write_systemd

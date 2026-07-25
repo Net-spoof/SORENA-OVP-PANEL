@@ -19,6 +19,8 @@ The installer configures:
 - persistent client-connect blocking
 - IPv4 forwarding and NAT
 - client profile creation and download
+- encrypted node snapshot export for Master backups
+- PKI locking while clients or snapshots are created
 - ovp-node management CLI
 
 ## Node Agent API
@@ -31,8 +33,25 @@ Authenticated endpoints include:
 - /openvpn/status
 - client profile creation
 - client profile download
+- `GET /backup/export` using timestamped HMAC authentication
 
 The Agent port is selected during installation.
+
+
+## Node snapshot export
+
+The Agent can export an encrypted snapshot for the Master backup system.
+The snapshot includes OpenVPN PKI material, generated client profiles,
+server files, persistent block markers, node deny markers, CCD files, and
+the client-connect guard. The node environment file and shared token are
+not copied into the snapshot.
+
+`GET /backup/export` requires `X-IranGate-Timestamp` and
+`X-IranGate-Signature` headers. The signature is an HMAC-SHA256 derived from
+the shared Node token. Snapshot creation and client certificate generation
+share `/run/irangate-node-pki.lock` so Easy-RSA state is captured consistently.
+The response is encrypted with AES-256-CBC/PBKDF2 and includes SHA256 and
+response-HMAC headers for Master-side verification.
 
 ## Node Control API
 
