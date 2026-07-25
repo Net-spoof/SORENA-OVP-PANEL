@@ -184,18 +184,15 @@ def copy_optional(
     return True
 
 
+# IRANGATE_BACKUP_SINGLE_PASS_V1
 def copy_traffic_state(stage: Path) -> bool:
     src = Path("/opt/irangate/traffic")
     dst = stage / "runtime" / "traffic"
     dst.mkdir(parents=True, exist_ok=True)
 
-    copied = False
-
-    if src.exists():
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-        copied = True
-
-    required_defaults = {
+    # Sufficient state to resume accounting/enforcement.
+    # Daily, minute and monthly history/cache trees are excluded.
+    state_defaults = {
         "cumulative_totals.json": "{}",
         "current_stats.json": "[]",
         "node_usage_state.json": "{}",
@@ -203,13 +200,159 @@ def copy_traffic_state(stage: Path) -> bool:
         "global_usage_totals.json": "{}",
         "usage_state.json": "{}",
         "sessions_state.json": "{}",
+        "ikev2_current_stats.json": "[]",
+        "ikev2_last_seen.json": "{}",
     }
 
-    for name, default in required_defaults.items():
+    copied = False
+
+    for name, default in state_defaults.items():
+        source = src / name
         target = dst / name
-        if not target.exists():
-            target.write_text(default)
+
+        if source.is_file() and not source.is_symlink():
+            shutil.copy2(source, target)
             copied = True
+        else:
+            target.write_text(
+                default,
+                encoding="utf-8",
+            )
+            copied = True
+
+    if src.is_dir():
+        excluded_entries = sum(
+            1
+            for path in src.iterdir()
+            if path.name not in state_defaults
+        )
+
+        if excluded_entries:
+            log(
+                "excluded nonessential traffic history/cache "
+                f"entries: {excluded_entries}"
+            )
+
+    return copied
+
+
+def write_extras_checksums(root: Path) -> None:
+    checksum_file = root / "SHA256SUMS"
+
+    files = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if (
+                path != checksum_file
+                and path.is_file()
+                and not path.is_symlink()
+            )
+        ),
+        key=lambda path: (
+            path.relative_to(root).as_posix()
+        ),
+    )
+
+    with checksum_file.open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        for path in files:
+            relative = (
+                "./"
+                + path.relative_to(root).as_posix()
+            )
+
+            handle.write(
+                f"{sha256_file(path)}  {relative}\n"
+            )
+
+    checksum_file.chmod(0o600)
+
+
+def copy_runtime_extras(stage: Path) -> int:
+    root = stage / "extras" / "runtime"
+    root.mkdir(
+        parents=True,
+        exist_ok=True,
+        mode=0o700,
+    )
+
+    sources = (
+        "/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf",
+        "/etc/swanctl/conf.d/irangate-ikev2-users.conf",
+        "/etc/swanctl/private/irangate-ca-key.pem",
+        "/etc/swanctl/private/irangate-server-key.pem",
+        "/etc/swanctl/x509ca/irangate-ca-cert.pem",
+        "/etc/swanctl/x509/irangate-server-cert.pem",
+        "/etc/sysctl.d/99-irangate-ikev2.conf",
+        "/opt/irangate/ikev2",
+        "/opt/irangate/traffic/ikev2_current_stats.json",
+        "/opt/irangate/traffic/ikev2_last_seen.json",
+        "/opt/irangate/traffic/global_usage_totals.json",
+        "/opt/irangate/webpanel/server.json",
+        "/usr/local/sbin/irangate-ikev2",
+        "/usr/local/sbin/irangate-ikev2-stats-snapshot",
+        "/usr/local/sbin/irangate-ikev2-firewall.sh",
+        "/etc/systemd/system/irangate-ikev2-firewall.service",
+        "/etc/systemd/system/irangate-ikev2-stats.service",
+        "/etc/systemd/system/irangate-ikev2-stats.timer",
+        "/opt/irangate/routing",
+        "/etc/sing-box/irangate-routing.json",
+        "/usr/local/bin/irangate-routing",
+        "/etc/systemd/system/irangate-routing.service",
+        "/etc/systemd/system/irangate-routing-rules.service",
+        "/opt/irangate/panel-proxy.env",
+        "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
+    )
+
+    copied = 0
+
+    for raw_source in sources:
+        source = Path(raw_source)
+        destination = (
+            root
+            / raw_source.lstrip("/")
+        )
+
+        if copy_optional(source, destination):
+            copied += 1
+
+    manifest = root / "MANIFEST.txt"
+    manifest.write_text(
+        "created_at="
+        + datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        + "\n"
+        + "hostname="
+        + socket.gethostname()
+        + "\n"
+        + "contains=ikev2\n"
+        + "contains=outbound-routing\n"
+        + "contains=panel-proxy\n"
+        + "integrity=sha256\n",
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+
+    sensitive_files = (
+        root / "opt/irangate/ikev2/users.tsv",
+        root / "etc/swanctl/private/irangate-ca-key.pem",
+        root / "etc/swanctl/private/irangate-server-key.pem",
+    )
+
+    for path in sensitive_files:
+        if path.is_file():
+            path.chmod(0o600)
+
+    write_extras_checksums(root)
+
+    log(
+        "integrated runtime extras into single-pass archive "
+        f"({copied} source items)"
+    )
 
     return copied
 
@@ -915,6 +1058,7 @@ def create_archive(
         archive_path,
         "w:gz",
         format=tarfile.PAX_FORMAT,
+        compresslevel=3,
     ) as archive:
 
         for child in sorted(
@@ -1186,6 +1330,11 @@ def main() -> int:
             )
             components.append(
                 "node-snapshots"
+            )
+
+            copy_runtime_extras(stage)
+            components.append(
+                "runtime-extras"
             )
 
         write_manifest(

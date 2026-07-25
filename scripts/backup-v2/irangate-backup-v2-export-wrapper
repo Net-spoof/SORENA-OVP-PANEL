@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 umask 077
 
+# IRANGATE_BACKUP_SINGLE_PASS_V1
 BASE="/usr/local/bin/irangate-backup-v2-export.py"
-
-LOG="$(mktemp)"
-TMP=""
-NEW_ARCHIVE=""
+LOCK_FILE="/run/irangate-backup-v2.lock"
+STDOUT_FILE="$(mktemp)"
 
 cleanup() {
-    rm -f "$LOG" "$NEW_ARCHIVE" 2>/dev/null || true
-
-    if [[ -n "$TMP" ]]; then
-        rm -rf "$TMP" 2>/dev/null || true
-    fi
+    rm -f "$STDOUT_FILE" 2>/dev/null || true
 }
 
 trap cleanup EXIT
@@ -24,132 +18,53 @@ trap cleanup EXIT
     exit 1
 }
 
-set +e
-"$BASE" "$@" >"$LOG" 2>&1
-RC=$?
-set -e
+# Panel/manual/Telegram backups all use this wrapper.
+# Prevent overlapping archive creation.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
 
-cat "$LOG" >&2
+    if ! flock -n 9; then
+        echo             "Another IranGate backup is already running"             >&2
 
-[[ "$RC" -eq 0 ]] || exit "$RC"
-
-ARCHIVE="$(
-    grep -Eo \
-        '/[^[:space:]]+irangate-backup-v2-[^[:space:]]+\.tar\.gz' \
-        "$LOG" |
-    tail -1 || true
-)"
-
-if [[ -z "$ARCHIVE" || ! -f "$ARCHIVE" ]]; then
-    ARCHIVE="$(
-        find /opt/irangate/backups/v2 /root \
-            -maxdepth 5 \
-            -type f \
-            -name 'irangate-backup-v2-*.tar.gz' \
-            -printf '%T@ %p\n' 2>/dev/null |
-        sort -nr |
-        head -1 |
-        cut -d' ' -f2-
-    )"
+        exit 75
+    fi
 fi
 
-[[ -n "$ARCHIVE" && -f "$ARCHIVE" ]] || {
-    echo "Backup archive not found" >&2
+# Lower CPU and disk scheduling priority so active VPN
+# traffic remains more important than backup compression.
+if command -v ionice >/dev/null 2>&1; then
+    ionice -c2 -n7         nice -n 10         "$BASE" "$@"         >"$STDOUT_FILE"
+else
+    nice -n 10         "$BASE" "$@"         >"$STDOUT_FILE"
+fi
+
+ARCHIVE="$(
+    awk '
+        NF {
+            line = $0
+        }
+
+        END {
+            print line
+        }
+    ' "$STDOUT_FILE" |
+    tr -d '\r'
+)"
+
+[[ -n "$ARCHIVE" && -s "$ARCHIVE" ]] || {
+    echo "Backup archive was not produced" >&2
     exit 1
 }
 
-TMP="$(mktemp -d)"
+case "$ARCHIVE" in
+    /opt/irangate/backups/v2/irangate-backup-v2-*.tar.gz)
+        ;;
+    *)
+        echo             "Unexpected backup archive path: $ARCHIVE"             >&2
 
-tar -xzf "$ARCHIVE" -C "$TMP"
-
-mkdir -p "$TMP/extras/runtime"
-
-copy_item() {
-    local src="$1"
-    local dst="$TMP/extras/runtime$src"
-
-    if [[ -e "$src" ]]; then
-        mkdir -p "$(dirname "$dst")"
-        cp -a "$src" "$dst"
-        echo "[backup-extras] added $src" >&2
-    fi
-}
-
-# IKEv2 / IPSec
-# Only IranGate-owned strongSwan files are archived.
-# Package-managed defaults are intentionally excluded.
-copy_item /etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf
-copy_item /etc/swanctl/conf.d/irangate-ikev2-users.conf
-copy_item /etc/swanctl/private/irangate-ca-key.pem
-copy_item /etc/swanctl/private/irangate-server-key.pem
-copy_item /etc/swanctl/x509ca/irangate-ca-cert.pem
-copy_item /etc/swanctl/x509/irangate-server-cert.pem
-copy_item /etc/sysctl.d/99-irangate-ikev2.conf
-copy_item /opt/irangate/ikev2
-copy_item /opt/irangate/traffic/ikev2_current_stats.json
-copy_item /opt/irangate/traffic/ikev2_last_seen.json
-copy_item /opt/irangate/traffic/global_usage_totals.json
-copy_item /opt/irangate/webpanel/server.json
-copy_item /usr/local/sbin/irangate-ikev2
-copy_item /usr/local/sbin/irangate-ikev2-stats-snapshot
-copy_item /usr/local/sbin/irangate-ikev2-firewall.sh
-copy_item /etc/systemd/system/irangate-ikev2-firewall.service
-copy_item /etc/systemd/system/irangate-ikev2-stats.service
-copy_item /etc/systemd/system/irangate-ikev2-stats.timer
-
-# Outbound / Routing
-copy_item /opt/irangate/routing
-copy_item /etc/sing-box/irangate-routing.json
-copy_item /usr/local/bin/irangate-routing
-copy_item /etc/systemd/system/irangate-routing.service
-copy_item /etc/systemd/system/irangate-routing-rules.service
-
-# Panel proxy
-copy_item /opt/irangate/panel-proxy.env
-copy_item /etc/systemd/system/irangate-webpanel.service.d/proxy.conf
-
-cat >"$TMP/extras/runtime/MANIFEST.txt" <<EOF
-created_at=$(date -u +%FT%TZ)
-hostname=$(hostname)
-contains=ikev2
-contains=outbound-routing
-contains=panel-proxy
-integrity=sha256
-EOF
-
-(
-    cd "$TMP/extras/runtime"
-
-    find .         -type f         ! -name SHA256SUMS         -print0 |
-    sort -z |
-    xargs -0 -r sha256sum         >SHA256SUMS
-)
-
-chmod 0600     "$TMP/extras/runtime/SHA256SUMS"
-
-chmod 0600 \
-    "$TMP/extras/runtime/opt/irangate/ikev2/users.tsv" \
-    2>/dev/null || true
-
-find "$TMP/extras/runtime/etc/swanctl/private" \
-    -type f \
-    -exec chmod 0600 {} \; \
-    2>/dev/null || true
-
-NEW_ARCHIVE="${ARCHIVE}.tmp.$$"
-
-tar -C "$TMP" \
-    -czf "$NEW_ARCHIVE" \
-    .
-
-chmod 0600 "$NEW_ARCHIVE"
-
-mv -f "$NEW_ARCHIVE" "$ARCHIVE"
-
-chmod 0600 "$ARCHIVE"
-NEW_ARCHIVE=""
-
-echo "[backup-extras] archive repacked successfully ✅" >&2
+        exit 1
+        ;;
+esac
 
 # stdout must contain only the archive path.
-echo "$ARCHIVE"
+printf '%s\n' "$ARCHIVE"
