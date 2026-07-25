@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
+import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.parse
 import uuid
 
 from datetime import datetime, timezone
@@ -27,6 +32,16 @@ EXPORTER = Path(
 BACKUP_ROOT = Path(
     "/opt/irangate/backups/v2"
 )
+
+PENDING_NODE_ROOT = (
+    BACKUP_ROOT / "pending-node-restores"
+)
+NODE_INDEX_FORMAT = "irangate-master-node-index-v1"
+NODE_METADATA_FORMAT = "irangate-master-node-snapshot-v1"
+NODE_SNAPSHOT_FORMAT = "irangate-node-snapshot-v1"
+NODE_RESTORE_PATH = "/backup/restore"
+NODE_RESTORE_TIMEOUT = 300
+NODE_RESTORE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 
 PIPELINE_TIMERS = [
@@ -384,6 +399,992 @@ def safe_extract(
         )
 
 
+
+def load_node_records(
+    path: Path,
+    *,
+    allow_missing: bool = False,
+) -> list[dict]:
+    if not path.is_file():
+        if allow_missing:
+            return []
+
+        fail(
+            "nodes JSON file missing: "
+            + str(path)
+        )
+
+    data = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    if isinstance(data, dict):
+        nodes = data.get("nodes", [])
+    elif isinstance(data, list):
+        nodes = data
+    else:
+        fail("invalid nodes JSON structure")
+
+    if not isinstance(nodes, list):
+        fail("invalid nodes list")
+
+    return [
+        item
+        for item in nodes
+        if isinstance(item, dict)
+    ]
+
+
+def nodes_by_id(nodes: list[dict]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+
+    for node in nodes:
+        node_id = str(node.get("id") or "").strip()
+
+        if node_id:
+            result[node_id] = node
+
+    return result
+
+
+def safe_node_directory(node_id: str) -> str:
+    value = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        str(node_id or "").strip(),
+    ).strip("._-")
+
+    if not value:
+        fail(
+            "node id cannot be converted to a safe directory"
+        )
+
+    return value
+
+
+def openssl_decrypt_snapshot(
+    encrypted: Path,
+    passphrase: str,
+    output: Path,
+) -> None:
+    env = os.environ.copy()
+    env["IRANGATE_BACKUP_PASSPHRASE"] = (
+        passphrase
+    )
+
+    result = command(
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-md",
+            "sha256",
+            "-pass",
+            "env:IRANGATE_BACKUP_PASSPHRASE",
+            "-in",
+            str(encrypted),
+            "-out",
+            str(output),
+        ],
+        env=env,
+        capture=True,
+    )
+
+    if result.returncode != 0:
+        fail(
+            "node snapshot decryption failed: "
+            + result.stderr.strip()
+        )
+
+    output.chmod(0o600)
+
+
+def openssl_encrypt_snapshot(
+    raw_archive: Path,
+    passphrase: str,
+    output: Path,
+) -> None:
+    env = os.environ.copy()
+    env["IRANGATE_BACKUP_PASSPHRASE"] = (
+        passphrase
+    )
+
+    result = command(
+        [
+            "openssl",
+            "enc",
+            "-aes-256-cbc",
+            "-salt",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-md",
+            "sha256",
+            "-pass",
+            "env:IRANGATE_BACKUP_PASSPHRASE",
+            "-in",
+            str(raw_archive),
+            "-out",
+            str(output),
+        ],
+        env=env,
+        capture=True,
+    )
+
+    if result.returncode != 0:
+        fail(
+            "node snapshot re-encryption failed: "
+            + result.stderr.strip()
+        )
+
+    output.chmod(0o600)
+
+
+def validate_node_snapshot_payload(
+    encrypted: Path,
+    token: str,
+) -> dict:
+    if len(token) < 16:
+        fail(
+            "source node token is missing or too short"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="irangate-node-snapshot-validate-"
+    ) as temp_dir:
+        temp_root = Path(temp_dir)
+        raw_archive = temp_root / "snapshot.tar.gz"
+        extracted = temp_root / "extracted"
+        extracted.mkdir()
+
+        openssl_decrypt_snapshot(
+            encrypted,
+            token,
+            raw_archive,
+        )
+
+        safe_extract(
+            raw_archive,
+            extracted,
+        )
+
+        manifest_path = (
+            extracted / "manifest.json"
+        )
+
+        if not manifest_path.is_file():
+            fail(
+                "node snapshot manifest is missing"
+            )
+
+        manifest = json.loads(
+            manifest_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if manifest.get("format") != NODE_SNAPSHOT_FORMAT:
+            fail(
+                "unsupported node snapshot format"
+            )
+
+        if manifest.get("snapshot_version") != 1:
+            fail(
+                "unsupported node snapshot version"
+            )
+
+        required = (
+            "SHA256SUMS",
+            "payload/etc/openvpn/easy-rsa/pki/ca.crt",
+            "payload/etc/openvpn/easy-rsa/pki/private/ca.key",
+            "payload/etc/openvpn/easy-rsa/pki/index.txt",
+            "payload/etc/openvpn/easy-rsa/pki/serial",
+            "payload/etc/openvpn/easy-rsa/pki/crl.pem",
+        )
+
+        for relative in required:
+            target = extracted / relative
+
+            if not target.is_file() or target.stat().st_size == 0:
+                fail(
+                    "required node snapshot file missing: "
+                    + relative
+                )
+
+        checksum_count = verify_checksums(
+            extracted
+        )
+
+        return {
+            "manifest": manifest,
+            "checksum_files": checksum_count,
+        }
+
+
+def validate_node_snapshots(
+    root: Path,
+    manifest: dict,
+) -> dict:
+    components = set(
+        manifest.get("components", [])
+    )
+    nodes_root = root / "nodes"
+
+    if "node-snapshots" not in components:
+        return {
+            "present": False,
+            "captured": 0,
+            "failed": 0,
+            "validated": [],
+        }
+
+    index_path = nodes_root / "index.json"
+
+    if not index_path.is_file():
+        fail(
+            "node snapshot index is missing"
+        )
+
+    index = json.loads(
+        index_path.read_text(encoding="utf-8")
+    )
+
+    if index.get("format") != NODE_INDEX_FORMAT:
+        fail(
+            "unsupported node snapshot index format"
+        )
+
+    source_nodes = nodes_by_id(
+        load_node_records(
+            root
+            / "runtime"
+            / "webpanel"
+            / "nodes.json"
+        )
+    )
+
+    validated: list[dict] = []
+    captured = 0
+    failed_count = 0
+
+    for entry in index.get("nodes", []):
+        if not isinstance(entry, dict):
+            fail(
+                "invalid node snapshot index entry"
+            )
+
+        status = str(entry.get("status") or "")
+
+        if status == "failed":
+            failed_count += 1
+            continue
+
+        if status != "captured":
+            continue
+
+        node_id = str(entry.get("id") or "").strip()
+        directory = str(
+            entry.get("directory")
+            or safe_node_directory(node_id)
+        )
+
+        if directory != safe_node_directory(node_id):
+            fail(
+                "node snapshot directory mismatch: "
+                + node_id
+            )
+
+        node_root = nodes_root / directory
+        metadata_path = node_root / "metadata.json"
+        snapshot_path = (
+            node_root / "snapshot.tar.gz.enc"
+        )
+
+        if not metadata_path.is_file():
+            fail(
+                "node snapshot metadata missing: "
+                + node_id
+            )
+
+        if not snapshot_path.is_file():
+            fail(
+                "node snapshot archive missing: "
+                + node_id
+            )
+
+        metadata = json.loads(
+            metadata_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if metadata.get("format") != NODE_METADATA_FORMAT:
+            fail(
+                "unsupported node snapshot metadata: "
+                + node_id
+            )
+
+        if metadata.get("node_id") != node_id:
+            fail(
+                "node snapshot metadata id mismatch: "
+                + node_id
+            )
+
+        expected_sha = str(
+            metadata.get("snapshot_sha256") or ""
+        ).strip().lower()
+        actual_sha = sha256_file(snapshot_path)
+
+        if not expected_sha or not hmac.compare_digest(
+            expected_sha,
+            actual_sha,
+        ):
+            fail(
+                "node snapshot checksum mismatch: "
+                + node_id
+            )
+
+        source_node = source_nodes.get(node_id)
+
+        if not source_node:
+            fail(
+                "source node settings missing: "
+                + node_id
+            )
+
+        source_token = str(
+            source_node.get("token") or ""
+        ).strip()
+
+        payload_validation = (
+            validate_node_snapshot_payload(
+                snapshot_path,
+                source_token,
+            )
+        )
+
+        validated.append(
+            {
+                "id": node_id,
+                "directory": directory,
+                "snapshot_sha256": actual_sha,
+                "snapshot_size": snapshot_path.stat().st_size,
+                "node_checksum_files": (
+                    payload_validation[
+                        "checksum_files"
+                    ]
+                ),
+                "node_created_at": (
+                    payload_validation[
+                        "manifest"
+                    ].get("created_at")
+                ),
+            }
+        )
+        captured += 1
+
+    if index.get("strict") and failed_count:
+        fail(
+            "strict backup contains failed node snapshots"
+        )
+
+    return {
+        "present": True,
+        "captured": captured,
+        "failed": failed_count,
+        "validated": validated,
+    }
+
+
+def write_nodes_file(
+    path: Path,
+    nodes: list[dict],
+) -> None:
+    current_data = {}
+
+    if path.is_file():
+        try:
+            current_data = json.loads(
+                path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            current_data = {}
+
+    if isinstance(current_data, list):
+        payload = nodes
+    else:
+        payload = dict(current_data)
+        payload["nodes"] = nodes
+
+    temp_path = path.with_name(
+        path.name + ".tmp-" + uuid.uuid4().hex[:10]
+    )
+    temp_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    temp_path.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temp_path.chmod(0o600)
+    os.replace(temp_path, path)
+
+
+def merge_node_connection_overrides(
+    overrides: list[dict],
+) -> dict:
+    nodes_path = Path(
+        "/opt/irangate/webpanel/nodes.json"
+    )
+    restored_nodes = load_node_records(
+        nodes_path
+    )
+    override_map = nodes_by_id(overrides)
+    changed: list[str] = []
+
+    connection_keys = (
+        "agent_url",
+        "control_url",
+        "public_ip",
+        "token",
+        "enabled",
+    )
+
+    for node in restored_nodes:
+        node_id = str(node.get("id") or "").strip()
+        replacement = override_map.get(node_id)
+
+        if not replacement:
+            continue
+
+        if bool(node.get("is_local", False)):
+            continue
+
+        if bool(replacement.get("is_local", False)):
+            continue
+
+        before = dict(node)
+
+        for key in connection_keys:
+            if key in replacement:
+                node[key] = replacement[key]
+
+        if node != before:
+            changed.append(node_id)
+
+    if changed:
+        write_nodes_file(
+            nodes_path,
+            restored_nodes,
+        )
+
+    return {
+        "preserved_connection_nodes": changed,
+    }
+
+
+def normalized_agent_parts(
+    value: str,
+) -> tuple[str, str, int, str]:
+    raw = str(value or "").strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(raw)
+
+    if parsed.scheme not in {"http", "https"}:
+        fail(
+            "node agent URL must use http or https"
+        )
+
+    if not parsed.hostname:
+        fail(
+            "node agent URL is missing a hostname"
+        )
+
+    port = parsed.port
+
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    base_path = parsed.path.rstrip("/")
+    request_path = base_path + NODE_RESTORE_PATH
+
+    return (
+        parsed.scheme,
+        parsed.hostname,
+        port,
+        request_path,
+    )
+
+
+def restore_request_hmac(
+    token: str,
+    timestamp: int,
+    digest: str,
+) -> str:
+    message = (
+        f"POST\n{NODE_RESTORE_PATH}\n"
+        f"{timestamp}\n{digest}"
+    )
+
+    return hmac.new(
+        token.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def send_node_restore(
+    encrypted: Path,
+    source_token: str,
+    target_node: dict,
+) -> dict:
+    target_token = str(
+        target_node.get("token") or ""
+    ).strip()
+    agent_url = str(
+        target_node.get("agent_url") or ""
+    ).strip()
+
+    if len(source_token) < 16:
+        fail(
+            "source node token is missing or too short"
+        )
+
+    if len(target_token) < 16:
+        fail(
+            "target node token is missing or too short"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="irangate-node-restore-send-"
+    ) as temp_dir:
+        temp_root = Path(temp_dir)
+        raw_archive = temp_root / "snapshot.tar.gz"
+        target_encrypted = (
+            temp_root / "snapshot.tar.gz.enc"
+        )
+
+        openssl_decrypt_snapshot(
+            encrypted,
+            source_token,
+            raw_archive,
+        )
+        openssl_encrypt_snapshot(
+            raw_archive,
+            target_token,
+            target_encrypted,
+        )
+
+        size = target_encrypted.stat().st_size
+
+        if size <= 0 or size > NODE_RESTORE_MAX_BYTES:
+            fail(
+                "node restore payload size is invalid"
+            )
+
+        digest = sha256_file(target_encrypted)
+        timestamp = int(time.time())
+        signature = restore_request_hmac(
+            target_token,
+            timestamp,
+            digest,
+        )
+
+        scheme, host, port, request_path = (
+            normalized_agent_parts(agent_url)
+        )
+
+        connection_class = (
+            http.client.HTTPSConnection
+            if scheme == "https"
+            else http.client.HTTPConnection
+        )
+
+        connection = connection_class(
+            host,
+            port,
+            timeout=NODE_RESTORE_TIMEOUT,
+        )
+
+        try:
+            connection.putrequest(
+                "POST",
+                request_path,
+            )
+            connection.putheader(
+                "Content-Type",
+                "application/octet-stream",
+            )
+            connection.putheader(
+                "Content-Length",
+                str(size),
+            )
+            connection.putheader(
+                "X-IranGate-Timestamp",
+                str(timestamp),
+            )
+            connection.putheader(
+                "X-IranGate-Signature",
+                signature,
+            )
+            connection.putheader(
+                "X-IranGate-Content-SHA256",
+                digest,
+            )
+            connection.putheader(
+                "User-Agent",
+                "IranGate-Master-Restore-v2",
+            )
+            connection.endheaders()
+
+            with target_encrypted.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+
+                    if not chunk:
+                        break
+
+                    connection.send(chunk)
+
+            response = connection.getresponse()
+            response_body = response.read(
+                1024 * 1024
+            )
+
+        finally:
+            connection.close()
+
+        body_text = response_body.decode(
+            "utf-8",
+            errors="replace",
+        ).strip()
+
+        try:
+            payload = json.loads(body_text)
+        except Exception:
+            payload = {
+                "success": False,
+                "message": body_text,
+            }
+
+        if response.status < 200 or response.status >= 300:
+            fail(
+                "node restore HTTP "
+                + str(response.status)
+                + ": "
+                + str(payload.get("message") or body_text)
+            )
+
+        if not payload.get("success"):
+            fail(
+                "node restore failed: "
+                + str(payload.get("message") or payload)
+            )
+
+        return payload
+
+
+def pending_backup_key(root: Path) -> str:
+    manifest = json.loads(
+        (root / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    created_at = str(
+        manifest.get("created_at") or "unknown"
+    )
+    safe_created = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        created_at,
+    ).strip("._-")
+
+    return (
+        safe_created
+        + "-"
+        + uuid.uuid4().hex[:8]
+    )
+
+
+def save_pending_node_restore(
+    node_root: Path,
+    source_node: dict,
+    reason: str,
+    backup_key: str,
+) -> Path:
+    node_id = str(
+        source_node.get("id") or ""
+    ).strip()
+    directory = safe_node_directory(node_id)
+    destination = (
+        PENDING_NODE_ROOT
+        / backup_key
+        / directory
+    )
+
+    if destination.exists():
+        shutil.rmtree(destination)
+
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+        mode=0o700,
+    )
+    shutil.copytree(
+        node_root,
+        destination,
+        symlinks=False,
+    )
+
+    context = {
+        "format": "irangate-pending-node-restore-v1",
+        "saved_at": (
+            datetime.now(timezone.utc).isoformat()
+        ),
+        "reason": reason,
+        "source_node": source_node,
+        "source_token": str(
+            source_node.get("token") or ""
+        ),
+    }
+
+    context_path = destination / "restore-context.json"
+    context_path.write_text(
+        json.dumps(
+            context,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    context_path.chmod(0o600)
+
+    for item in destination.rglob("*"):
+        if item.is_file():
+            item.chmod(0o600)
+
+    return destination
+
+
+def restore_node_snapshots(
+    root: Path,
+) -> dict:
+    nodes_root = root / "nodes"
+    index_path = nodes_root / "index.json"
+
+    if not index_path.is_file():
+        return {
+            "attempted": 0,
+            "restored": [],
+            "pending": [],
+            "failed": [],
+        }
+
+    index = json.loads(
+        index_path.read_text(encoding="utf-8")
+    )
+    source_nodes = nodes_by_id(
+        load_node_records(
+            root
+            / "runtime"
+            / "webpanel"
+            / "nodes.json"
+        )
+    )
+    target_nodes = nodes_by_id(
+        load_node_records(
+            Path(
+                "/opt/irangate/webpanel/nodes.json"
+            )
+        )
+    )
+    backup_key = pending_backup_key(root)
+
+    result = {
+        "attempted": 0,
+        "restored": [],
+        "pending": [],
+        "failed": [],
+    }
+
+    for entry in index.get("nodes", []):
+        if not isinstance(entry, dict):
+            continue
+
+        if entry.get("status") != "captured":
+            continue
+
+        node_id = str(entry.get("id") or "").strip()
+        directory = str(
+            entry.get("directory")
+            or safe_node_directory(node_id)
+        )
+        node_root = nodes_root / directory
+        snapshot = (
+            node_root / "snapshot.tar.gz.enc"
+        )
+        source_node = source_nodes.get(node_id)
+        target_node = target_nodes.get(node_id)
+        result["attempted"] += 1
+
+        if not source_node:
+            reason = "source node settings missing"
+            result["failed"].append(
+                {"id": node_id, "error": reason}
+            )
+            continue
+
+        if (
+            not target_node
+            or bool(target_node.get("is_local", False))
+            or str(target_node.get("agent_url") or "")
+            in {"", "local"}
+        ):
+            reason = (
+                "matching target node is not configured"
+            )
+            pending_path = save_pending_node_restore(
+                node_root,
+                source_node,
+                reason,
+                backup_key,
+            )
+            result["pending"].append(
+                {
+                    "id": node_id,
+                    "reason": reason,
+                    "path": str(pending_path),
+                }
+            )
+            continue
+
+        try:
+            response = send_node_restore(
+                snapshot,
+                str(source_node.get("token") or ""),
+                target_node,
+            )
+            result["restored"].append(
+                {
+                    "id": node_id,
+                    "agent_url": str(
+                        target_node.get("agent_url") or ""
+                    ),
+                    "response": response,
+                }
+            )
+
+        except Exception as exc:
+            reason = str(exc)
+            pending_path = save_pending_node_restore(
+                node_root,
+                source_node,
+                reason,
+                backup_key,
+            )
+            result["pending"].append(
+                {
+                    "id": node_id,
+                    "reason": reason,
+                    "path": str(pending_path),
+                }
+            )
+
+    return result
+
+
+def restore_pending_nodes() -> dict:
+    target_nodes = nodes_by_id(
+        load_node_records(
+            Path(
+                "/opt/irangate/webpanel/nodes.json"
+            )
+        )
+    )
+    result = {
+        "attempted": 0,
+        "restored": [],
+        "pending": [],
+    }
+
+    if not PENDING_NODE_ROOT.is_dir():
+        return result
+
+    contexts = sorted(
+        PENDING_NODE_ROOT.glob(
+            "*/*/restore-context.json"
+        )
+    )
+
+    for context_path in contexts:
+        node_root = context_path.parent
+        context = json.loads(
+            context_path.read_text(
+                encoding="utf-8"
+            )
+        )
+        source_node = context.get("source_node") or {}
+        node_id = str(
+            source_node.get("id") or ""
+        ).strip()
+        source_token = str(
+            context.get("source_token") or ""
+        )
+        target_node = target_nodes.get(node_id)
+        snapshot = (
+            node_root / "snapshot.tar.gz.enc"
+        )
+        result["attempted"] += 1
+
+        if not target_node:
+            result["pending"].append(
+                {
+                    "id": node_id,
+                    "reason": "target node not configured",
+                    "path": str(node_root),
+                }
+            )
+            continue
+
+        try:
+            response = send_node_restore(
+                snapshot,
+                source_token,
+                target_node,
+            )
+            result["restored"].append(
+                {
+                    "id": node_id,
+                    "response": response,
+                }
+            )
+            shutil.rmtree(node_root)
+
+            parent = node_root.parent
+            if parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+
+        except Exception as exc:
+            result["pending"].append(
+                {
+                    "id": node_id,
+                    "reason": str(exc),
+                    "path": str(node_root),
+                }
+            )
+
+    return result
+
 def validate_manifest(root: Path) -> dict:
     path = root / "manifest.json"
 
@@ -665,6 +1666,11 @@ def validate_extracted(
         root
     )
 
+    node_snapshots = validate_node_snapshots(
+        root,
+        manifest,
+    )
+
     return {
         "success": True,
         "format": manifest.get("format"),
@@ -685,6 +1691,18 @@ def validate_extracted(
         "client_json_count": client_count,
         "subscription_token_count": token_count,
         "node_count": node_count,
+        "node_snapshots_present": (
+            node_snapshots["present"]
+        ),
+        "node_snapshot_count": (
+            node_snapshots["captured"]
+        ),
+        "node_snapshot_failures": (
+            node_snapshots["failed"]
+        ),
+        "node_snapshot_validation": (
+            node_snapshots["validated"]
+        ),
     }
 
 
@@ -724,10 +1742,16 @@ def create_safety_backup() -> Path:
         "creating automatic pre-restore safety backup"
     )
 
+    safety_env = os.environ.copy()
+    safety_env[
+        "IRANGATE_NODE_BACKUP_ALLOW_PARTIAL"
+    ] = "1"
+
     result = command(
         [
             str(EXPORTER),
         ],
+        env=safety_env,
         capture=True,
     )
 
@@ -1418,6 +2442,7 @@ def rebuild_restored_web_access() -> None:
 
 def restore_from_archive_root(
     root: Path,
+    node_connection_overrides: list[dict] | None = None,
 ) -> dict:
 
     restore_postgres(
@@ -1428,9 +2453,23 @@ def restore_from_archive_root(
         root
     )
 
+    connection_result = {
+        "preserved_connection_nodes": [],
+    }
+
+    if node_connection_overrides:
+        connection_result = (
+            merge_node_connection_overrides(
+                node_connection_overrides
+            )
+        )
+
     rebuild_restored_web_access()
 
-    return post_restore_check()
+    result = post_restore_check()
+    result.update(connection_result)
+
+    return result
 
 
 def perform_restore(
@@ -1438,6 +2477,13 @@ def perform_restore(
 ) -> dict:
 
     safety_archive: Path | None = None
+
+    current_node_targets = load_node_records(
+        Path(
+            "/opt/irangate/webpanel/nodes.json"
+        ),
+        allow_missing=True,
+    )
 
     rollback_success = False
     mutation_started = False
@@ -1512,11 +2558,16 @@ def perform_restore(
                 mutation_started = True
 
                 restored = restore_from_archive_root(
-                    import_root
+                    import_root,
+                    current_node_targets,
                 )
 
                 log(
-                    "restore completed successfully"
+                    "master restore completed successfully"
+                )
+
+                node_restore = restore_node_snapshots(
+                    import_root
                 )
 
                 result = dict(validation)
@@ -1529,6 +2580,7 @@ def perform_restore(
                             safety_archive
                         ),
                         "restored": restored,
+                        "node_restore": node_restore,
                         "destination_hostname": (
                             socket.gethostname()
                         ),
@@ -1629,6 +2681,7 @@ def main() -> int:
     parser.add_argument(
         "archive",
         type=Path,
+        nargs="?",
     )
 
     mode = parser.add_mutually_exclusive_group(
@@ -1645,17 +2698,35 @@ def main() -> int:
         action="store_true",
     )
 
+    mode.add_argument(
+        "--restore-pending-nodes",
+        action="store_true",
+    )
+
     args = parser.parse_args()
 
     try:
-        if args.validate_only:
-            result = validate_only(
-                args.archive
-            )
+        if args.restore_pending_nodes:
+            if args.archive is not None:
+                fail(
+                    "archive is not accepted with "
+                    "--restore-pending-nodes"
+                )
+
+            result = restore_pending_nodes()
+
         else:
-            result = perform_restore(
-                args.archive
-            )
+            if args.archive is None:
+                fail("archive path is required")
+
+            if args.validate_only:
+                result = validate_only(
+                    args.archive
+                )
+            else:
+                result = perform_restore(
+                    args.archive
+                )
 
     except Exception as exc:
         print(

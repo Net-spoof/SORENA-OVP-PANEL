@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,6 +25,13 @@ from pathlib import Path
 BACKUP_ROOT = Path("/opt/irangate/backups/v2")
 DB_ENV_FILE = Path("/etc/irangate-db.env")
 REPO_ROOT = Path("/root/IranGate-OV-Reza-sub-final")
+
+NODE_EXPORT_PATH = "/backup/export"
+NODE_EXPORT_TIMEOUT = 240
+NODE_EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
+NODE_EXPORT_RESPONSE_SKEW = 600
+NODE_INDEX_FORMAT = "irangate-master-node-index-v1"
+NODE_METADATA_FORMAT = "irangate-master-node-snapshot-v1"
 
 
 TIMER_UNITS = [
@@ -201,6 +214,489 @@ def copy_traffic_state(stage: Path) -> bool:
     return copied
 
 
+
+def load_node_records(path: Path) -> list[dict]:
+    data = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    if isinstance(data, dict):
+        nodes = data.get("nodes", [])
+    elif isinstance(data, list):
+        nodes = data
+    else:
+        raise RuntimeError(
+            "invalid nodes JSON structure"
+        )
+
+    if not isinstance(nodes, list):
+        raise RuntimeError(
+            "invalid nodes list"
+        )
+
+    result: list[dict] = []
+
+    for item in nodes:
+        if isinstance(item, dict):
+            result.append(item)
+
+    return result
+
+
+def safe_node_directory(node_id: str) -> str:
+    value = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        str(node_id or "").strip(),
+    ).strip("._-")
+
+    if not value:
+        raise RuntimeError(
+            "node id cannot be converted to a safe directory"
+        )
+
+    return value
+
+
+def node_hmac(
+    token: str,
+    message: str,
+) -> str:
+    return hmac.new(
+        token.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def normalized_agent_url(value: str) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(raw)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise RuntimeError(
+            "node agent URL must use http or https"
+        )
+
+    if not parsed.hostname:
+        raise RuntimeError(
+            "node agent URL is missing a hostname"
+        )
+
+    if parsed.query or parsed.fragment:
+        raise RuntimeError(
+            "node agent URL cannot contain query or fragment"
+        )
+
+    base_path = parsed.path.rstrip("/")
+
+    return urllib.parse.urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            base_path,
+            "",
+            "",
+        )
+    )
+
+
+def download_node_snapshot(
+    node: dict,
+    destination: Path,
+) -> dict:
+    node_id = str(node.get("id") or "").strip()
+    token = str(node.get("token") or "").strip()
+    agent_url = normalized_agent_url(
+        str(node.get("agent_url") or "")
+    )
+
+    if not node_id:
+        raise RuntimeError("node id is missing")
+
+    if len(token) < 16:
+        raise RuntimeError(
+            f"node {node_id} token is missing or too short"
+        )
+
+    request_timestamp = int(time.time())
+    request_signature = node_hmac(
+        token,
+        f"GET\n{NODE_EXPORT_PATH}\n"
+        f"{request_timestamp}\n",
+    )
+
+    request = urllib.request.Request(
+        agent_url + NODE_EXPORT_PATH,
+        method="GET",
+        headers={
+            "X-IranGate-Timestamp": str(
+                request_timestamp
+            ),
+            "X-IranGate-Signature": (
+                request_signature
+            ),
+            "User-Agent": (
+                "IranGate-Master-Backup-v2"
+            ),
+        },
+    )
+
+    temp_path = destination.with_name(
+        destination.name + ".part"
+    )
+
+    temp_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+        mode=0o700,
+    )
+
+    digest = hashlib.sha256()
+    total = 0
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=NODE_EXPORT_TIMEOUT,
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(
+                    "node export returned HTTP "
+                    + str(response.status)
+                )
+
+            expected_sha = str(
+                response.headers.get(
+                    "X-IranGate-Content-SHA256",
+                    "",
+                )
+            ).strip().lower()
+
+            response_timestamp_raw = str(
+                response.headers.get(
+                    "X-IranGate-Response-Timestamp",
+                    "",
+                )
+            ).strip()
+
+            response_signature = str(
+                response.headers.get(
+                    "X-IranGate-Response-Signature",
+                    "",
+                )
+            ).strip().lower()
+
+            try:
+                response_timestamp = int(
+                    response_timestamp_raw
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "node export response timestamp is invalid"
+                ) from exc
+
+            if (
+                abs(int(time.time()) - response_timestamp)
+                > NODE_EXPORT_RESPONSE_SKEW
+            ):
+                raise RuntimeError(
+                    "node export response timestamp is stale"
+                )
+
+            with temp_path.open("wb") as handle:
+                while True:
+                    chunk = response.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    total += len(chunk)
+
+                    if total > NODE_EXPORT_MAX_BYTES:
+                        raise RuntimeError(
+                            "node snapshot exceeds maximum size"
+                        )
+
+                    digest.update(chunk)
+                    handle.write(chunk)
+
+        actual_sha = digest.hexdigest()
+
+        if not expected_sha:
+            raise RuntimeError(
+                "node export response checksum is missing"
+            )
+
+        if not hmac.compare_digest(
+            actual_sha,
+            expected_sha,
+        ):
+            raise RuntimeError(
+                "node export response checksum mismatch"
+            )
+
+        expected_response_signature = node_hmac(
+            token,
+            f"RESPONSE\n{NODE_EXPORT_PATH}\n"
+            f"{response_timestamp}\n{actual_sha}",
+        )
+
+        if not hmac.compare_digest(
+            response_signature,
+            expected_response_signature,
+        ):
+            raise RuntimeError(
+                "node export response HMAC mismatch"
+            )
+
+        if total == 0:
+            raise RuntimeError(
+                "node export returned an empty snapshot"
+            )
+
+        temp_path.chmod(0o600)
+        temp_path.replace(destination)
+        destination.chmod(0o600)
+
+        return {
+            "snapshot_sha256": actual_sha,
+            "snapshot_size": total,
+            "response_timestamp": (
+                response_timestamp
+            ),
+        }
+
+    except urllib.error.HTTPError as exc:
+        body = exc.read(2048).decode(
+            "utf-8",
+            errors="replace",
+        ).strip()
+
+        raise RuntimeError(
+            f"node export HTTP {exc.code}: {body}"
+        ) from exc
+
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            "node export network failure: "
+            + str(exc.reason)
+        ) from exc
+
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def export_remote_node_snapshots(
+    stage: Path,
+) -> dict:
+    nodes_path = Path(
+        "/opt/irangate/webpanel/nodes.json"
+    )
+    nodes = load_node_records(nodes_path)
+    nodes_root = stage / "nodes"
+    nodes_root.mkdir(
+        parents=True,
+        exist_ok=True,
+        mode=0o700,
+    )
+
+    allow_partial = (
+        os.environ.get(
+            "IRANGATE_NODE_BACKUP_ALLOW_PARTIAL",
+            "0",
+        ).strip()
+        == "1"
+    )
+
+    index: dict = {
+        "format": NODE_INDEX_FORMAT,
+        "index_version": 1,
+        "created_at": (
+            datetime.now(timezone.utc).isoformat()
+        ),
+        "strict": not allow_partial,
+        "nodes": [],
+    }
+
+    failures: list[str] = []
+    captured = 0
+    remote_enabled = 0
+    seen_directories: set[str] = set()
+
+    for node in nodes:
+        node_id = str(node.get("id") or "").strip()
+        entry = {
+            "id": node_id,
+            "name": str(node.get("name") or ""),
+            "location": str(
+                node.get("location") or ""
+            ),
+            "enabled": bool(
+                node.get("enabled", True)
+            ),
+            "is_local": bool(
+                node.get("is_local", False)
+            ),
+            "public_ip": str(
+                node.get("public_ip") or ""
+            ),
+            "agent_url": str(
+                node.get("agent_url") or ""
+            ),
+        }
+
+        if not node_id:
+            entry["status"] = "failed"
+            entry["error"] = "node id is missing"
+            failures.append("unnamed node: node id missing")
+            index["nodes"].append(entry)
+            continue
+
+        if not entry["enabled"]:
+            entry["status"] = "skipped-disabled"
+            index["nodes"].append(entry)
+            continue
+
+        if (
+            entry["is_local"]
+            or entry["agent_url"] == "local"
+        ):
+            entry["status"] = (
+                "local-covered-by-master"
+            )
+            index["nodes"].append(entry)
+            continue
+
+        remote_enabled += 1
+
+        try:
+            directory = safe_node_directory(node_id)
+
+            if directory in seen_directories:
+                raise RuntimeError(
+                    "duplicate safe node directory: "
+                    + directory
+                )
+
+            seen_directories.add(directory)
+            node_root = nodes_root / directory
+            node_root.mkdir(
+                parents=True,
+                exist_ok=False,
+                mode=0o700,
+            )
+
+            snapshot_path = (
+                node_root
+                / "snapshot.tar.gz.enc"
+            )
+
+            transfer = download_node_snapshot(
+                node,
+                snapshot_path,
+            )
+
+            metadata = {
+                "format": NODE_METADATA_FORMAT,
+                "metadata_version": 1,
+                "node_id": node_id,
+                "node_directory": directory,
+                "node_name": entry["name"],
+                "node_location": entry["location"],
+                "source_agent_url": (
+                    entry["agent_url"]
+                ),
+                "source_public_ip": (
+                    entry["public_ip"]
+                ),
+                "captured_at": (
+                    datetime.now(timezone.utc)
+                    .isoformat()
+                ),
+                **transfer,
+                "token_included": False,
+                "snapshot_encrypted": True,
+            }
+
+            metadata_path = (
+                node_root / "metadata.json"
+            )
+            metadata_path.write_text(
+                json.dumps(
+                    metadata,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            metadata_path.chmod(0o600)
+
+            entry.update(
+                {
+                    "status": "captured",
+                    "directory": directory,
+                    **transfer,
+                }
+            )
+            captured += 1
+
+            log(
+                "captured node snapshot: "
+                + node_id
+                + " ("
+                + str(transfer["snapshot_size"])
+                + " bytes)"
+            )
+
+        except Exception as exc:
+            entry["status"] = "failed"
+            entry["error"] = str(exc)
+            failures.append(
+                node_id + ": " + str(exc)
+            )
+
+        index["nodes"].append(entry)
+
+    index["summary"] = {
+        "configured": len(nodes),
+        "remote_enabled": remote_enabled,
+        "captured": captured,
+        "failed": len(failures),
+    }
+
+    index_path = nodes_root / "index.json"
+    index_path.write_text(
+        json.dumps(
+            index,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    index_path.chmod(0o600)
+
+    if failures and not allow_partial:
+        raise RuntimeError(
+            "remote node snapshot backup failed: "
+            + " | ".join(failures)
+        )
+
+    if failures:
+        log(
+            "warning: partial node snapshot backup: "
+            + " | ".join(failures)
+        )
+
+    return index["summary"]
+
 def run_pg_dump(stage: Path) -> None:
     db = read_env_file(DB_ENV_FILE)
 
@@ -313,6 +809,7 @@ def current_git_commit() -> str:
 def write_manifest(
     stage: Path,
     components: list[str],
+    node_snapshot_summary: dict | None = None,
 ) -> None:
 
     manifest = {
@@ -332,7 +829,13 @@ def write_manifest(
             "traffic_daily_history_included": False,
             "subscription_tokens_preserved": True,
             "openvpn_private_key_material_included": True,
+            "remote_node_snapshots_included": (
+                "node-snapshots" in components
+            ),
         },
+        "node_snapshot_summary": (
+            node_snapshot_summary or {}
+        ),
     }
 
     path = stage / "manifest.json"
@@ -678,9 +1181,17 @@ def main() -> int:
                     "openvpn-runtime-pki"
                 )
 
+            node_snapshot_summary = (
+                export_remote_node_snapshots(stage)
+            )
+            components.append(
+                "node-snapshots"
+            )
+
         write_manifest(
             stage,
             components,
+            node_snapshot_summary,
         )
 
         write_checksums(stage)
