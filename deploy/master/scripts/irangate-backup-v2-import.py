@@ -87,7 +87,7 @@ REQUIRED_FILES = (
 )
 
 
-MAX_MEMBERS = 50000
+MAX_MEMBERS = 260000
 MAX_TOTAL_EXTRACTED = 4 * 1024 * 1024 * 1024
 MAX_SINGLE_FILE = 2 * 1024 * 1024 * 1024
 
@@ -603,7 +603,7 @@ def validate_node_snapshot_payload(
             "payload/etc/openvpn/easy-rsa/pki/private/ca.key",
             "payload/etc/openvpn/easy-rsa/pki/index.txt",
             "payload/etc/openvpn/easy-rsa/pki/serial",
-            "payload/etc/openvpn/easy-rsa/pki/crl.pem",
+            "payload/etc/openvpn/server/server.conf",
         )
 
         for relative in required:
@@ -612,6 +612,75 @@ def validate_node_snapshot_payload(
             if not target.is_file() or target.stat().st_size == 0:
                 fail(
                     "required node snapshot file missing: "
+                    + relative
+                )
+
+        server_conf = (
+            extracted
+            / "payload/etc/openvpn/server/server.conf"
+        )
+
+        referenced_directives = {
+            "ca",
+            "cert",
+            "key",
+            "dh",
+            "tls-auth",
+            "tls-crypt",
+            "tls-crypt-v2",
+            "crl-verify",
+        }
+
+        for raw_line in server_conf.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines():
+            line = raw_line.strip()
+
+            if not line or line.startswith(("#", ";")):
+                continue
+
+            parts = line.split()
+
+            if len(parts) < 2:
+                continue
+
+            directive = parts[0].lower()
+
+            if directive not in referenced_directives:
+                continue
+
+            raw_path = (
+                parts[1]
+                .strip()
+                .strip('"')
+                .strip("'")
+            )
+
+            if (
+                not raw_path
+                or raw_path.lower() in {"none", "[inline]"}
+            ):
+                continue
+
+            if raw_path.startswith("/etc/openvpn/"):
+                relative = "payload" + raw_path
+            elif raw_path.startswith("/"):
+                fail(
+                    "unsupported external OpenVPN file reference: "
+                    + raw_path
+                )
+            else:
+                relative = (
+                    "payload/etc/openvpn/server/"
+                    + raw_path
+                )
+
+            target = extracted / relative
+
+            if not target.is_file() or target.stat().st_size == 0:
+                fail(
+                    "OpenVPN referenced file missing: "
                     + relative
                 )
 
