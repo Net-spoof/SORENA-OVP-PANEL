@@ -78,6 +78,11 @@
                         <p class="text-sm text-gray-600 mt-2">Download .ovpn configuration file</p>
                     </div>
 
+                    <div class="border-l-4 border-orange-400 pl-4">
+                        <code class="text-orange-400">POST /api/clients/{name}/rework</code>
+                        <p class="text-sm text-gray-600 mt-2">Revoke old Master/Node credentials, rotate IKEv2 password, and issue a new subscription token</p>
+                    </div>
+
                     <div class="border-l-4 border-purple-400 pl-4">
                         <code class="text-purple-400">GET /api/clients/{name}/status</code>
                         <p class="text-sm text-gray-600 mt-2">Check certificate status (Valid/Revoked/Expired)</p>

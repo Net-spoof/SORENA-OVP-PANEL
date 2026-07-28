@@ -206,50 +206,77 @@ EOF
 write_client_tool() {
   cat > /usr/local/bin/irangate-node-client <<'CLIENT_TOOL_EOF'
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+umask 077
 
 ACTION="${1:-}"
 NAME="${2:-}"
 
-if [ -z "$ACTION" ] || [ -z "$NAME" ]; then
-  echo "Usage: irangate-node-client create CLIENT_NAME"
-  exit 1
-fi
+case "$ACTION" in
+  create|rotate) ;;
+  *) echo "Usage: irangate-node-client create|rotate CLIENT_NAME" >&2; exit 1 ;;
+esac
 
-SAFE_NAME="$(echo "$NAME" | tr -cd 'A-Za-z0-9_.-')"
-if [ -z "$SAFE_NAME" ]; then
-  echo "Invalid client name"
-  exit 1
-fi
+[ -n "$NAME" ] || { echo "Client name is required" >&2; exit 1; }
+SAFE_NAME="$(printf '%s' "$NAME" | tr -cd 'A-Za-z0-9_.@+-')"
+[ "$SAFE_NAME" = "$NAME" ] || { echo "Invalid client name" >&2; exit 1; }
 
-
-# IRANGATE_NODE_PKI_LOCK_V1
 mkdir -p /run
 exec 9>/run/irangate-node-pki.lock
-flock -w 120 9 || {
-  echo "Timed out waiting for PKI lock" >&2
-  exit 1
-}
+flock -w 150 9 || { echo "Timed out waiting for PKI lock" >&2; exit 1; }
 
 set -a
 . /etc/irangate-node-agent.env
 set +a
 
 EASYRSA_DIR="/etc/openvpn/easy-rsa"
+PKI_DIR="$EASYRSA_DIR/pki"
 OUT_DIR="/opt/irangate-node-agent/clients"
 OVPN_FILE="$OUT_DIR/$SAFE_NAME.ovpn"
+SERVER_CONF="/etc/openvpn/server/server.conf"
+CRL_RUNTIME="/etc/openvpn/server/crl.pem"
+SERVICE="openvpn-server@server.service"
+SAFETY_ROOT="/opt/irangate-node-agent/rework-safety"
 
-mkdir -p "$OUT_DIR"
+mkdir -p "$OUT_DIR" "$SAFETY_ROOT"
 cd "$EASYRSA_DIR"
 
-case "$ACTION" in
-  create)
-    if [ ! -f "pki/issued/$SAFE_NAME.crt" ]; then
-      EASYRSA_REQ_CN="$SAFE_NAME" ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null 2>&1
-      ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null 2>&1
-    fi
+write_profile() {
+  local template="${1:-}"
+  if [ -n "$template" ] && [ -f "$template" ]; then
+    python3 - "$template" "$OVPN_FILE" \
+      "$PKI_DIR/issued/$SAFE_NAME.crt" \
+      "$PKI_DIR/private/$SAFE_NAME.key" <<'PY_PROFILE'
+import re
+import sys
+from pathlib import Path
 
-    cat > "$OVPN_FILE" <<OVPN
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+cert_path = Path(sys.argv[3])
+key_path = Path(sys.argv[4])
+profile = source.read_text()
+cert_raw = cert_path.read_text()
+key = key_path.read_text().strip()
+marker = "-----BEGIN CERTIFICATE-----"
+index = cert_raw.find(marker)
+if index < 0:
+    raise SystemExit("certificate PEM marker missing")
+cert = cert_raw[index:].strip()
+for tag, value in (("cert", cert), ("key", key)):
+    pattern = re.compile(rf"<{tag}>.*?</{tag}>", re.DOTALL)
+    if not pattern.search(profile):
+        raise SystemExit(f"<{tag}> block missing")
+    profile = pattern.sub(f"<{tag}>\n{value}\n</{tag}>", profile, count=1)
+tmp = destination.with_suffix(destination.suffix + ".tmp")
+tmp.write_text(profile)
+tmp.chmod(0o600)
+tmp.replace(destination)
+PY_PROFILE
+    return
+  fi
+
+  cat > "$OVPN_FILE" <<OVPN
 client
 dev tun
 proto ${NODE_OVPN_PROTO}
@@ -263,28 +290,80 @@ cipher AES-256-GCM
 data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
 auth SHA256
 verb 3
-
 <ca>
 $(cat /etc/openvpn/server/ca.crt)
 </ca>
 <cert>
-$(awk '/BEGIN CERTIFICATE/{flag=1} flag {print}' "pki/issued/$SAFE_NAME.crt")
+$(awk '/BEGIN CERTIFICATE/{flag=1} flag {print}' "$PKI_DIR/issued/$SAFE_NAME.crt")
 </cert>
 <key>
-$(cat "pki/private/$SAFE_NAME.key")
+$(cat "$PKI_DIR/private/$SAFE_NAME.key")
 </key>
-<tls-crypt>
+<tls-auth>
 $(cat /etc/openvpn/server/ta.key)
-</tls-crypt>
+</tls-auth>
+key-direction 1
 OVPN
+  chmod 0600 "$OVPN_FILE"
+}
 
-    chmod 600 "$OVPN_FILE"
-    echo "$OVPN_FILE"
-    ;;
-  *)
-    echo "Unknown action: $ACTION"
+create_client() {
+  if [ ! -f "$PKI_DIR/issued/$SAFE_NAME.crt" ]; then
+    EASYRSA_REQ_CN="$SAFE_NAME" ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null 2>&1
+    ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null 2>&1
+  fi
+  write_profile ""
+  printf '%s\n' "$OVPN_FILE"
+}
+
+rotate_client() {
+  [ -f "$PKI_DIR/issued/$SAFE_NAME.crt" ] || { echo "Existing certificate missing" >&2; exit 1; }
+  [ -f "$OVPN_FILE" ] || { echo "Existing profile missing" >&2; exit 1; }
+
+  safety="$SAFETY_ROOT/$SAFE_NAME-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$safety"
+  cp -a "$PKI_DIR" "$safety/pki"
+  cp -a "$OVPN_FILE" "$safety/client.ovpn"
+  cp -a "$SERVER_CONF" "$safety/server.conf"
+  [ ! -f "$CRL_RUNTIME" ] || cp -a "$CRL_RUNTIME" "$safety/runtime-crl.pem"
+
+  old_serial="$(openssl x509 -in "$PKI_DIR/issued/$SAFE_NAME.crt" -noout -serial | sed 's/^serial=//')"
+
+  EASYRSA_BATCH=1 ./easyrsa --batch revoke "$SAFE_NAME" >/dev/null 2>&1 || true
+  EASYRSA_BATCH=1 ./easyrsa --batch gen-crl >/dev/null 2>&1
+  cp -a "$PKI_DIR/crl.pem" "$CRL_RUNTIME"
+  chmod 0644 "$CRL_RUNTIME"
+
+  if ! grep -qE '^[[:space:]]*crl-verify[[:space:]]+' "$SERVER_CONF"; then
+    printf '\ncrl-verify %s\n' "$CRL_RUNTIME" >> "$SERVER_CONF"
+  elif ! grep -qE "^[[:space:]]*crl-verify[[:space:]]+$CRL_RUNTIME([[:space:]]|$)" "$SERVER_CONF"; then
+    echo "Unexpected crl-verify directive" >&2
     exit 1
-    ;;
+  fi
+
+  rm -f \
+    "$PKI_DIR/issued/$SAFE_NAME.crt" \
+    "$PKI_DIR/private/$SAFE_NAME.key" \
+    "$PKI_DIR/reqs/$SAFE_NAME.req"
+
+  EASYRSA_REQ_CN="$SAFE_NAME" ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null 2>&1
+  ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null 2>&1
+  write_profile "$safety/client.ovpn"
+
+  new_serial="$(openssl x509 -in "$PKI_DIR/issued/$SAFE_NAME.crt" -noout -serial | sed 's/^serial=//')"
+  [ -n "$new_serial" ] && [ "$new_serial" != "$old_serial" ] || { echo "Certificate serial did not rotate" >&2; exit 1; }
+
+  printf 'kill %s\nquit\n' "$SAFE_NAME" | nc -w 2 127.0.0.1 7505 >/dev/null 2>&1 || true
+  systemctl reload "$SERVICE" >/dev/null 2>&1 || systemctl restart "$SERVICE"
+  systemctl is-active --quiet "$SERVICE"
+
+  printf '%s\n' "$OVPN_FILE"
+  printf 'OLD_SERIAL=%s\nNEW_SERIAL=%s\nSAFETY_DIR=%s\n' "$old_serial" "$new_serial" "$safety" >&2
+}
+
+case "$ACTION" in
+  create) create_client ;;
+  rotate) rotate_client ;;
 esac
 CLIENT_TOOL_EOF
 
@@ -1557,14 +1636,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self.auth_ok():
             return send_json(self, 401, {"success": False, "message": "Unauthorized"})
 
-        if path == "/clients":
+        if path in ("/clients", "/clients/rework"):
             data = self.read_json()
             name = safe_name(data.get("name"))
             if not name:
                 return send_json(self, 400, {"success": False, "message": "Invalid client name"})
 
             r = subprocess.run(
-                ["/usr/local/bin/irangate-node-client", "create", name],
+                [
+                    "/usr/local/bin/irangate-node-client",
+                    ("rotate" if path == "/clients/rework" else "create"),
+                    name,
+                ],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
@@ -1573,13 +1656,21 @@ class Handler(BaseHTTPRequestHandler):
             if r.returncode != 0:
                 return send_json(self, 500, {
                     "success": False,
-                    "message": "Client create failed",
+                    "message": (
+                        "Client rework failed"
+                        if path == "/clients/rework"
+                        else "Client create failed"
+                    ),
                     "stderr": r.stderr[-2000:]
                 })
 
             return send_json(self, 200, {
                 "success": True,
-                "message": "Client created",
+                "message": (
+                    "Client credentials rotated"
+                    if path == "/clients/rework"
+                    else "Client created"
+                ),
                 "name": name,
                 "location": NODE_LOCATION,
                 "config_path": (r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""),

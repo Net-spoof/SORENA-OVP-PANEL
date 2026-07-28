@@ -162,6 +162,15 @@ class API {
         return result;
     }
 
+    async reworkClient(name) {
+        const result = await this.request(
+            `/clients/${encodeURIComponent(name)}/rework`,
+            'POST'
+        );
+        this.invalidateCache('/clients');
+        return result;
+    }
+
     async deleteClient(name) {
         const result = await this.request(`/clients/${name}`, 'DELETE');
         this.invalidateCache('/clients');

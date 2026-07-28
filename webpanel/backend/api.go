@@ -4058,6 +4058,7 @@ func main() {
 	api.HandleFunc("/clients/{name}", updateClientWithGlobalResetHandler).Methods("PUT")
 	api.HandleFunc("/clients/{name}", deleteClientHandler).Methods("DELETE")
 	api.HandleFunc("/clients/{name}/activate", activateClientHandler).Methods("POST")
+	api.HandleFunc("/clients/{name}/rework", reworkClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/deactivate", deactivateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}/status", getClientStatusHandler).Methods("GET")
 	api.HandleFunc("/clients/{name}/subscription", getClientSubscriptionHandler).Methods("GET")

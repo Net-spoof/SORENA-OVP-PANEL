@@ -669,6 +669,15 @@
                                 </svg>
                             </button>
 
+                            <button onclick="reworkClient('${client.name}')"
+                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-orange-600 hover:text-orange-800 hover:bg-orange-50 rounded-md transition-colors duration-150"
+                                    title="Revoke old credentials and generate new ones">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                                <span class="ml-1">Rework</span>
+                            </button>
+
                             <button onclick="copySubscriptionLink('${client.name}')"
                                     class="inline-flex items-center px-2 py-1 text-xs font-medium text-cyan-600 hover:text-cyan-800 hover:bg-cyan-50 rounded-md transition-colors duration-150"
                                     title="Copy Subscription Link">
@@ -1560,6 +1569,74 @@
                 }
             } catch (error) {
                 showToast('Failed to check certificate status', 'error');
+            }
+        }
+
+
+        async function reworkClient(name) {
+            const confirmed = confirm(
+                `Revoke and regenerate all credentials for "${name}"?\n\n` +
+                `This will:\n` +
+                `- Invalidate the old subscription link\n` +
+                `- Revoke old OpenVPN certificates\n` +
+                `- Disconnect active sessions\n` +
+                `- Generate new Master and Node profiles\n` +
+                `- Change the IKEv2 password\n\n` +
+                `Old configurations will stop working.`
+            );
+
+            if (!confirmed) return;
+
+            try {
+                showToast(`Reworking credentials for "${name}"...`, 'warning');
+                const result = await api.reworkClient(name);
+
+                if (!result || !result.success || !result.data) {
+                    showToast(result?.message || 'Client rework failed', 'error');
+                    return;
+                }
+
+                const data = result.data;
+                const client = allClients.find(c => c.name === name);
+                if (client) {
+                    client.subscription_token = data.subscription_token || '';
+                    client.subscription_url = data.subscription_url || '';
+                }
+
+                if (data.subscription_url) {
+                    try {
+                        await navigator.clipboard.writeText(data.subscription_url);
+                    } catch (copyError) {
+                        console.warn('Could not copy new subscription link:', copyError);
+                    }
+                }
+
+                const failedNodes = Array.isArray(data.failed_nodes)
+                    ? data.failed_nodes
+                    : [];
+
+                if (failedNodes.length) {
+                    showToast(
+                        `Credentials changed, but these nodes need attention: ${failedNodes.join(', ')}`,
+                        'warning'
+                    );
+                } else if (data.partial) {
+                    showToast(
+                        `Credentials changed with warning: ${data.ikev2_error || 'Check details'}`,
+                        'warning'
+                    );
+                } else {
+                    showToast(
+                        `Old credentials revoked. New subscription link copied for "${name}".`,
+                        'success'
+                    );
+                }
+
+                api.invalidateCache('/clients');
+                await loadClients();
+            } catch (error) {
+                console.error('Client rework failed:', error);
+                showToast('Client rework failed', 'error');
             }
         }
 
