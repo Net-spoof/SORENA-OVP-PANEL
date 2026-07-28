@@ -189,16 +189,19 @@ func clientReworkReloadMasterOpenVPN() error {
 		"openvpn@server.service",
 		"openvpn@server",
 	} {
-		if exec.Command("systemctl", "reload", service).Run() == nil &&
-			exec.Command("systemctl", "is-active", "--quiet", service).Run() == nil {
-			return nil
-		}
-		if exec.Command("systemctl", "restart", service).Run() == nil &&
-			exec.Command("systemctl", "is-active", "--quiet", service).Run() == nil {
+		if exec.Command(
+			"systemctl",
+			"is-active",
+			"--quiet",
+			service,
+		).Run() == nil {
 			return nil
 		}
 	}
-	return fmt.Errorf("OpenVPN master reload/restart failed")
+
+	return fmt.Errorf(
+		"OpenVPN master is not active",
+	)
 }
 
 func clientReworkEnsureCRL() error {

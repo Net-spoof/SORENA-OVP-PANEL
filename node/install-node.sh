@@ -245,9 +245,10 @@ mkdir -p "$OUT_DIR" "$SAFETY_ROOT"
 cd "$EASYRSA_DIR"
 
 reload_openvpn() {
-  systemctl reload "$SERVICE" >/dev/null 2>&1 ||
-    systemctl restart "$SERVICE"
-  systemctl is-active --quiet "$SERVICE"
+  systemctl is-active --quiet "$SERVICE" || {
+    echo "OpenVPN node service is not active" >&2
+    return 1
+  }
 }
 
 restore_rotate() {
@@ -1666,7 +1667,7 @@ class Handler(BaseHTTPRequestHandler):
             return send_json(self, 200, {
                 "success": True,
                 "client_rework": True,
-                "client_rework_version": 2,
+                "client_rework_version": 3,
             })
 
         m = re.match(r"^/clients/([^/]+)/download$", path)
