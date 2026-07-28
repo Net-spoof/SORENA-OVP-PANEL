@@ -232,7 +232,7 @@
         </div>
     </div>
 
-    <script src="js/api.js"></script>
+    <script src="js/api.js?v=rework-direct-20260728"></script>
     <script src="js/notifications.js"></script>
     <script src="js/qrcode.js"></script>
     <script src="js/websocket.js"></script>
@@ -1588,55 +1588,172 @@
             if (!confirmed) return;
 
             try {
-                showToast(`Reworking credentials for "${name}"...`, 'warning');
-                const result = await api.reworkClient(name);
+                showToast(
+                    `Reworking credentials for "${name}"...`,
+                    'warning'
+                );
 
-                if (!result || !result.success || !result.data) {
-                    showToast(result?.message || 'Client rework failed', 'error');
+                const token =
+                    localStorage.getItem('token') || '';
+
+                if (!token) {
+                    throw new Error(
+                        'Authentication token is missing. Log in again.'
+                    );
+                }
+
+                const endpoint =
+                    `/api/clients/${encodeURIComponent(name)}/rework`;
+
+                console.log(
+                    'Client rework request:',
+                    endpoint
+                );
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    cache: 'no-store',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                        'X-IranGate-Rework-Request': 'frontend-direct-v1'
+                    }
+                });
+
+                const rawBody = await response.text();
+
+                let result = {};
+
+                if (rawBody) {
+                    try {
+                        result = JSON.parse(rawBody);
+                    } catch (parseError) {
+                        throw new Error(
+                            `HTTP ${response.status}: ` +
+                            `Invalid server response: ` +
+                            rawBody.slice(0, 300)
+                        );
+                    }
+                }
+
+                console.log(
+                    'Client rework response:',
+                    response.status,
+                    result
+                );
+
+                if (
+                    !response.ok ||
+                    !result ||
+                    result.success !== true
+                ) {
+                    const message =
+                        result?.message ||
+                        result?.error ||
+                        `Client rework failed with HTTP ${response.status}`;
+
+                    console.error(
+                        'Client rework HTTP failure:',
+                        {
+                            status: response.status,
+                            result: result,
+                            rawBody: rawBody
+                        }
+                    );
+
+                    showToast(message, 'error');
+                    return;
+                }
+
+                if (!result.data) {
+                    showToast(
+                        result.message ||
+                        'Rework completed but response data is missing',
+                        'warning'
+                    );
                     return;
                 }
 
                 const data = result.data;
-                const client = allClients.find(c => c.name === name);
+
+                const client = allClients.find(
+                    item => item.name === name
+                );
+
                 if (client) {
-                    client.subscription_token = data.subscription_token || '';
-                    client.subscription_url = data.subscription_url || '';
+                    client.subscription_token =
+                        data.subscription_token || '';
+
+                    client.subscription_url =
+                        data.subscription_url || '';
                 }
 
                 if (data.subscription_url) {
                     try {
-                        await navigator.clipboard.writeText(data.subscription_url);
+                        await navigator.clipboard.writeText(
+                            data.subscription_url
+                        );
                     } catch (copyError) {
-                        console.warn('Could not copy new subscription link:', copyError);
+                        console.warn(
+                            'Could not copy new subscription link:',
+                            copyError
+                        );
                     }
                 }
 
-                const failedNodes = Array.isArray(data.failed_nodes)
-                    ? data.failed_nodes
-                    : [];
+                const failedNodes =
+                    Array.isArray(data.failed_nodes)
+                        ? data.failed_nodes
+                        : [];
 
                 if (failedNodes.length) {
                     showToast(
-                        `Credentials changed, but these nodes need attention: ${failedNodes.join(', ')}`,
+                        `Credentials changed, but these nodes failed: ` +
+                        failedNodes.join(', '),
                         'warning'
                     );
                 } else if (data.partial) {
                     showToast(
-                        `Credentials changed with warning: ${data.ikev2_error || 'Check details'}`,
+                        `Credentials changed with warning: ` +
+                        (
+                            data.ikev2_error ||
+                            result.message ||
+                            'Check response details'
+                        ),
                         'warning'
                     );
                 } else {
                     showToast(
-                        `Old credentials revoked. New subscription link copied for "${name}".`,
+                        `Old credentials revoked and new credentials ` +
+                        `created for "${name}".`,
                         'success'
                     );
                 }
 
-                api.invalidateCache('/clients');
+                if (
+                    window.api &&
+                    typeof api.invalidateCache === 'function'
+                ) {
+                    api.invalidateCache('/clients');
+                }
+
                 await loadClients();
+
             } catch (error) {
-                console.error('Client rework failed:', error);
-                showToast('Client rework failed', 'error');
+                const message =
+                    error?.message ||
+                    String(error) ||
+                    'Client rework failed';
+
+                console.error(
+                    'Client rework request exception:',
+                    error
+                );
+
+                showToast(
+                    `Client rework failed: ${message}`,
+                    'error'
+                );
             }
         }
 
