@@ -199,6 +199,22 @@ if [[ -f "$REPO_DIR/scripts/ensure-ikev2-runtime.sh" ]]; then
   /usr/local/sbin/irangate-ensure-ikev2-runtime
 fi
 
+
+# IRANGATE_OPENVPN_PERMISSIONS_INSTALL_V1
+
+if [[ -f "$REPO_DIR/scripts/ensure-openvpn-runtime-permissions.sh" ]]; then
+  log "Installing OpenVPN runtime permission validator"
+
+  install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$REPO_DIR/scripts/ensure-openvpn-runtime-permissions.sh" \
+    /usr/local/sbin/irangate-ensure-openvpn-permissions
+
+  /usr/local/sbin/irangate-ensure-openvpn-permissions
+fi
+
 log "All panel extras applied ✅"
 }
 

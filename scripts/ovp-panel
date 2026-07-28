@@ -3928,6 +3928,7 @@ update_panel() {
         "/usr/local/bin/irangate-backup-v2-import.py"
         "/usr/local/bin/irangate-routing"
         "/usr/local/sbin/irangate-ensure-ikev2-runtime"
+        "/usr/local/sbin/irangate-ensure-openvpn-permissions"
         "/etc/systemd/system/irangate-routing.service"
 
         "/usr/local/sbin/irangate-ikev2"
