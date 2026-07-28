@@ -140,6 +140,10 @@ func clientReworkRestorePaths(backups []clientReworkBackup) error {
 func clientReworkMasterProfile(name string) (string, error) {
 	for _, candidate := range []string{
 		filepath.Join("/opt/irangate/clients", name+".ovpn"),
+		filepath.Join(
+			"/etc/openvpn/client",
+			name+".ovpn",
+		),
 		filepath.Join("/etc/openvpn/clients", name+".ovpn"),
 	} {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -590,6 +594,7 @@ func reworkClientHandler(w http.ResponseWriter, r *http.Request) {
 	defer clientReworkLock.Unlock()
 
 	name := strings.TrimSpace(mux.Vars(r)["name"])
+	log.Printf("client rework request started: name=%s", name)
 	if !clientReworkName.MatchString(name) {
 		sendError(w, "Invalid client name", http.StatusBadRequest)
 		return
