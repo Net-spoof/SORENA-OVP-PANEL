@@ -237,9 +237,43 @@ SERVER_CONF="/etc/openvpn/server/server.conf"
 CRL_RUNTIME="/etc/openvpn/server/crl.pem"
 SERVICE="openvpn-server@server.service"
 SAFETY_ROOT="/opt/irangate-node-agent/rework-safety"
+SAFETY_DIR=""
+ROLLBACK_NEEDED=0
+CRL_WAS_PRESENT=0
 
 mkdir -p "$OUT_DIR" "$SAFETY_ROOT"
 cd "$EASYRSA_DIR"
+
+reload_openvpn() {
+  systemctl reload "$SERVICE" >/dev/null 2>&1 ||
+    systemctl restart "$SERVICE"
+  systemctl is-active --quiet "$SERVICE"
+}
+
+restore_rotate() {
+  [ "$ROLLBACK_NEEDED" -eq 1 ] || return 0
+  [ -n "$SAFETY_DIR" ] || return 0
+  rm -rf "$PKI_DIR"
+  cp -a "$SAFETY_DIR/pki" "$PKI_DIR"
+  cp -a "$SAFETY_DIR/client.ovpn" "$OVPN_FILE"
+  cp -a "$SAFETY_DIR/server.conf" "$SERVER_CONF"
+  if [ "$CRL_WAS_PRESENT" -eq 1 ] && [ -f "$SAFETY_DIR/runtime-crl.pem" ]; then
+    cp -a "$SAFETY_DIR/runtime-crl.pem" "$CRL_RUNTIME"
+  else
+    rm -f "$CRL_RUNTIME"
+  fi
+  reload_openvpn >/dev/null 2>&1 || true
+}
+
+finish() {
+  rc=$?
+  trap - EXIT
+  if [ "$ROLLBACK_NEEDED" -eq 1 ]; then
+    restore_rotate
+  fi
+  exit "$rc"
+}
+trap finish EXIT
 
 write_profile() {
   local template="${1:-}"
@@ -255,9 +289,9 @@ source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 cert_path = Path(sys.argv[3])
 key_path = Path(sys.argv[4])
-profile = source.read_text()
-cert_raw = cert_path.read_text()
-key = key_path.read_text().strip()
+profile = source.read_text(encoding="utf-8")
+cert_raw = cert_path.read_text(encoding="utf-8")
+key = key_path.read_text(encoding="utf-8").strip()
 marker = "-----BEGIN CERTIFICATE-----"
 index = cert_raw.find(marker)
 if index < 0:
@@ -268,15 +302,15 @@ for tag, value in (("cert", cert), ("key", key)):
     if not pattern.search(profile):
         raise SystemExit(f"<{tag}> block missing")
     profile = pattern.sub(f"<{tag}>\n{value}\n</{tag}>", profile, count=1)
-tmp = destination.with_suffix(destination.suffix + ".tmp")
-tmp.write_text(profile)
-tmp.chmod(0o600)
-tmp.replace(destination)
+temporary = destination.with_suffix(destination.suffix + ".tmp")
+temporary.write_text(profile, encoding="utf-8")
+temporary.chmod(0o600)
+temporary.replace(destination)
 PY_PROFILE
     return
   fi
 
-  cat > "$OVPN_FILE" <<OVPN
+  cat >"$OVPN_FILE" <<OVPN
 client
 dev tun
 proto ${NODE_OVPN_PROTO}
@@ -317,28 +351,39 @@ create_client() {
 }
 
 rotate_client() {
-  [ -f "$PKI_DIR/issued/$SAFE_NAME.crt" ] || { echo "Existing certificate missing" >&2; exit 1; }
-  [ -f "$OVPN_FILE" ] || { echo "Existing profile missing" >&2; exit 1; }
+  [ -f "$PKI_DIR/issued/$SAFE_NAME.crt" ] || { echo "Existing certificate missing" >&2; return 1; }
+  [ -f "$OVPN_FILE" ] || { echo "Existing profile missing" >&2; return 1; }
 
-  safety="$SAFETY_ROOT/$SAFE_NAME-$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "$safety"
-  cp -a "$PKI_DIR" "$safety/pki"
-  cp -a "$OVPN_FILE" "$safety/client.ovpn"
-  cp -a "$SERVER_CONF" "$safety/server.conf"
-  [ ! -f "$CRL_RUNTIME" ] || cp -a "$CRL_RUNTIME" "$safety/runtime-crl.pem"
+  SAFETY_DIR="$SAFETY_ROOT/$SAFE_NAME-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$SAFETY_DIR"
+  cp -a "$PKI_DIR" "$SAFETY_DIR/pki"
+  cp -a "$OVPN_FILE" "$SAFETY_DIR/client.ovpn"
+  cp -a "$SERVER_CONF" "$SAFETY_DIR/server.conf"
+  if [ -f "$CRL_RUNTIME" ]; then
+    CRL_WAS_PRESENT=1
+    cp -a "$CRL_RUNTIME" "$SAFETY_DIR/runtime-crl.pem"
+  fi
+  ROLLBACK_NEEDED=1
 
   old_serial="$(openssl x509 -in "$PKI_DIR/issued/$SAFE_NAME.crt" -noout -serial | sed 's/^serial=//')"
 
-  EASYRSA_BATCH=1 ./easyrsa --batch revoke "$SAFE_NAME" >/dev/null 2>&1 || true
+  revoke_output=""
+  if ! revoke_output="$(EASYRSA_BATCH=1 ./easyrsa --batch revoke "$SAFE_NAME" 2>&1)"; then
+    case "${revoke_output,,}" in
+      *"already revoked"*|*"not found"*) ;;
+      *) echo "$revoke_output" >&2; return 1 ;;
+    esac
+  fi
+
   EASYRSA_BATCH=1 ./easyrsa --batch gen-crl >/dev/null 2>&1
   cp -a "$PKI_DIR/crl.pem" "$CRL_RUNTIME"
   chmod 0644 "$CRL_RUNTIME"
 
   if ! grep -qE '^[[:space:]]*crl-verify[[:space:]]+' "$SERVER_CONF"; then
-    printf '\ncrl-verify %s\n' "$CRL_RUNTIME" >> "$SERVER_CONF"
+    printf '\ncrl-verify %s\n' "$CRL_RUNTIME" >>"$SERVER_CONF"
   elif ! grep -qE "^[[:space:]]*crl-verify[[:space:]]+$CRL_RUNTIME([[:space:]]|$)" "$SERVER_CONF"; then
     echo "Unexpected crl-verify directive" >&2
-    exit 1
+    return 1
   fi
 
   rm -f \
@@ -348,17 +393,17 @@ rotate_client() {
 
   EASYRSA_REQ_CN="$SAFE_NAME" ./easyrsa --batch gen-req "$SAFE_NAME" nopass >/dev/null 2>&1
   ./easyrsa --batch sign-req client "$SAFE_NAME" >/dev/null 2>&1
-  write_profile "$safety/client.ovpn"
+  write_profile "$SAFETY_DIR/client.ovpn"
 
   new_serial="$(openssl x509 -in "$PKI_DIR/issued/$SAFE_NAME.crt" -noout -serial | sed 's/^serial=//')"
-  [ -n "$new_serial" ] && [ "$new_serial" != "$old_serial" ] || { echo "Certificate serial did not rotate" >&2; exit 1; }
+  [ -n "$new_serial" ] && [ "$new_serial" != "$old_serial" ] || { echo "Certificate serial did not rotate" >&2; return 1; }
 
   printf 'kill %s\nquit\n' "$SAFE_NAME" | nc -w 2 127.0.0.1 7505 >/dev/null 2>&1 || true
-  systemctl reload "$SERVICE" >/dev/null 2>&1 || systemctl restart "$SERVICE"
-  systemctl is-active --quiet "$SERVICE"
+  reload_openvpn
 
+  ROLLBACK_NEEDED=0
   printf '%s\n' "$OVPN_FILE"
-  printf 'OLD_SERIAL=%s\nNEW_SERIAL=%s\nSAFETY_DIR=%s\n' "$old_serial" "$new_serial" "$safety" >&2
+  printf 'OLD_SERIAL=%s\nNEW_SERIAL=%s\nSAFETY_DIR=%s\n' "$old_serial" "$new_serial" "$SAFETY_DIR" >&2
 }
 
 case "$ACTION" in
@@ -1615,6 +1660,13 @@ class Handler(BaseHTTPRequestHandler):
                 "ovpn_proto": NODE_OVPN_PROTO,
                 "agent_port": NODE_AGENT_PORT,
                 "status": "ok"
+            })
+
+        if path == "/capabilities":
+            return send_json(self, 200, {
+                "success": True,
+                "client_rework": True,
+                "client_rework_version": 2,
             })
 
         m = re.match(r"^/clients/([^/]+)/download$", path)
