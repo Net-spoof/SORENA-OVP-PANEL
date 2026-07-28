@@ -3927,6 +3927,8 @@ update_panel() {
         "/usr/local/bin/irangate-backup-v2-import"
         "/usr/local/bin/irangate-backup-v2-import.py"
         "/usr/local/bin/irangate-routing"
+        "/usr/local/sbin/irangate-ensure-ikev2-runtime"
+        "/etc/systemd/system/irangate-routing.service"
 
         "/usr/local/sbin/irangate-ikev2"
         "/usr/local/sbin/irangate-ikev2-stats-snapshot"

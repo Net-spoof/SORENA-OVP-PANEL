@@ -1658,6 +1658,203 @@ def service_status() -> None:
         print(f"Size:   {SING_BOX_CONFIG.stat().st_size} bytes")
 
 
+
+# IRANGATE_SHARED_VPN_ROUTING_FIX_V1
+#
+# UDP 500/4500 and ESP/AH are IKEv2 control-plane traffic and must stay local.
+# Decrypted IKEv2 client traffic uses 10.10.0.0/24 and shares the primary
+# OpenVPN outbound route with 10.8.0.0/24.
+
+_original_build_nft_plan_shared_vpn = build_nft_plan
+
+
+def build_nft_plan():
+    import re as _re
+
+    nft_lines, route_lines = _original_build_nft_plan_shared_vpn()
+
+    table_name = globals().get(
+        "NFT_TABLE_NAME",
+        "irangate_routing",
+    )
+
+    tproxy_port = 12345
+    mark = 100
+
+    for line in nft_lines:
+        port_match = _re.search(
+            r"tproxy ip to 127\.0\.0\.1:(\d+)",
+            line,
+        )
+        if port_match:
+            tproxy_port = int(port_match.group(1))
+
+        mark_match = _re.search(
+            r"meta mark set (0x[0-9a-fA-F]+|\d+)",
+            line,
+        )
+        if mark_match:
+            mark = int(mark_match.group(1), 0)
+
+    insertion_index = len(nft_lines)
+
+    for index, line in enumerate(nft_lines):
+        if (
+            f"add rule inet {table_name} prerouting" in line
+            and "ip daddr @local_ipv4 return" in line
+        ):
+            insertion_index = index
+            break
+
+    control_plane_rules = [
+        (
+            f"add rule inet {table_name} prerouting "
+            'udp dport 500 counter return '
+            'comment "irangate-ikev2-bypass-udp500"'
+        ),
+        (
+            f"add rule inet {table_name} prerouting "
+            'udp dport 4500 counter return '
+            'comment "irangate-ikev2-bypass-udp4500"'
+        ),
+        (
+            f"add rule inet {table_name} prerouting "
+            'ip protocol esp counter return '
+            'comment "irangate-ikev2-bypass-esp"'
+        ),
+        (
+            f"add rule inet {table_name} prerouting "
+            'ip protocol ah counter return '
+            'comment "irangate-ikev2-bypass-ah"'
+        ),
+    ]
+
+    nft_lines[insertion_index:insertion_index] = control_plane_rules
+
+    nft_lines.extend([
+        (
+            f"add rule inet {table_name} prerouting "
+            "ip saddr 10.10.0.0/24 "
+            "meta l4proto tcp "
+            f"tproxy ip to 127.0.0.1:{tproxy_port} "
+            f"meta mark set {mark} "
+            'counter accept '
+            'comment "irangate-ikev2-client-tproxy-tcp"'
+        ),
+        (
+            f"add rule inet {table_name} prerouting "
+            "ip saddr 10.10.0.0/24 "
+            "meta l4proto udp "
+            f"tproxy ip to 127.0.0.1:{tproxy_port} "
+            f"meta mark set {mark} "
+            'counter accept '
+            'comment "irangate-ikev2-client-tproxy-udp"'
+        ),
+    ])
+
+    # Multiple UI service-port rules previously generated duplicate TPROXY
+    # commands. Preserve the first occurrence only.
+    deduplicated = []
+    seen = set()
+
+    for line in nft_lines:
+        if line in seen:
+            continue
+
+        seen.add(line)
+        deduplicated.append(line)
+
+    return deduplicated, route_lines
+
+
+_original_generate_engine_config_shared_vpn = generate_engine_config
+
+
+def generate_engine_config(args):
+    import json as _json
+    import re as _re
+
+    result = _original_generate_engine_config_shared_vpn(args)
+
+    if not SING_BOX_CONFIG.exists():
+        return result
+
+    config = _json.loads(
+        SING_BOX_CONFIG.read_text(encoding="utf-8")
+    )
+
+    generated_outbounds = config.get("outbounds", [])
+
+    # Ports 500 and 4500 are strongSwan handshake ports, not separate
+    # user-traffic outbound routes.
+    filtered_outbounds = []
+
+    for outbound in generated_outbounds:
+        tag = str(outbound.get("tag", ""))
+
+        if _re.fullmatch(
+            r"(?:urltest|select)-openvpn-(?:500|4500)",
+            tag,
+        ):
+            continue
+
+        filtered_outbounds.append(outbound)
+
+    config["outbounds"] = filtered_outbounds
+
+    route = config.setdefault("route", {})
+    rules = route.get("rules", [])
+
+    # All captured VPN client traffic uses one shared primary selector.
+    # The existing routing model orders the primary OpenVPN rule first.
+    if rules:
+        primary = dict(rules[0])
+        available_tags = {
+            str(item.get("tag", ""))
+            for item in filtered_outbounds
+        }
+
+        if primary.get("outbound") not in available_tags:
+            primary["outbound"] = "direct"
+
+        route["rules"] = [primary]
+
+    SING_BOX_CONFIG.write_text(
+        _json.dumps(
+            config,
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    print(
+        "Shared OpenVPN + IKEv2 outbound routing normalized ✅"
+    )
+
+    return result
+
+
+_original_apply_routing_shared_vpn = apply_routing
+
+
+def apply_routing():
+    from pathlib import Path as _Path
+
+    service_file = _Path(
+        "/etc/systemd/system/irangate-routing.service"
+    )
+
+    # Self-healing for fresh, offline and upgraded installations.
+    if not service_file.exists():
+        print(
+            "Routing service missing; installing automatically..."
+        )
+        install_routing_service()
+
+    return _original_apply_routing_shared_vpn()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="IranGate Routing Manager"

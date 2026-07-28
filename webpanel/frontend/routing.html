@@ -29,7 +29,7 @@
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Outbounds</h1>
-                <p class="text-gray-500 mt-1">Select an inbound VPN port, then route it through selected outbound strategies.</p>
+                <p class="text-gray-500 mt-1">Route OpenVPN and IKEv2 client traffic through one shared outbound strategy.</p>
             </div>
 
             <div class="flex flex-wrap gap-2">
@@ -92,14 +92,12 @@
             </div>
 
             <div class="bg-white rounded-xl shadow p-6">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Bind / Route Inbound</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Route VPN Client Traffic</h2>
 
                 <div id="inboundBindSelector" class="mb-4 rounded-xl border border-cyan-500/30 bg-slate-950/30 p-4">
                     <label class="block text-sm font-semibold text-gray-300 mb-2">Inbound</label>
                     <select id="inboundPortSelect" class="w-full rounded-lg bg-slate-800 border border-slate-600 px-3 py-3 text-white focus:border-cyan-400 focus:outline-none">
-                        <option value="443" selected>OpenVPN — UDP 443</option>
-                        <option value="500">IKEv2 / IPSec — UDP 500</option>
-                        <option value="4500">IKEv2 NAT-T — UDP 4500</option>
+                        <option value="443" selected>OpenVPN + IKEv2 — Shared Outbound</option>
                     </select>
 
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 text-sm">

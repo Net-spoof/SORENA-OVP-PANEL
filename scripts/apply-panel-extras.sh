@@ -166,7 +166,40 @@ main() {
         systemctl restart irangate-webpanel
     fi
 
-    log "All panel extras applied ✅"
+
+# IRANGATE_ROUTING_IKEV2_INSTALL_V1
+
+if [[ -f "$REPO_DIR/scripts/irangate-routing" ]]; then
+  log "Installing IranGate routing runtime"
+
+  install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$REPO_DIR/scripts/irangate-routing" \
+    /usr/local/bin/irangate-routing
+
+  if command -v sing-box >/dev/null 2>&1; then
+    /usr/local/bin/irangate-routing install-service
+  else
+    warn "sing-box is not installed; routing service installation skipped"
+  fi
+fi
+
+if [[ -f "$REPO_DIR/scripts/ensure-ikev2-runtime.sh" ]]; then
+  log "Installing IranGate IKEv2 runtime validator"
+
+  install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$REPO_DIR/scripts/ensure-ikev2-runtime.sh" \
+    /usr/local/sbin/irangate-ensure-ikev2-runtime
+
+  /usr/local/sbin/irangate-ensure-ikev2-runtime
+fi
+
+log "All panel extras applied ✅"
 }
 
 main "$@"
