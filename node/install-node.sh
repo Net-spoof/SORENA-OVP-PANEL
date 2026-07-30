@@ -334,10 +334,9 @@ $(awk '/BEGIN CERTIFICATE/{flag=1} flag {print}' "$PKI_DIR/issued/$SAFE_NAME.crt
 <key>
 $(cat "$PKI_DIR/private/$SAFE_NAME.key")
 </key>
-<tls-auth>
+<tls-crypt>
 $(cat /etc/openvpn/server/ta.key)
-</tls-auth>
-key-direction 1
+</tls-crypt>
 OVPN
   chmod 0600 "$OVPN_FILE"
 }
