@@ -166,6 +166,13 @@ main() {
         systemctl restart irangate-webpanel
     fi
 
+  # IRANGATE_VPN_DIRECT_BYPASS_MASTER_V1
+  if [[ -x "$REPO_DIR/scripts/install-vpn-direct-bypass.sh" ]]; then
+    echo "[panel-extras] Installing VPN direct bypass runtime"
+    bash "$REPO_DIR/scripts/install-vpn-direct-bypass.sh" master || \
+      echo "[panel-extras] VPN direct bypass installer had warnings"
+  fi
+
 
 # IRANGATE_ROUTING_IKEV2_INSTALL_V1
 

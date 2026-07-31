@@ -23,6 +23,13 @@ The installer configures:
 - PKI locking while clients or snapshots are created
 - ovp-node management CLI
 
+
+### VPN routing compatibility
+
+The Node installer adds a VPN direct bypass for legacy Gemini TCP redirect and
+UDP/443 reject rules. The bypass does not disable the main IranGate outbound
+routing engine or Iran-to-foreign GOST tunnels.
+
 ## Node Agent API
 
 Authenticated endpoints include:

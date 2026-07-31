@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG="/etc/default/irangate-vpn-direct-bypass"
+
+[ -f "$CONFIG" ] || {
+    echo "Config not found: $CONFIG" >&2
+    exit 1
+}
+
+# shellcheck disable=SC1090
+source "$CONFIG"
+
+: "${VPN_SUBNETS:?VPN_SUBNETS is empty}"
+
+ACTION="${1:-apply}"
+
+chain_exists() {
+    local table="$1"
+    local chain="$2"
+
+    iptables \
+        -w 10 \
+        -t "$table" \
+        -nL "$chain" \
+        >/dev/null 2>&1
+}
+
+remove_rule() {
+    local table="$1"
+    local chain="$2"
+    local subnet="$3"
+    local comment="$4"
+
+    while iptables \
+        -w 10 \
+        -t "$table" \
+        -C "$chain" \
+        -s "$subnet" \
+        -m comment \
+        --comment "$comment" \
+        -j RETURN \
+        >/dev/null 2>&1
+    do
+        iptables \
+            -w 10 \
+            -t "$table" \
+            -D "$chain" \
+            -s "$subnet" \
+            -m comment \
+            --comment "$comment" \
+            -j RETURN
+    done
+}
+
+insert_rule() {
+    local table="$1"
+    local chain="$2"
+    local subnet="$3"
+    local comment="$4"
+
+    if ! chain_exists "$table" "$chain"; then
+        echo "Chain unavailable, skipped: $table/$chain"
+        return 0
+    fi
+
+    remove_rule \
+        "$table" \
+        "$chain" \
+        "$subnet" \
+        "$comment"
+
+    iptables \
+        -w 10 \
+        -t "$table" \
+        -I "$chain" 1 \
+        -s "$subnet" \
+        -m comment \
+        --comment "$comment" \
+        -j RETURN
+
+    echo "Applied: $table/$chain source=$subnet"
+}
+
+apply_rules() {
+    local subnet
+    local tag
+
+    for subnet in $VPN_SUBNETS; do
+        tag="${subnet//\//-}"
+        tag="${tag//./-}"
+
+        # دورزدن Redirect شدن TCP 80/443 به Sing-box
+        insert_rule \
+            nat \
+            IRANGATE_WARP_GEMINI \
+            "$subnet" \
+            "IRANGATE-VPN-DIRECT-NAT-${tag}"
+
+        # دورزدن محدودیت/هدایت QUIC برای ترافیک VPN
+        insert_rule \
+            filter \
+            IRANGATE_WARP_QUIC \
+            "$subnet" \
+            "IRANGATE-VPN-DIRECT-QUIC-${tag}"
+    done
+}
+
+remove_rules() {
+    local subnet
+    local tag
+
+    for subnet in $VPN_SUBNETS; do
+        tag="${subnet//\//-}"
+        tag="${tag//./-}"
+
+        if chain_exists nat IRANGATE_WARP_GEMINI; then
+            remove_rule \
+                nat \
+                IRANGATE_WARP_GEMINI \
+                "$subnet" \
+                "IRANGATE-VPN-DIRECT-NAT-${tag}"
+        fi
+
+        if chain_exists filter IRANGATE_WARP_QUIC; then
+            remove_rule \
+                filter \
+                IRANGATE_WARP_QUIC \
+                "$subnet" \
+                "IRANGATE-VPN-DIRECT-QUIC-${tag}"
+        fi
+    done
+}
+
+show_status() {
+    echo "===== CONFIGURED SUBNETS ====="
+    echo "$VPN_SUBNETS"
+
+    echo
+    echo "===== NAT BYPASS ====="
+
+    if chain_exists nat IRANGATE_WARP_GEMINI; then
+        iptables \
+            -w 10 \
+            -t nat \
+            -L IRANGATE_WARP_GEMINI \
+            -n \
+            -v \
+            --line-numbers |
+        sed -n '1,30p'
+    else
+        echo "IRANGATE_WARP_GEMINI does not exist"
+    fi
+
+    echo
+    echo "===== QUIC BYPASS ====="
+
+    if chain_exists filter IRANGATE_WARP_QUIC; then
+        iptables \
+            -w 10 \
+            -t filter \
+            -L IRANGATE_WARP_QUIC \
+            -n \
+            -v \
+            --line-numbers |
+        sed -n '1,30p'
+    else
+        echo "IRANGATE_WARP_QUIC does not exist"
+    fi
+}
+
+case "$ACTION" in
+    apply)
+        apply_rules
+        ;;
+
+    remove)
+        remove_rules
+        ;;
+
+    restart)
+        remove_rules
+        apply_rules
+        ;;
+
+    status)
+        show_status
+        ;;
+
+    *)
+        echo "Usage: $0 {apply|remove|restart|status}" >&2
+        exit 2
+        ;;
+esac

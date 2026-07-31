@@ -2035,6 +2035,11 @@ uninstall_node() {
   rm -rf /opt/irangate-node-agent/restore-safety
   rm -f /run/irangate-node-pki.lock
   rm -rf /run/irangate-node-backup
+  systemctl disable --now irangate-vpn-direct-bypass.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/irangate-vpn-direct-bypass.service
+  rm -f /etc/default/irangate-vpn-direct-bypass
+  rm -f /usr/local/sbin/irangate-vpn-direct-bypass
+  rm -f /etc/systemd/system/irangate-warp-gemini-rules.service.d/90-vpn-direct-bypass.conf
   rm -f /usr/local/bin/irangate-node-nat
   rm -f /usr/local/bin/ovp-node
   rm -f /etc/openvpn/irangate-client-connect.sh
@@ -2099,6 +2104,36 @@ start_services() {
   systemctl restart irangate-node-control.service
 }
 
+
+install_vpn_direct_bypass() {
+  # IRANGATE_VPN_DIRECT_BYPASS_NODE_V1
+  local raw_base
+  local installer_url
+  local temp_installer
+
+  raw_base="${IRANGATE_RAW_BASE:-https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat}"
+  installer_url="${raw_base}/scripts/install-vpn-direct-bypass.sh"
+  temp_installer="$(mktemp)"
+
+  if ! curl -4 \
+      -fsSL \
+      --retry 5 \
+      --retry-delay 2 \
+      --connect-timeout 15 \
+      -o "$temp_installer" \
+      "$installer_url"
+  then
+    rm -f "$temp_installer"
+    echo "Unable to download VPN direct bypass installer" >&2
+    return 1
+  fi
+
+  bash -n "$temp_installer"
+  bash "$temp_installer" node
+
+  rm -f "$temp_installer"
+}
+
 main() {
   need_root
 
@@ -2122,6 +2157,7 @@ main() {
   write_env
   setup_openvpn
   setup_network
+  install_vpn_direct_bypass
   write_client_tool
   write_client_connect_guard
   write_backup_helper

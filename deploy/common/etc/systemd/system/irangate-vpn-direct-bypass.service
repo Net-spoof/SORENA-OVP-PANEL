@@ -1,0 +1,14 @@
+[Unit]
+Description=IranGate VPN Direct Bypass
+After=network-online.target irangate-warp-gemini-rules.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-vpn-direct-bypass apply
+ExecReload=/usr/local/sbin/irangate-vpn-direct-bypass restart
+ExecStop=/usr/local/sbin/irangate-vpn-direct-bypass remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
