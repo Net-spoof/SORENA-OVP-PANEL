@@ -158,6 +158,39 @@ main() {
     bash "$REPO_DIR/scripts/install-routing-extras.sh" \
         "${routing_args[@]}"
 
+    # IRANGATE_PG_ENFORCER_DEPLOY_V1
+    local pg_enforcer_source="$REPO_DIR/deploy/master/scripts/irangate-pg-enforcer.py"
+
+    if [[ -f "$pg_enforcer_source" ]]; then
+        log "Installing PostgreSQL quota/connection Enforcer runtime"
+
+        python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); compile(p.read_text(encoding="utf-8"), str(p), "exec")' \
+            "$pg_enforcer_source"
+
+        systemctl stop \
+            irangate-pg-enforcer.timer \
+            irangate-pg-enforcer.service \
+            >/dev/null 2>&1 || true
+
+        install -m 0755 \
+            "$pg_enforcer_source" \
+            /usr/local/bin/irangate-pg-enforcer.py
+
+        if systemctl cat \
+            irangate-pg-enforcer.timer \
+            >/dev/null 2>&1
+        then
+            systemctl enable \
+                irangate-pg-enforcer.timer \
+                >/dev/null 2>&1 || true
+
+            systemctl start \
+                irangate-pg-enforcer.timer
+        fi
+
+        log "PostgreSQL Enforcer runtime installed ✅"
+    fi
+
     deploy_frontend
 
     systemctl daemon-reload

@@ -285,12 +285,8 @@ with conn.cursor() as cur:
 
     for name, used, limitb, expire_at, is_blocked, reason in rows:
         action = "SKIP_ALREADY_BLOCKED" if is_blocked else "WOULD_BLOCK"
-        if args.apply:
-            print(f"RECONCILE_ALREADY_BLOCKED name={name} reason={reason}")
-            try:
-                block_everywhere(name)
-            except Exception as e:
-                print(f"RECONCILE_ALREADY_BLOCKED_FAIL name={name}: {e}")
+        # IRANGATE_SKIP_ALREADY_BLOCKED_RUNTIME_V1
+        # Already-blocked clients must not be killed or reconciled repeatedly.
         print(f"{action} name={name} reason={reason} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
         if args.apply and not is_blocked:
