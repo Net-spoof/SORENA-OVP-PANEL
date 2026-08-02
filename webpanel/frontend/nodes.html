@@ -22,7 +22,7 @@
         <div class="flex items-center justify-between mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Nodes / Locations</h1>
-                <p class="text-gray-500 mt-1">Manage OpenVPN locations connected to this panel</p>
+                <p class="text-gray-500 mt-1">Manage remote OpenVPN nodes and local UDP port locations connected to this panel</p>
             </div>
 
             <div class="flex gap-2">
@@ -90,7 +90,7 @@
 
         <div class="bg-white rounded-xl shadow overflow-hidden">
             <div class="p-5 border-b">
-                <h2 class="text-xl font-bold text-gray-800">Configured Nodes</h2>
+                <h2 class="text-xl font-bold text-gray-800">Remote Nodes / Master</h2>
             </div>
 
             <div class="overflow-x-auto">
@@ -111,6 +111,177 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- IRANGATE_PORT_LOCATION_ADMIN_UI_STAGE8C -->
+        <div class="mt-8 border-t border-gray-200 pt-8">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        Local OpenVPN Port Locations
+                    </h2>
+                    <p class="text-sm text-gray-500 mt-1">
+                        Create independent local OpenVPN UDP ports with separate interfaces,
+                        subnets and outbound routing.
+                    </p>
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onclick="loadPortLocations()"
+                        class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-lg">
+                        Refresh Locations
+                    </button>
+
+                    <button
+                        type="button"
+                        onclick="applyAllPortLocations()"
+                        class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg">
+                        Apply All Locations
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow p-6 mb-6">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">
+                    Add Local Port Location
+                </h3>
+
+                <form
+                    id="portLocationForm"
+                    class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Location ID
+                        </label>
+                        <input
+                            id="portLocationId"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="germany"
+                            pattern="[a-z0-9][a-z0-9-]{0,30}"
+                            required>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Lowercase letters, numbers and hyphens.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Display Name
+                        </label>
+                        <input
+                            id="portLocationName"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="Germany UDP"
+                            required>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Location Code
+                        </label>
+                        <input
+                            id="portLocationCode"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="DE">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Flag / Emoji
+                        </label>
+                        <input
+                            id="portLocationFlag"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="🇩🇪">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Public Host
+                        </label>
+                        <input
+                            id="portLocationHost"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="vpn.example.com">
+                        <p class="text-xs text-gray-500 mt-1">
+                            Leave empty to use the main OpenVPN public host.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            OpenVPN UDP Port
+                        </label>
+                        <input
+                            id="portLocationPort"
+                            type="number"
+                            min="1"
+                            max="65535"
+                            class="w-full border rounded-lg px-3 py-2"
+                            placeholder="8443"
+                            required>
+                        <p class="text-xs text-gray-500 mt-1">
+                            UDP 500 and 4500 are reserved for IKEv2.
+                        </p>
+                    </div>
+
+                    <div class="md:col-span-2 xl:col-span-3 rounded-lg bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800">
+                        Interface, /24 subnet, Management port, TPROXY port and Status file
+                        are allocated automatically to prevent conflicts.
+                    </div>
+
+                    <div class="md:col-span-2 xl:col-span-3 flex justify-end">
+                        <button
+                            type="submit"
+                            class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg font-semibold">
+                            Add Port Location
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white rounded-xl shadow overflow-hidden">
+                <div class="p-5 border-b flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                    <div>
+                        <h3 class="text-xl font-bold text-gray-800">
+                            Configured Local Port Locations
+                        </h3>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Runtime status is based on the generated systemd OpenVPN service.
+                        </p>
+                    </div>
+
+                    <div id="portLocationSummary" class="text-sm text-gray-500">
+                        Loading...
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[1100px]">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="text-left p-4 text-sm font-semibold text-gray-600">ID / Name</th>
+                                <th class="text-left p-4 text-sm font-semibold text-gray-600">Endpoint</th>
+                                <th class="text-left p-4 text-sm font-semibold text-gray-600">Runtime</th>
+                                <th class="text-left p-4 text-sm font-semibold text-gray-600">Network</th>
+                                <th class="text-left p-4 text-sm font-semibold text-gray-600">TPROXY</th>
+                                <th class="text-right p-4 text-sm font-semibold text-gray-600">Actions</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="portLocationsTable">
+                            <tr>
+                                <td colspan="6" class="p-6 text-center text-gray-500">
+                                    Loading...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -174,9 +345,135 @@
         </div>
     </div>
 
+    <!-- Edit Local Port Location Modal -->
+    <div
+        id="editPortLocationModal"
+        class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+
+        <div class="bg-white rounded-xl shadow-xl p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">
+                Edit Local OpenVPN Port Location
+            </h2>
+
+            <form
+                id="editPortLocationForm"
+                class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                <input type="hidden" id="editPortLocationId">
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Display Name
+                    </label>
+                    <input
+                        id="editPortLocationName"
+                        class="w-full border rounded-lg px-3 py-2"
+                        required>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Flag / Emoji
+                    </label>
+                    <input
+                        id="editPortLocationFlag"
+                        class="w-full border rounded-lg px-3 py-2">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Location Code
+                    </label>
+                    <input
+                        id="editPortLocationCode"
+                        class="w-full border rounded-lg px-3 py-2">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Public Host
+                    </label>
+                    <input
+                        id="editPortLocationHost"
+                        class="w-full border rounded-lg px-3 py-2"
+                        required>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        OpenVPN UDP Port
+                    </label>
+                    <input
+                        id="editPortLocationPort"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        class="w-full border rounded-lg px-3 py-2"
+                        required>
+                </div>
+
+                <label class="flex items-center gap-2 text-sm mt-7">
+                    <input
+                        type="checkbox"
+                        id="editPortLocationEnabled">
+                    <span>Enabled</span>
+                </label>
+
+                <div class="md:col-span-2 border-t pt-4">
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        Automatically Allocated Runtime Values
+                    </h3>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Interface</label>
+                            <input id="editPortLocationInterface" readonly class="w-full bg-gray-100 border rounded-lg px-3 py-2 font-mono text-sm">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Subnet</label>
+                            <input id="editPortLocationSubnet" readonly class="w-full bg-gray-100 border rounded-lg px-3 py-2 font-mono text-sm">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Management Port</label>
+                            <input id="editPortLocationManagementPort" readonly class="w-full bg-gray-100 border rounded-lg px-3 py-2 font-mono text-sm">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">TPROXY Port</label>
+                            <input id="editPortLocationTProxyPort" readonly class="w-full bg-gray-100 border rounded-lg px-3 py-2 font-mono text-sm">
+                        </div>
+
+                        <div class="md:col-span-2">
+                            <label class="block text-xs text-gray-500 mb-1">Status File</label>
+                            <input id="editPortLocationStatusFile" readonly class="w-full bg-gray-100 border rounded-lg px-3 py-2 font-mono text-sm">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="md:col-span-2 flex gap-3 pt-2">
+                    <button
+                        type="button"
+                        onclick="hideEditPortLocationModal()"
+                        class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 rounded-lg font-semibold">
+                        Cancel
+                    </button>
+
+                    <button
+                        type="submit"
+                        class="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg font-semibold">
+                        Save and Apply
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
 <script>
 
 let currentNodes = [];
+let currentPortLocations = [];
 
 function openEditNode(id) {
     const node = currentNodes.find(n => n.id === id);
@@ -235,8 +532,7 @@ async function saveEditNode(e) {
 
         showMessage('Node updated successfully');
         hideEditNodeModal();
-        await document.getElementById('editNodeForm').addEventListener('submit', saveEditNode);
-loadNodes();
+        await loadNodes();
     } catch (err) {
         showMessage(err.message, 'error');
     }
@@ -278,15 +574,24 @@ async function apiRequest(path, options = {}) {
 
 function showMessage(text, type = 'success') {
     const box = document.getElementById('messageBox');
-    box.className = 'mb-4 p-4 rounded-lg ' + (
-        type === 'error'
-            ? 'bg-red-100 text-red-700'
-            : 'bg-green-100 text-green-700'
-    );
+
+    const styles = {
+        success: 'bg-green-100 text-green-700 border border-green-200',
+        error: 'bg-red-100 text-red-700 border border-red-200',
+        warning: 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+    };
+
+    box.className =
+        'mb-4 p-4 rounded-lg ' +
+        (styles[type] || styles.success);
+
     box.textContent = text;
     box.classList.remove('hidden');
 
-    setTimeout(() => box.classList.add('hidden'), 4000);
+    setTimeout(
+        () => box.classList.add('hidden'),
+        type === 'warning' ? 8000 : 4000
+    );
 }
 
 function esc(v) {
@@ -435,7 +740,599 @@ document.getElementById('nodeForm').addEventListener('submit', async (e) => {
     }
 });
 
-loadNodes();
+
+function portLocationById(id) {
+    return currentPortLocations.find(
+        item => String(item.id) === String(id)
+    );
+}
+
+function portLocationApplyMessage(result, actionText) {
+    const data = result?.data || {};
+
+    if (data.applied === false) {
+        const reason =
+            data.runtime_error ||
+            'Runtime apply failed';
+
+        showMessage(
+            actionText +
+                ' was saved, but OpenVPN runtime was not applied: ' +
+                reason,
+            'warning'
+        );
+
+        return false;
+    }
+
+    showMessage(actionText + ' completed successfully');
+    return true;
+}
+
+function runtimeBadge(location) {
+    const runtime = location?.runtime || {};
+
+    if (location?.enabled === false) {
+        return `
+            <span class="px-2 py-1 rounded text-xs font-semibold bg-gray-200 text-gray-700">
+                Disabled
+            </span>
+        `;
+    }
+
+    if (runtime.active === true) {
+        return `
+            <span class="px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-700">
+                Active
+            </span>
+        `;
+    }
+
+    const status =
+        String(runtime.status || 'unknown');
+
+    return `
+        <span class="px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700">
+            ${esc(status)}
+        </span>
+    `;
+}
+
+async function loadPortLocations() {
+    const tbody =
+        document.getElementById(
+            'portLocationsTable'
+        );
+
+    const summary =
+        document.getElementById(
+            'portLocationSummary'
+        );
+
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="6" class="p-6 text-center text-gray-500">
+                Loading...
+            </td>
+        </tr>
+    `;
+
+    try {
+        const result =
+            await apiRequest(
+                '/openvpn-port-locations'
+            );
+
+        const locations =
+            Array.isArray(result?.data)
+                ? result.data
+                : [];
+
+        currentPortLocations = locations;
+
+        const enabledCount =
+            locations.filter(
+                location =>
+                    location.enabled !== false
+            ).length;
+
+        const activeCount =
+            locations.filter(
+                location =>
+                    location?.runtime?.active === true
+            ).length;
+
+        summary.textContent =
+            `${locations.length} configured · ` +
+            `${enabledCount} enabled · ` +
+            `${activeCount} active`;
+
+        if (!locations.length) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" class="p-6 text-center text-gray-500">
+                        No local OpenVPN port locations configured.
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        tbody.innerHTML =
+            locations.map(location => {
+                const runtime =
+                    location.runtime || {};
+
+                const enabled =
+                    location.enabled !== false;
+
+                return `
+                    <tr class="border-t hover:bg-gray-50">
+                        <td class="p-4">
+                            <div class="font-semibold text-gray-800">
+                                <span class="text-lg mr-1">
+                                    ${esc(location.flag || '🌐')}
+                                </span>
+                                ${esc(location.name || location.id)}
+                            </div>
+
+                            <div class="font-mono text-xs text-gray-500 mt-1">
+                                ${esc(location.id)}
+                                ${location.location
+                                    ? ' · ' + esc(location.location)
+                                    : ''}
+                            </div>
+                        </td>
+
+                        <td class="p-4">
+                            <div class="font-semibold text-gray-800">
+                                ${esc(location.host)}:${esc(location.port)}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                UDP
+                            </div>
+                        </td>
+
+                        <td class="p-4">
+                            ${runtimeBadge(location)}
+
+                            <div class="text-xs text-gray-500 mt-2 font-mono">
+                                ${esc(runtime.service || (
+                                    'openvpn@server-' +
+                                    String(location.id || '')
+                                ))}
+                            </div>
+                        </td>
+
+                        <td class="p-4 text-sm">
+                            <div class="font-mono text-gray-800">
+                                ${esc(location.interface)}
+                            </div>
+
+                            <div class="font-mono text-xs text-gray-500 mt-1">
+                                ${esc(location.subnet)}
+                            </div>
+
+                            <div class="text-xs text-gray-500 mt-1">
+                                Management:
+                                <span class="font-mono">
+                                    ${esc(location.management_port)}
+                                </span>
+                            </div>
+                        </td>
+
+                        <td class="p-4 text-sm">
+                            <div class="font-mono font-semibold">
+                                ${esc(location.tproxy_port)}
+                            </div>
+
+                            <div class="text-xs text-gray-500 mt-1 max-w-[220px] break-all">
+                                ${esc(location.status_file)}
+                            </div>
+                        </td>
+
+                        <td class="p-4 text-right whitespace-nowrap">
+                            <button
+                                type="button"
+                                onclick="togglePortLocation('${esc(location.id)}')"
+                                class="${
+                                    enabled
+                                        ? 'bg-yellow-500 hover:bg-yellow-600'
+                                        : 'bg-green-600 hover:bg-green-700'
+                                } text-white px-3 py-1 rounded text-sm">
+                                ${enabled ? 'Disable' : 'Enable'}
+                            </button>
+
+                            <button
+                                type="button"
+                                onclick="openEditPortLocation('${esc(location.id)}')"
+                                class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm ml-2">
+                                Edit
+                            </button>
+
+                            <button
+                                type="button"
+                                onclick="deletePortLocation('${esc(location.id)}')"
+                                class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm ml-2">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+    } catch (err) {
+        summary.textContent =
+            'Failed to load';
+
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="p-6 text-center text-red-600">
+                    ${esc(err.message)}
+                </td>
+            </tr>
+        `;
+    }
+}
+
+function openEditPortLocation(id) {
+    const location =
+        portLocationById(id);
+
+    if (!location) {
+        showMessage(
+            'Port location not found: ' + id,
+            'error'
+        );
+        return;
+    }
+
+    document.getElementById(
+        'editPortLocationId'
+    ).value = location.id || '';
+
+    document.getElementById(
+        'editPortLocationName'
+    ).value = location.name || '';
+
+    document.getElementById(
+        'editPortLocationFlag'
+    ).value = location.flag || '';
+
+    document.getElementById(
+        'editPortLocationCode'
+    ).value = location.location || '';
+
+    document.getElementById(
+        'editPortLocationHost'
+    ).value = location.host || '';
+
+    document.getElementById(
+        'editPortLocationPort'
+    ).value = location.port || '';
+
+    document.getElementById(
+        'editPortLocationEnabled'
+    ).checked = location.enabled !== false;
+
+    document.getElementById(
+        'editPortLocationInterface'
+    ).value = location.interface || '';
+
+    document.getElementById(
+        'editPortLocationSubnet'
+    ).value = location.subnet || '';
+
+    document.getElementById(
+        'editPortLocationManagementPort'
+    ).value = location.management_port || '';
+
+    document.getElementById(
+        'editPortLocationTProxyPort'
+    ).value = location.tproxy_port || '';
+
+    document.getElementById(
+        'editPortLocationStatusFile'
+    ).value = location.status_file || '';
+
+    document.getElementById(
+        'editPortLocationModal'
+    ).classList.remove('hidden');
+}
+
+function hideEditPortLocationModal() {
+    document.getElementById(
+        'editPortLocationModal'
+    ).classList.add('hidden');
+}
+
+function portLocationPayload(
+    location,
+    enabled
+) {
+    return {
+        name: String(location.name || '').trim(),
+        flag: String(location.flag || '').trim(),
+        location: String(
+            location.location || ''
+        ).trim().toUpperCase(),
+        host: String(location.host || '').trim(),
+        port: Number(location.port || 0),
+        enabled: Boolean(enabled)
+    };
+}
+
+async function saveEditPortLocation(event) {
+    event.preventDefault();
+
+    const id =
+        document.getElementById(
+            'editPortLocationId'
+        ).value;
+
+    const payload = {
+        name: document.getElementById(
+            'editPortLocationName'
+        ).value.trim(),
+
+        flag: document.getElementById(
+            'editPortLocationFlag'
+        ).value.trim(),
+
+        location: document.getElementById(
+            'editPortLocationCode'
+        ).value.trim().toUpperCase(),
+
+        host: document.getElementById(
+            'editPortLocationHost'
+        ).value.trim(),
+
+        port: Number(
+            document.getElementById(
+                'editPortLocationPort'
+            ).value
+        ),
+
+        enabled: document.getElementById(
+            'editPortLocationEnabled'
+        ).checked
+    };
+
+    try {
+        const result =
+            await apiRequest(
+                '/openvpn-port-locations/' +
+                    encodeURIComponent(id),
+                {
+                    method: 'PUT',
+                    body: JSON.stringify(payload)
+                }
+            );
+
+        hideEditPortLocationModal();
+
+        portLocationApplyMessage(
+            result,
+            'Port location update'
+        );
+
+        await loadPortLocations();
+
+    } catch (err) {
+        showMessage(
+            err.message,
+            'error'
+        );
+    }
+}
+
+async function togglePortLocation(id) {
+    const location =
+        portLocationById(id);
+
+    if (!location) {
+        showMessage(
+            'Port location not found: ' + id,
+            'error'
+        );
+        return;
+    }
+
+    const nextEnabled =
+        location.enabled === false;
+
+    const action =
+        nextEnabled
+            ? 'Enable'
+            : 'Disable';
+
+    if (!confirm(
+        action +
+        ' local OpenVPN port location "' +
+        id +
+        '"?'
+    )) {
+        return;
+    }
+
+    try {
+        const result =
+            await apiRequest(
+                '/openvpn-port-locations/' +
+                    encodeURIComponent(id),
+                {
+                    method: 'PUT',
+                    body: JSON.stringify(
+                        portLocationPayload(
+                            location,
+                            nextEnabled
+                        )
+                    )
+                }
+            );
+
+        portLocationApplyMessage(
+            result,
+            action + ' port location'
+        );
+
+        await loadPortLocations();
+
+    } catch (err) {
+        showMessage(
+            err.message,
+            'error'
+        );
+    }
+}
+
+async function deletePortLocation(id) {
+    if (!confirm(
+        'Delete local OpenVPN port location "' +
+        id +
+        '"?\n\n' +
+        'Its generated OpenVPN service and runtime files ' +
+        'will be reconciled during Apply.'
+    )) {
+        return;
+    }
+
+    try {
+        const result =
+            await apiRequest(
+                '/openvpn-port-locations/' +
+                    encodeURIComponent(id),
+                {
+                    method: 'DELETE'
+                }
+            );
+
+        portLocationApplyMessage(
+            result,
+            'Port location deletion'
+        );
+
+        await loadPortLocations();
+
+    } catch (err) {
+        showMessage(
+            err.message,
+            'error'
+        );
+    }
+}
+
+async function applyAllPortLocations() {
+    try {
+        await apiRequest(
+            '/openvpn-port-locations/apply',
+            {
+                method: 'POST',
+                body: JSON.stringify({})
+            }
+        );
+
+        showMessage(
+            'All OpenVPN port locations applied successfully'
+        );
+
+        await loadPortLocations();
+
+    } catch (err) {
+        showMessage(
+            'Runtime apply failed: ' +
+                err.message,
+            'error'
+        );
+    }
+}
+
+async function createPortLocation(event) {
+    event.preventDefault();
+
+    const payload = {
+        id: document.getElementById(
+            'portLocationId'
+        ).value.trim(),
+
+        name: document.getElementById(
+            'portLocationName'
+        ).value.trim(),
+
+        location: document.getElementById(
+            'portLocationCode'
+        ).value.trim().toUpperCase(),
+
+        flag: document.getElementById(
+            'portLocationFlag'
+        ).value.trim(),
+
+        host: document.getElementById(
+            'portLocationHost'
+        ).value.trim(),
+
+        port: Number(
+            document.getElementById(
+                'portLocationPort'
+            ).value
+        ),
+
+        protocol: 'udp',
+        enabled: true
+    };
+
+    try {
+        const result =
+            await apiRequest(
+                '/openvpn-port-locations',
+                {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                }
+            );
+
+        portLocationApplyMessage(
+            result,
+            'Port location creation'
+        );
+
+        event.target.reset();
+
+        await loadPortLocations();
+
+    } catch (err) {
+        showMessage(
+            err.message,
+            'error'
+        );
+    }
+}
+
+document.getElementById(
+    'editNodeForm'
+).addEventListener(
+    'submit',
+    saveEditNode
+);
+
+document.getElementById(
+    'portLocationForm'
+).addEventListener(
+    'submit',
+    createPortLocation
+);
+
+document.getElementById(
+    'editPortLocationForm'
+).addEventListener(
+    'submit',
+    saveEditPortLocation
+);
+
+Promise.all([
+    loadNodes(),
+    loadPortLocations()
+]);
 </script>
     </div>
 

@@ -92,6 +92,15 @@ func validNodeACLClientName(
 func killLocalNodeClient(
 	name string,
 ) {
+	if err :=
+		killOpenVPNClientEverywhere(
+			name,
+		); err == nil {
+
+		return
+	}
+
+	// Legacy fallback.
 	cmd := exec.Command(
 		"nc",
 		"-w",

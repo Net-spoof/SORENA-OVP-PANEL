@@ -2367,6 +2367,73 @@ def normalize_restored_openvpn_runtime() -> None:
     )
 
 
+
+# IRANGATE_OPENVPN_PORT_LOCATION_RESTORE_STAGE6B
+def reconcile_restored_openvpn_port_locations() -> dict:
+    config = Path(
+        "/opt/irangate/routing/"
+        "openvpn-port-locations.json"
+    )
+
+    runtime = Path(
+        "/usr/local/sbin/"
+        "irangate-openvpn-port-locations"
+    )
+
+    if not config.is_file():
+        return {
+            "openvpn_port_locations_present": False,
+            "openvpn_port_locations_reconciled": False,
+        }
+
+    if not runtime.is_file():
+        log(
+            "warning: restored OpenVPN port-location "
+            "configuration exists but runtime is not installed"
+        )
+
+        return {
+            "openvpn_port_locations_present": True,
+            "openvpn_port_locations_reconciled": False,
+            "openvpn_port_locations_warning": (
+                "runtime-not-installed"
+            ),
+        }
+
+    runtime.chmod(0o755)
+
+    log(
+        "reconciling restored OpenVPN port locations"
+    )
+
+    result = subprocess.run(
+        [
+            str(runtime),
+            "apply",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+
+    output = result.stdout.strip()
+
+    if output:
+        log(output)
+
+    if result.returncode != 0:
+        fail(
+            "failed to reconcile restored OpenVPN "
+            "port locations"
+        )
+
+    return {
+        "openvpn_port_locations_present": True,
+        "openvpn_port_locations_reconciled": True,
+    }
+
+
 def post_restore_check() -> dict:
     db = db_settings()
 
@@ -2522,6 +2589,10 @@ def restore_from_archive_root(
         root
     )
 
+    port_location_result = (
+        reconcile_restored_openvpn_port_locations()
+    )
+
     connection_result = {
         "preserved_connection_nodes": [],
     }
@@ -2537,6 +2608,7 @@ def restore_from_archive_root(
 
     result = post_restore_check()
     result.update(connection_result)
+    result.update(port_location_result)
 
     return result
 

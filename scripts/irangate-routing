@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import ipaddress
 import base64
 import json
 import os
@@ -14,18 +15,48 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
 
-BASE_DIR = Path("/opt/irangate/routing")
+# IRANGATE_MULTI_PORT_ROUTING_STAGE5E
+RUNTIME_ROOT = Path(
+    os.environ.get(
+        "IRANGATE_ROUTING_ROOT",
+        "/",
+    )
+)
+
+
+def runtime_path(value: str) -> Path:
+    path = Path(value)
+
+    if str(RUNTIME_ROOT) in {"", "/", "."}:
+        return path
+
+    return RUNTIME_ROOT / str(path).lstrip("/")
+
+
+BASE_DIR = runtime_path("/opt/irangate/routing")
 OUTBOUNDS_FILE = BASE_DIR / "outbounds.json"
 RULES_FILE = BASE_DIR / "rules.json"
 BALANCERS_FILE = BASE_DIR / "balancers.json"
 STATE_FILE = BASE_DIR / "state.json"
 ENGINE_FILE = BASE_DIR / "engine.json"
-SING_BOX_DIR = Path("/etc/sing-box")
-SING_BOX_CONFIG = SING_BOX_DIR / "irangate-routing.json"
-ROUTING_SERVICE_FILE = Path("/etc/systemd/system/irangate-routing.service")
+PORT_LOCATIONS_FILE = (
+    BASE_DIR / "openvpn-port-locations.json"
+)
+
+SING_BOX_DIR = runtime_path("/etc/sing-box")
+SING_BOX_CONFIG = (
+    SING_BOX_DIR / "irangate-routing.json"
+)
+
+ROUTING_SERVICE_FILE = runtime_path(
+    "/etc/systemd/system/irangate-routing.service"
+)
+
 NFT_TABLE_NAME = "irangate_routing"
 
-OPENVPN_CONF = Path("/etc/openvpn/server.conf")
+OPENVPN_CONF = runtime_path(
+    "/etc/openvpn/server.conf"
+)
 
 
 def now_iso() -> str:
@@ -614,85 +645,233 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
     if not ENGINE_FILE.exists():
         init_engine_config()
 
-    engine = load_json(ENGINE_FILE, {"engine": "sing-box"})
+    engine = load_json(
+        ENGINE_FILE,
+        {"engine": "sing-box"},
+    )
+
     tproxy = engine.get("tproxy", {})
 
-    outbounds_data = load_json(OUTBOUNDS_FILE, {"outbounds": []})
-    balancers_data = load_json(BALANCERS_FILE, {"balancers": []})
-    rules_data = load_json(RULES_FILE, {"rules": []})
+    default_tcp_port = int(
+        tproxy.get("tcp_port", 12345)
+    )
+
+    default_udp_port = int(
+        tproxy.get("udp_port", default_tcp_port)
+    )
+
+    listen_address = tproxy.get(
+        "listen",
+        "127.0.0.1",
+    )
+
+    outbounds_data = load_json(
+        OUTBOUNDS_FILE,
+        {"outbounds": []},
+    )
+
+    balancers_data = load_json(
+        BALANCERS_FILE,
+        {"balancers": []},
+    )
+
+    rules_data = load_json(
+        RULES_FILE,
+        {"rules": []},
+    )
 
     warnings = []
     outbounds = []
     existing_tags = set()
 
-    for item in outbounds_data.get("outbounds", []):
-        outbound, warning = outbound_to_sing_box(item)
+    for item in outbounds_data.get(
+        "outbounds",
+        [],
+    ):
+        outbound, warning = (
+            outbound_to_sing_box(item)
+        )
+
         if warning:
             warnings.append(warning)
-        if outbound:
-            tag = outbound.get("tag")
-            if tag in existing_tags:
-                warnings.append(f"duplicate sing-box outbound tag skipped: {tag}")
-                continue
-            existing_tags.add(tag)
-            outbounds.append(outbound)
+
+        if not outbound:
+            continue
+
+        tag = outbound.get("tag")
+
+        if tag in existing_tags:
+            warnings.append(
+                "duplicate sing-box outbound "
+                f"tag skipped: {tag}"
+            )
+            continue
+
+        existing_tags.add(tag)
+        outbounds.append(outbound)
 
     if "direct" not in existing_tags:
-        outbounds.insert(0, {"type": "direct", "tag": "direct"})
+        outbounds.insert(
+            0,
+            {
+                "type": "direct",
+                "tag": "direct",
+            },
+        )
         existing_tags.add("direct")
 
     if "block" not in existing_tags:
-        outbounds.append({"type": "block", "tag": "block"})
+        outbounds.append({
+            "type": "block",
+            "tag": "block",
+        })
         existing_tags.add("block")
 
     balancer_map = {
         item.get("tag"): item
-        for item in balancers_data.get("balancers", [])
+        for item in balancers_data.get(
+            "balancers",
+            [],
+        )
     }
 
+    inbounds = []
+    inbound_tags_seen = set()
     route_rules = []
 
-    for rule in rules_data.get("rules", []):
+    def inbound_pair(
+        inbound_tag: str,
+        tcp_port: int,
+        udp_port: int,
+    ) -> list[str]:
+        safe_tag = slug(inbound_tag)
+
+        if inbound_tag == "openvpn-443":
+            tcp_tag = "irangate-tproxy"
+            udp_tag = "irangate-tproxy-udp"
+        else:
+            tcp_tag = (
+                f"irangate-tproxy-"
+                f"{safe_tag}-tcp"
+            )
+            udp_tag = (
+                f"irangate-tproxy-"
+                f"{safe_tag}-udp"
+            )
+
+        if tcp_tag not in inbound_tags_seen:
+            inbounds.append({
+                "type": "tproxy",
+                "tag": tcp_tag,
+                "listen": listen_address,
+                "listen_port": tcp_port,
+                "network": "tcp",
+            })
+            inbound_tags_seen.add(tcp_tag)
+
+        if udp_tag not in inbound_tags_seen:
+            inbounds.append({
+                "type": "tproxy",
+                "tag": udp_tag,
+                "listen": listen_address,
+                "listen_port": udp_port,
+                "network": "udp",
+            })
+            inbound_tags_seen.add(udp_tag)
+
+        return [tcp_tag, udp_tag]
+
+    for rule in rules_data.get(
+        "rules",
+        [],
+    ):
         if not rule.get("enabled", True):
             continue
 
-        inbound = rule.get("inbound", {})
-        balancer = balancer_map.get(rule.get("balancerTag"), {})
+        inbound = rule.get(
+            "inbound",
+            {},
+        )
+
+        balancer = balancer_map.get(
+            rule.get("balancerTag"),
+            {},
+        )
 
         selector = [
-            tag for tag in balancer.get("selector", [])
-            if tag in existing_tags and tag not in {"block"}
+            tag
+            for tag in balancer.get(
+                "selector",
+                [],
+            )
+            if (
+                tag in existing_tags
+                and tag != "block"
+            )
         ]
 
         if not selector:
             warnings.append(
-                f"{rule.get('tag')}: no supported outbound in selector; falling back to direct"
+                f"{rule.get('tag')}: "
+                "no supported outbound in selector; "
+                "falling back to direct"
             )
             selector = ["direct"]
 
-        raw_strategy = balancer.get("strategy") or rule.get("mode") or "leastPing"
-        strategy = normalize_balancer_strategy(raw_strategy)
-        route_mode = routing_mode_from_strategy(strategy)
+        raw_strategy = (
+            balancer.get("strategy")
+            or rule.get("mode")
+            or "leastPing"
+        )
 
-        inbound_tags = [
-            "irangate-tproxy",
-            "irangate-tproxy-udp",
-        ]
+        strategy = normalize_balancer_strategy(
+            raw_strategy
+        )
 
-        inbound_tag = rule.get("inboundTag") or "openvpn-443"
+        route_mode = routing_mode_from_strategy(
+            strategy
+        )
 
-        if route_mode == "single" or len(selector) == 1:
+        inbound_tag = (
+            rule.get("inboundTag")
+            or "openvpn-443"
+        )
+
+        rule_tproxy_port = int(
+            inbound.get(
+                "tproxy_port",
+                default_tcp_port,
+            )
+        )
+
+        inbound_tags = inbound_pair(
+            inbound_tag,
+            rule_tproxy_port,
+            rule_tproxy_port,
+        )
+
+        if (
+            route_mode == "single"
+            or len(selector) == 1
+        ):
             final_tag = selector[0]
 
         elif strategy == "leastPing":
-            urltest_tag = f"urltest-{inbound_tag}"
-            selector_tag = f"select-{inbound_tag}"
+            urltest_tag = (
+                f"urltest-{inbound_tag}"
+            )
+            selector_tag = (
+                f"select-{inbound_tag}"
+            )
 
             outbounds.append({
                 "type": "urltest",
                 "tag": urltest_tag,
                 "outbounds": selector,
-                "url": "https://www.gstatic.com/generate_204",
+                "url": (
+                    "https://www.gstatic.com/"
+                    "generate_204"
+                ),
                 "interval": "1m",
                 "tolerance": 50,
                 "interrupt_exist_connections": False,
@@ -701,7 +880,10 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
             outbounds.append({
                 "type": "selector",
                 "tag": selector_tag,
-                "outbounds": [urltest_tag] + selector,
+                "outbounds": (
+                    [urltest_tag]
+                    + selector
+                ),
                 "default": urltest_tag,
                 "interrupt_exist_connections": False,
             })
@@ -709,7 +891,9 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
             final_tag = selector_tag
 
         elif strategy == "selector":
-            selector_tag = f"select-{inbound_tag}"
+            selector_tag = (
+                f"select-{inbound_tag}"
+            )
 
             outbounds.append({
                 "type": "selector",
@@ -722,26 +906,57 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
             final_tag = selector_tag
 
         elif strategy == "failover":
-            # Current sing-box engine has no exact Xray-like backup balancer here.
-            # Keep priority behavior: first selected outbound is active.
-            warnings.append(
-                f"{rule.get('tag')}: failover strategy uses first outbound as active in sing-box mode"
-            )
-            final_tag = selector[0]
-
-        elif strategy in {"random", "roundRobin", "leastLoad"}:
-            warnings.append(
-                f"{rule.get('tag')}: strategy {strategy} needs Xray engine; using leastPing/urltest fallback"
+            failover_tag = (
+                f"failover-{inbound_tag}"
             )
 
-            urltest_tag = f"urltest-{inbound_tag}"
-            selector_tag = f"select-{inbound_tag}"
+            outbounds.append({
+                "type": "urltest",
+                "tag": failover_tag,
+                "outbounds": selector,
+                "url": (
+                    "https://www.gstatic.com/"
+                    "generate_204"
+                ),
+                "interval": "30s",
+                "tolerance": 100,
+                "interrupt_exist_connections": True,
+            })
+
+            warnings.append(
+                f"{rule.get('tag')}: "
+                "sing-box failover uses health-based "
+                "URLTest switching"
+            )
+
+            final_tag = failover_tag
+
+        elif strategy in {
+            "random",
+            "roundRobin",
+            "leastLoad",
+        }:
+            warnings.append(
+                f"{rule.get('tag')}: "
+                f"strategy {strategy} uses "
+                "leastPing/urltest fallback"
+            )
+
+            urltest_tag = (
+                f"urltest-{inbound_tag}"
+            )
+            selector_tag = (
+                f"select-{inbound_tag}"
+            )
 
             outbounds.append({
                 "type": "urltest",
                 "tag": urltest_tag,
                 "outbounds": selector,
-                "url": "https://www.gstatic.com/generate_204",
+                "url": (
+                    "https://www.gstatic.com/"
+                    "generate_204"
+                ),
                 "interval": "1m",
                 "tolerance": 50,
                 "interrupt_exist_connections": False,
@@ -750,7 +965,10 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
             outbounds.append({
                 "type": "selector",
                 "tag": selector_tag,
-                "outbounds": [urltest_tag] + selector,
+                "outbounds": (
+                    [urltest_tag]
+                    + selector
+                ),
                 "default": urltest_tag,
                 "interrupt_exist_connections": False,
             })
@@ -759,7 +977,9 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
 
         else:
             warnings.append(
-                f"{rule.get('tag')}: unknown strategy {strategy}; using first outbound"
+                f"{rule.get('tag')}: "
+                f"unknown strategy {strategy}; "
+                "using first outbound"
             )
             final_tag = selector[0]
 
@@ -768,27 +988,24 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
             "outbound": final_tag,
         })
 
+    if not inbounds:
+        default_tags = inbound_pair(
+            "openvpn-443",
+            default_tcp_port,
+            default_udp_port,
+        )
+
+        route_rules.append({
+            "inbound": default_tags,
+            "outbound": "direct",
+        })
+
     config = {
         "log": {
             "level": "warn",
             "timestamp": True,
         },
-        "inbounds": [
-            {
-                "type": "tproxy",
-                "tag": "irangate-tproxy",
-                "listen": tproxy.get("listen", "127.0.0.1"),
-                "listen_port": int(tproxy.get("tcp_port", 12345)),
-                "network": "tcp",
-            },
-            {
-                "type": "tproxy",
-                "tag": "irangate-tproxy-udp",
-                "listen": tproxy.get("listen", "127.0.0.1"),
-                "listen_port": int(tproxy.get("udp_port", 12345)),
-                "network": "udp",
-            },
-        ],
+        "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {
             "auto_detect_interface": True,
@@ -798,8 +1015,6 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
     }
 
     return config, warnings
-
-
 
 def redact_secrets(value):
     secret_keys = {
@@ -959,45 +1174,192 @@ def add_outbound(args) -> None:
 
 
 def bind_rule(args) -> None:
-    raw_mode = getattr(args, "mode", "leastPing")
-    strategy = normalize_balancer_strategy(raw_mode)
-    route_mode = routing_mode_from_strategy(strategy)
+    raw_mode = getattr(
+        args,
+        "mode",
+        "leastPing",
+    )
+
+    strategy = normalize_balancer_strategy(
+        raw_mode
+    )
+
+    route_mode = routing_mode_from_strategy(
+        strategy
+    )
 
     init_if_missing()
 
     port = int(args.port)
-    inbound_tag = f"openvpn-{port}"
-    balancer_tag = f"bal-{inbound_tag}"
 
-    wanted = [slug(x) for x in args.outbounds.split(",") if x.strip()]
+    if port < 1 or port > 65535:
+        raise SystemExit(
+            "Port must be between 1 and 65535"
+        )
+
+    if port in {500, 4500}:
+        raise SystemExit(
+            "UDP 500/4500 are reserved for IKEv2"
+        )
+
+    location_id = slug(
+        getattr(
+            args,
+            "location_id",
+            "",
+        )
+        or "primary"
+    )
+
+    interface = str(
+        getattr(
+            args,
+            "interface",
+            "",
+        )
+        or "tun0"
+    ).strip()
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.:-]+",
+        interface,
+    ):
+        raise SystemExit(
+            "Invalid interface"
+        )
+
+    subnet = str(
+        getattr(
+            args,
+            "subnet",
+            "",
+        )
+        or "10.8.0.0/24"
+    ).strip()
+
+    try:
+        network = ipaddress.ip_network(
+            subnet,
+            strict=True,
+        )
+    except ValueError as error:
+        raise SystemExit(
+            f"Invalid subnet: {error}"
+        )
+
+    if (
+        not isinstance(
+            network,
+            ipaddress.IPv4Network,
+        )
+        or network.prefixlen != 24
+    ):
+        raise SystemExit(
+            "OpenVPN subnet must be IPv4 /24"
+        )
+
+    subnet = str(network)
+
+    tproxy_port = int(
+        getattr(
+            args,
+            "tproxy_port",
+            0,
+        )
+        or 12345
+    )
+
+    if (
+        tproxy_port < 1024
+        or tproxy_port > 65535
+    ):
+        raise SystemExit(
+            "Invalid TPROXY port"
+        )
+
+    if location_id == "primary":
+        inbound_tag = f"openvpn-{port}"
+    else:
+        inbound_tag = (
+            "openvpn-location-"
+            + location_id
+        )
+
+    balancer_tag = (
+        f"bal-{inbound_tag}"
+    )
+
+    wanted = [
+        slug(value)
+        for value in args.outbounds.split(",")
+        if value.strip()
+    ]
 
     if not wanted:
-        raise SystemExit("At least one outbound is required")
+        raise SystemExit(
+            "At least one outbound is required"
+        )
 
-    outbounds = load_json(OUTBOUNDS_FILE, {"outbounds": []})
-    existing = {o.get("tag") for o in outbounds.get("outbounds", [])}
+    outbounds = load_json(
+        OUTBOUNDS_FILE,
+        {"outbounds": []},
+    )
 
-    missing = [x for x in wanted if x not in existing]
+    existing = {
+        item.get("tag")
+        for item in outbounds.get(
+            "outbounds",
+            [],
+        )
+    }
+
+    missing = [
+        tag
+        for tag in wanted
+        if tag not in existing
+    ]
 
     if missing:
-        raise SystemExit(f"Missing outbound(s): {', '.join(missing)}")
+        raise SystemExit(
+            "Missing outbound(s): "
+            + ", ".join(missing)
+        )
 
-    balancers = load_json(BALANCERS_FILE, {"version": 1, "balancers": []})
+    balancers = load_json(
+        BALANCERS_FILE,
+        {
+            "version": 1,
+            "balancers": [],
+        },
+    )
+
+    balancers.setdefault(
+        "balancers",
+        [],
+    )
+
     found = False
 
     for item in balancers["balancers"]:
-        if item.get("tag") == balancer_tag:
-            item["selector"] = wanted
-            item["active"] = wanted[0]
-            item["strategy"] = strategy
-            item["enabled"] = True
-            item["updated_at"] = now_iso()
-            found = True
+        if item.get("tag") != balancer_tag:
+            continue
+
+        item["name"] = (
+            f"Route selector for {inbound_tag}"
+        )
+        item["selector"] = wanted
+        item["active"] = wanted[0]
+        item["strategy"] = strategy
+        item["enabled"] = True
+        item["updated_at"] = now_iso()
+        found = True
 
     if not found:
         balancers["balancers"].append({
             "tag": balancer_tag,
-            "name": f"Failover for {inbound_tag}",
+            "name": (
+                f"Route selector for {inbound_tag}"
+            ),
             "strategy": strategy,
             "selector": wanted,
             "active": wanted[0],
@@ -1008,58 +1370,116 @@ def bind_rule(args) -> None:
             "created_at": now_iso(),
         })
 
-    save_json(BALANCERS_FILE, balancers)
+    save_json(
+        BALANCERS_FILE,
+        balancers,
+    )
 
-    rules = load_json(RULES_FILE, {"version": 1, "rules": []})
-    rule_tag = f"route-{inbound_tag}"
+    rules = load_json(
+        RULES_FILE,
+        {
+            "version": 1,
+            "rules": [],
+        },
+    )
+
+    rules.setdefault(
+        "rules",
+        [],
+    )
+
+    rule_tag = (
+        f"route-{inbound_tag}"
+    )
+
+    inbound_data = {
+        "type": "openvpn",
+        "port": port,
+        "protocol": "udp",
+        "location_id": location_id,
+        "interface": interface,
+        "subnet": subnet,
+        "tproxy_port": tproxy_port,
+    }
 
     found = False
 
     for item in rules["rules"]:
-        if item.get("tag") == rule_tag:
-            item["mode"] = route_mode
-            item["balancerTag"] = balancer_tag
-            item["enabled"] = True
-            item["updated_at"] = now_iso()
-            found = True
+        if item.get("tag") != rule_tag:
+            continue
+
+        item["name"] = (
+            f"Route {inbound_tag}"
+        )
+        item["inboundTag"] = inbound_tag
+        item["inbound"] = inbound_data
+        item["network"] = "tcp,udp"
+        item["mode"] = route_mode
+        item["balancerTag"] = balancer_tag
+        item["enabled"] = True
+        item["updated_at"] = now_iso()
+        found = True
 
     if not found:
         rules["rules"].append({
             "tag": rule_tag,
-            "name": f"Route {inbound_tag}",
+            "name": (
+                f"Route {inbound_tag}"
+            ),
             "enabled": True,
             "inboundTag": inbound_tag,
-            "inbound": {
-                "type": "openvpn",
-                "port": port,
-                "protocol": "udp",
-                "interface": "tun0",
-                "subnet": "10.8.0.0/24",
-            },
+            "inbound": inbound_data,
             "network": "tcp,udp",
             "mode": route_mode,
             "balancerTag": balancer_tag,
+            "created_at": now_iso(),
         })
 
-    save_json(RULES_FILE, rules)
+    save_json(
+        RULES_FILE,
+        rules,
+    )
 
-    state = load_json(STATE_FILE, {"version": 1, "runtime": {}})
-    state.setdefault("runtime", {})
+    state = load_json(
+        STATE_FILE,
+        {
+            "version": 1,
+            "runtime": {},
+        },
+    )
+
+    state.setdefault(
+        "runtime",
+        {},
+    )
+
     state["runtime"][rule_tag] = {
         "active_outbound": wanted[0],
         "last_change": now_iso(),
         "applied": False,
-        "note": "Milestone 1 dry-run only",
+        "location_id": location_id,
+        "port": port,
+        "interface": interface,
+        "subnet": subnet,
+        "tproxy_port": tproxy_port,
     }
-    save_json(STATE_FILE, state)
+
+    save_json(
+        STATE_FILE,
+        state,
+    )
 
     print("Routing rule updated ✅")
-    print(f"Inbound:   {inbound_tag}")
-    print(f"Mode:      {route_mode}")
-    print(f"Strategy:  {strategy}")
-    print(f"Outbounds: {', '.join(wanted)}")
-    print("Apply:     dry-run only")
-
+    print(f"Inbound:    {inbound_tag}")
+    print(f"Location:   {location_id}")
+    print(f"Port:       UDP {port}")
+    print(f"Interface:  {interface}")
+    print(f"Subnet:     {subnet}")
+    print(f"TPROXY:     127.0.0.1:{tproxy_port}")
+    print(f"Mode:       {route_mode}")
+    print(f"Strategy:   {strategy}")
+    print(f"Outbounds:  {', '.join(wanted)}")
+    print("Apply:      dry-run only")
 
 def dry_run_apply() -> None:
     init_if_missing()
@@ -1289,56 +1709,169 @@ def show_files() -> None:
 def build_nft_plan() -> tuple[list[str], list[str]]:
     init_if_missing()
 
-    engine = load_json(ENGINE_FILE, None)
+    engine = load_json(
+        ENGINE_FILE,
+        None,
+    )
+
     if engine is None:
         init_engine_config()
-        engine = load_json(ENGINE_FILE, {})
+        engine = load_json(
+            ENGINE_FILE,
+            {},
+        )
 
-    rules_data = load_json(RULES_FILE, {"rules": []})
-    tproxy = engine.get("tproxy", {})
+    rules_data = load_json(
+        RULES_FILE,
+        {"rules": []},
+    )
 
-    listen_port = int(tproxy.get("tcp_port", 12345))
-    mark = int(tproxy.get("mark", 100))
-    table_id = int(tproxy.get("table", 100))
+    tproxy = engine.get(
+        "tproxy",
+        {},
+    )
+
+    default_listen_port = int(
+        tproxy.get(
+            "tcp_port",
+            12345,
+        )
+    )
+
+    mark = int(
+        tproxy.get(
+            "mark",
+            100,
+        )
+    )
+
+    table_id = int(
+        tproxy.get(
+            "table",
+            100,
+        )
+    )
 
     nft_lines = [
         f"add table inet {NFT_TABLE_NAME}",
-        f"add chain inet {NFT_TABLE_NAME} prerouting {{ type filter hook prerouting priority mangle; policy accept; }}",
-        f"add chain inet {NFT_TABLE_NAME} output {{ type route hook output priority mangle; policy accept; }}",
-        f"add set inet {NFT_TABLE_NAME} local_ipv4 {{ type ipv4_addr; flags interval; }}",
-        f"add element inet {NFT_TABLE_NAME} local_ipv4 {{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }}",
-        f"add rule inet {NFT_TABLE_NAME} prerouting ip daddr @local_ipv4 return",
-        f"add rule inet {NFT_TABLE_NAME} prerouting meta mark {mark} return",
+        (
+            f"add chain inet {NFT_TABLE_NAME} "
+            "prerouting { type filter hook prerouting "
+            "priority mangle; policy accept; }"
+        ),
+        (
+            f"add chain inet {NFT_TABLE_NAME} "
+            "output { type route hook output "
+            "priority mangle; policy accept; }"
+        ),
+        (
+            f"add set inet {NFT_TABLE_NAME} "
+            "local_ipv4 { type ipv4_addr; "
+            "flags interval; }"
+        ),
+        (
+            f"add element inet {NFT_TABLE_NAME} "
+            "local_ipv4 { "
+            "0.0.0.0/8, "
+            "10.0.0.0/8, "
+            "100.64.0.0/10, "
+            "127.0.0.0/8, "
+            "169.254.0.0/16, "
+            "172.16.0.0/12, "
+            "192.168.0.0/16, "
+            "224.0.0.0/4, "
+            "240.0.0.0/4 }"
+        ),
+        (
+            f"add rule inet {NFT_TABLE_NAME} "
+            "prerouting ip daddr "
+            "@local_ipv4 return"
+        ),
+        (
+            f"add rule inet {NFT_TABLE_NAME} "
+            f"prerouting meta mark {mark} return"
+        ),
     ]
 
-    warnings = []
+    route_rules = rules_data.get(
+        "rules",
+        [],
+    )
 
-    for rule in rules_data.get("rules", []):
+    for rule in route_rules:
         if not rule.get("enabled", True):
             continue
 
-        inbound = rule.get("inbound", {})
-        interface = inbound.get("interface") or "tun0"
-        subnet = inbound.get("subnet") or "10.8.0.0/24"
-        network = str(rule.get("network") or "tcp,udp").lower()
+        inbound = rule.get(
+            "inbound",
+            {},
+        )
+
+        interface = (
+            inbound.get("interface")
+            or "tun0"
+        )
+
+        subnet = (
+            inbound.get("subnet")
+            or "10.8.0.0/24"
+        )
+
+        listen_port = int(
+            inbound.get(
+                "tproxy_port",
+                default_listen_port,
+            )
+        )
+
+        network = str(
+            rule.get("network")
+            or "tcp,udp"
+        ).lower()
+
+        location_id = (
+            inbound.get("location_id")
+            or "primary"
+        )
 
         if "tcp" in network:
             nft_lines.append(
-                f"add rule inet {NFT_TABLE_NAME} prerouting iifname {interface} ip saddr {subnet} meta l4proto tcp tproxy ip to 127.0.0.1:{listen_port} meta mark set {mark} accept"
+                f"add rule inet {NFT_TABLE_NAME} "
+                "prerouting "
+                f"iifname {interface} "
+                f"ip saddr {subnet} "
+                "meta l4proto tcp "
+                f"tproxy ip to 127.0.0.1:{listen_port} "
+                f"meta mark set {mark} "
+                "counter accept "
+                f'comment "irangate-{location_id}-tcp"'
             )
 
         if "udp" in network:
             nft_lines.append(
-                f"add rule inet {NFT_TABLE_NAME} prerouting iifname {interface} ip saddr {subnet} meta l4proto udp tproxy ip to 127.0.0.1:{listen_port} meta mark set {mark} accept"
+                f"add rule inet {NFT_TABLE_NAME} "
+                "prerouting "
+                f"iifname {interface} "
+                f"ip saddr {subnet} "
+                "meta l4proto udp "
+                f"tproxy ip to 127.0.0.1:{listen_port} "
+                f"meta mark set {mark} "
+                "counter accept "
+                f'comment "irangate-{location_id}-udp"'
             )
 
     route_lines = [
-        f"ip rule add fwmark {mark} table {table_id}",
-        f"ip route add local default dev lo table {table_id}",
+        (
+            f"ip rule add fwmark {mark} "
+            f"table {table_id}"
+        ),
+        (
+            "ip route add local default "
+            f"dev lo table {table_id}"
+        ),
     ]
 
     return nft_lines, route_lines
-
 
 def build_nft_reset_plan() -> list[str]:
     engine = load_json(ENGINE_FILE, {})
@@ -1669,39 +2202,98 @@ _original_build_nft_plan_shared_vpn = build_nft_plan
 
 
 def build_nft_plan():
-    import re as _re
-
-    nft_lines, route_lines = _original_build_nft_plan_shared_vpn()
+    nft_lines, route_lines = (
+        _original_build_nft_plan_shared_vpn()
+    )
 
     table_name = globals().get(
         "NFT_TABLE_NAME",
         "irangate_routing",
     )
 
-    tproxy_port = 12345
-    mark = 100
+    engine = load_json(
+        ENGINE_FILE,
+        {},
+    )
 
-    for line in nft_lines:
-        port_match = _re.search(
-            r"tproxy ip to 127\.0\.0\.1:(\d+)",
-            line,
-        )
-        if port_match:
-            tproxy_port = int(port_match.group(1))
+    tproxy = engine.get(
+        "tproxy",
+        {},
+    )
 
-        mark_match = _re.search(
-            r"meta mark set (0x[0-9a-fA-F]+|\d+)",
-            line,
+    primary_tproxy_port = int(
+        tproxy.get(
+            "tcp_port",
+            12345,
         )
-        if mark_match:
-            mark = int(mark_match.group(1), 0)
+    )
+
+    mark = int(
+        tproxy.get(
+            "mark",
+            100,
+        )
+    )
+
+    rules_data = load_json(
+        RULES_FILE,
+        {"rules": []},
+    )
+
+    for rule in rules_data.get(
+        "rules",
+        [],
+    ):
+        if not rule.get("enabled", True):
+            continue
+
+        inbound = rule.get(
+            "inbound",
+            {},
+        )
+
+        location_id = str(
+            inbound.get(
+                "location_id",
+                "",
+            )
+        ).strip().lower()
+
+        interface = str(
+            inbound.get(
+                "interface",
+                "",
+            )
+        ).strip()
+
+        subnet = str(
+            inbound.get(
+                "subnet",
+                "",
+            )
+        ).strip()
+
+        if (
+            location_id == "primary"
+            or interface == "tun0"
+            or subnet == "10.8.0.0/24"
+        ):
+            primary_tproxy_port = int(
+                inbound.get(
+                    "tproxy_port",
+                    primary_tproxy_port,
+                )
+            )
+            break
 
     insertion_index = len(nft_lines)
 
     for index, line in enumerate(nft_lines):
         if (
-            f"add rule inet {table_name} prerouting" in line
-            and "ip daddr @local_ipv4 return" in line
+            f"add rule inet {table_name} prerouting"
+            in line
+            and "ip daddr @local_ipv4 return"
+            in line
         ):
             insertion_index = index
             break
@@ -1729,31 +2321,34 @@ def build_nft_plan():
         ),
     ]
 
-    nft_lines[insertion_index:insertion_index] = control_plane_rules
+    nft_lines[
+        insertion_index:
+        insertion_index
+    ] = control_plane_rules
 
     nft_lines.extend([
         (
             f"add rule inet {table_name} prerouting "
             "ip saddr 10.10.0.0/24 "
             "meta l4proto tcp "
-            f"tproxy ip to 127.0.0.1:{tproxy_port} "
+            f"tproxy ip to 127.0.0.1:"
+            f"{primary_tproxy_port} "
             f"meta mark set {mark} "
-            'counter accept '
+            "counter accept "
             'comment "irangate-ikev2-client-tproxy-tcp"'
         ),
         (
             f"add rule inet {table_name} prerouting "
             "ip saddr 10.10.0.0/24 "
             "meta l4proto udp "
-            f"tproxy ip to 127.0.0.1:{tproxy_port} "
+            f"tproxy ip to 127.0.0.1:"
+            f"{primary_tproxy_port} "
             f"meta mark set {mark} "
-            'counter accept '
+            "counter accept "
             'comment "irangate-ikev2-client-tproxy-udp"'
         ),
     ])
 
-    # Multiple UI service-port rules previously generated duplicate TPROXY
-    # commands. Preserve the first occurrence only.
     deduplicated = []
     seen = set()
 
@@ -1766,7 +2361,6 @@ def build_nft_plan():
 
     return deduplicated, route_lines
 
-
 _original_generate_engine_config_shared_vpn = generate_engine_config
 
 
@@ -1774,26 +2368,39 @@ def generate_engine_config(args):
     import json as _json
     import re as _re
 
-    result = _original_generate_engine_config_shared_vpn(args)
+    result = (
+        _original_generate_engine_config_shared_vpn(
+            args
+        )
+    )
 
     if not SING_BOX_CONFIG.exists():
         return result
 
     config = _json.loads(
-        SING_BOX_CONFIG.read_text(encoding="utf-8")
+        SING_BOX_CONFIG.read_text(
+            encoding="utf-8"
+        )
     )
 
-    generated_outbounds = config.get("outbounds", [])
+    generated_outbounds = config.get(
+        "outbounds",
+        [],
+    )
 
-    # Ports 500 and 4500 are strongSwan handshake ports, not separate
-    # user-traffic outbound routes.
     filtered_outbounds = []
 
     for outbound in generated_outbounds:
-        tag = str(outbound.get("tag", ""))
+        tag = str(
+            outbound.get(
+                "tag",
+                "",
+            )
+        )
 
         if _re.fullmatch(
-            r"(?:urltest|select)-openvpn-(?:500|4500)",
+            r"(?:urltest|select|failover)-"
+            r"openvpn-(?:500|4500)",
             tag,
         ):
             continue
@@ -1802,22 +2409,58 @@ def generate_engine_config(args):
 
     config["outbounds"] = filtered_outbounds
 
-    route = config.setdefault("route", {})
-    rules = route.get("rules", [])
+    available_tags = {
+        str(item.get("tag", ""))
+        for item in filtered_outbounds
+    }
 
-    # All captured VPN client traffic uses one shared primary selector.
-    # The existing routing model orders the primary OpenVPN rule first.
-    if rules:
-        primary = dict(rules[0])
-        available_tags = {
-            str(item.get("tag", ""))
-            for item in filtered_outbounds
-        }
+    route = config.setdefault(
+        "route",
+        {},
+    )
 
-        if primary.get("outbound") not in available_tags:
-            primary["outbound"] = "direct"
+    preserved_rules = []
 
-        route["rules"] = [primary]
+    for rule in route.get(
+        "rules",
+        [],
+    ):
+        inbound_tags = rule.get(
+            "inbound",
+            [],
+        )
+
+        if isinstance(
+            inbound_tags,
+            str,
+        ):
+            inbound_tags = [inbound_tags]
+
+        if any(
+            _re.search(
+                r"openvpn-(?:500|4500)",
+                str(tag),
+            )
+            for tag in inbound_tags
+        ):
+            continue
+
+        current = dict(rule)
+
+        if (
+            current.get("outbound")
+            not in available_tags
+        ):
+            current["outbound"] = "direct"
+
+        preserved_rules.append(current)
+
+    route["rules"] = preserved_rules
+
+    SING_BOX_CONFIG.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     SING_BOX_CONFIG.write_text(
         _json.dumps(
@@ -1829,11 +2472,11 @@ def generate_engine_config(args):
     )
 
     print(
-        "Shared OpenVPN + IKEv2 outbound routing normalized ✅"
+        "Multi-port OpenVPN + IKEv2 "
+        "routing preserved ✅"
     )
 
     return result
-
 
 _original_apply_routing_shared_vpn = apply_routing
 
@@ -1906,6 +2549,10 @@ def main() -> None:
 
     p = sub.add_parser("bind")
     p.add_argument("--port", required=True)
+    p.add_argument("--location-id", default="primary")
+    p.add_argument("--interface", default="tun0")
+    p.add_argument("--subnet", default="10.8.0.0/24")
+    p.add_argument("--tproxy-port", type=int, default=12345)
     p.add_argument("--mode", choices=["single", "failover", "leastPing", "least_ping", "urltest", "random", "roundRobin", "round_robin", "leastLoad", "least_load", "selector"], default="leastPing")
     p.add_argument("--outbounds", required=True)
 

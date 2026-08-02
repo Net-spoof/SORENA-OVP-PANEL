@@ -560,17 +560,176 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 	clientsCache.mutex.Unlock()
 	sendSuccess(w, "Clients retrieved successfully", clients)
 }
+
+// IRANGATE_CLIENT_METADATA_ATOMIC_STAGE7C
+func persistCreatedClientMetadata(
+	clientPath string,
+	expirationDays int,
+	trafficLimitBytes int64,
+	connectionLimit int,
+	email string,
+	nodeIDs []string,
+	portLocationIDs []string,
+) error {
+	data, err := os.ReadFile(clientPath)
+	if err != nil {
+		return fmt.Errorf(
+			"read created client metadata: %w",
+			err,
+		)
+	}
+
+	var clientData map[string]interface{}
+
+	if err := json.Unmarshal(
+		data,
+		&clientData,
+	); err != nil {
+		return fmt.Errorf(
+			"parse created client metadata: %w",
+			err,
+		)
+	}
+
+	if clientData == nil {
+		clientData = make(map[string]interface{})
+	}
+
+	if expirationDays > 0 {
+		clientData["expires_at"] =
+			time.Now().
+				UTC().
+				AddDate(0, 0, expirationDays).
+				Format(time.RFC3339)
+	}
+
+	if trafficLimitBytes > 0 {
+		clientData["traffic_limit_bytes"] =
+			trafficLimitBytes
+	}
+
+	clientData["connection_limit"] =
+		connectionLimit
+
+	if strings.TrimSpace(email) != "" {
+		clientData["email"] =
+			strings.TrimSpace(email)
+	}
+
+	selectedNodes := []string{
+		"local",
+	}
+
+	seenNodes := map[string]bool{
+		"local": true,
+	}
+
+	for _, rawNodeID := range nodeIDs {
+		nodeID := normalizeNodeID(rawNodeID)
+
+		if nodeID == "" || seenNodes[nodeID] {
+			continue
+		}
+
+		seenNodes[nodeID] = true
+
+		selectedNodes = append(
+			selectedNodes,
+			nodeID,
+		)
+	}
+
+	clientData["nodes"] = selectedNodes
+
+	clientData["openvpn_port_locations"] =
+		append(
+			[]string(nil),
+			portLocationIDs...,
+		)
+
+	payload, err := json.MarshalIndent(
+		clientData,
+		"",
+		"  ",
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"encode created client metadata: %w",
+			err,
+		)
+	}
+
+	tempPath :=
+		clientPath +
+			fmt.Sprintf(
+				".tmp-%d",
+				time.Now().UnixNano(),
+			)
+
+	if err := os.WriteFile(
+		tempPath,
+		payload,
+		0644,
+	); err != nil {
+		return fmt.Errorf(
+			"write temporary client metadata: %w",
+			err,
+		)
+	}
+
+	if err := os.Chmod(
+		tempPath,
+		0644,
+	); err != nil {
+		_ = os.Remove(tempPath)
+
+		return fmt.Errorf(
+			"chmod temporary client metadata: %w",
+			err,
+		)
+	}
+
+	if err := os.Rename(
+		tempPath,
+		clientPath,
+	); err != nil {
+		_ = os.Remove(tempPath)
+
+		return fmt.Errorf(
+			"commit created client metadata: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
 func createClientHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name              string   `json:"name"`
-		Email             string   `json:"email,omitempty"`
-		ExpirationDays    int      `json:"expiration_days,omitempty"`
-		TrafficLimitBytes int64    `json:"traffic_limit_bytes,omitempty"`
-		ConnectionLimit   int      `json:"connection_limit,omitempty"`
-		Nodes             []string `json:"nodes,omitempty"`
+		Name                 string   `json:"name"`
+		Email                string   `json:"email,omitempty"`
+		ExpirationDays       int      `json:"expiration_days,omitempty"`
+		TrafficLimitBytes    int64    `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit      int      `json:"connection_limit,omitempty"`
+		Nodes                []string `json:"nodes,omitempty"`
+		OpenVPNPortLocations []string `json:"openvpn_port_locations,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	selectedPortLocationIDs, err :=
+		validateOpenVPNPortLocationSelection(
+			req.OpenVPNPortLocations,
+		)
+
+	if err != nil {
+		sendError(
+			w,
+			err.Error(),
+			http.StatusBadRequest,
+		)
 		return
 	}
 
@@ -594,42 +753,49 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		dataDir = "/opt/irangate"
 	}
 
-	clientPath := filepath.Join(dataDir, "database", "clients", req.Name+".json")
+	clientPath := filepath.Join(
+		dataDir,
+		"database",
+		"clients",
+		req.Name+".json",
+	)
 
-	if req.ExpirationDays > 0 || req.TrafficLimitBytes > 0 || req.ConnectionLimit > 0 || req.Email != "" {
-		data, err := os.ReadFile(clientPath)
-		if err == nil {
-			var clientData map[string]interface{}
-			if err := json.Unmarshal(data, &clientData); err == nil {
-				if req.ExpirationDays > 0 {
-					expiresAt := time.Now().AddDate(0, 0, req.ExpirationDays)
-					clientData["expires_at"] = expiresAt.Format(time.RFC3339)
-				}
+	if err := persistCreatedClientMetadata(
+		clientPath,
+		req.ExpirationDays,
+		req.TrafficLimitBytes,
+		req.ConnectionLimit,
+		req.Email,
+		req.Nodes,
+		selectedPortLocationIDs,
+	); err != nil {
 
-				if req.TrafficLimitBytes > 0 {
-					clientData["traffic_limit_bytes"] = req.TrafficLimitBytes
-				}
+		rollbackOutput, rollbackErr :=
+			exec.Command(
+				"irangate",
+				"client",
+				"remove",
+				req.Name,
+			).CombinedOutput()
 
-				clientData["connection_limit"] = req.ConnectionLimit
-				if req.Email != "" {
-					clientData["email"] = req.Email
-				}
+		log.Printf(
+			"created client metadata failed for %s: %v; rollback=%v output=%s",
+			req.Name,
+			err,
+			rollbackErr,
+			strings.TrimSpace(
+				string(rollbackOutput),
+			),
+		)
 
-				selectedNodes := []string{"local"}
-				for _, nodeID := range req.Nodes {
-					nodeID = normalizeNodeID(nodeID)
-					if nodeID != "" && nodeID != "local" {
-						selectedNodes = append(selectedNodes, nodeID)
-					}
-				}
-				clientData["nodes"] = selectedNodes
+		sendError(
+			w,
+			"Failed to save client metadata: "+
+				err.Error(),
+			http.StatusInternalServerError,
+		)
 
-				newData, err := json.MarshalIndent(clientData, "", "  ")
-				if err == nil {
-					os.WriteFile(clientPath, newData, 0644)
-				}
-			}
-		}
+		return
 	}
 
 	ikev2Cfg, ikev2Err := ensureIKEv2Account(req.Name, true)
@@ -671,9 +837,10 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 	clientsCache.mutex.Unlock()
 
 	sendSuccess(w, "Client created successfully", map[string]interface{}{
-		"name":  req.Name,
-		"nodes": nodeResults,
-		"ikev2": ikev2Result,
+		"name":                   req.Name,
+		"nodes":                  nodeResults,
+		"openvpn_port_locations": selectedPortLocationIDs,
+		"ikev2":                  ikev2Result,
 	})
 }
 func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
@@ -690,6 +857,18 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("IKEv2 delete failed for %s: %v output=%s", name, err, string(output))
 	}
 
+	if err :=
+		killOpenVPNClientEverywhere(
+			name,
+		); err != nil {
+
+		log.Printf(
+			"deleted client local session cleanup failed for %s: %v",
+			name,
+			err,
+		)
+	}
+
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
@@ -697,60 +876,203 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 	sendSuccess(w, "Client removed and certificate revoked", map[string]string{"name": name})
 }
 
-func resetClientTrafficDisplay(clientName string) {
-	now := time.Now().UTC().Format(time.RFC3339)
+// IRANGATE_TRAFFIC_RESET_ATOMIC_STAGE7C
+func resetClientTrafficDisplay(
+	clientName string,
+) error {
+	now := time.Now().
+		UTC().
+		Format(time.RFC3339)
 
-	patchListFile := func(path string, patch func(map[string]interface{})) {
+	patchListFile := func(
+		path string,
+		createClient bool,
+		patch func(map[string]interface{}),
+	) error {
+		records :=
+			make(
+				[]map[string]interface{},
+				0,
+			)
+
 		data, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
 
-		var records []map[string]interface{}
-		if err := json.Unmarshal(data, &records); err != nil {
-			return
+		if err == nil {
+			if strings.TrimSpace(
+				string(data),
+			) != "" {
+
+				if err := json.Unmarshal(
+					data,
+					&records,
+				); err != nil {
+					return fmt.Errorf(
+						"parse %s: %w",
+						path,
+						err,
+					)
+				}
+			}
+
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf(
+				"read %s: %w",
+				path,
+				err,
+			)
 		}
 
 		changed := false
-		for _, rec := range records {
-			if rec["client_name"] == clientName {
-				patch(rec)
-				changed = true
+
+		for _, record := range records {
+			name :=
+				strings.TrimSpace(
+					fmt.Sprintf(
+						"%v",
+						record["client_name"],
+					),
+				)
+
+			if !strings.EqualFold(
+				name,
+				clientName,
+			) {
+				continue
 			}
+
+			patch(record)
+			changed = true
+		}
+
+		if !changed && createClient {
+			record :=
+				map[string]interface{}{
+					"client_name": clientName,
+				}
+
+			patch(record)
+
+			records = append(
+				records,
+				record,
+			)
+
+			changed = true
 		}
 
 		if !changed {
-			return
+			return nil
 		}
 
-		out, err := json.MarshalIndent(records, "", "  ")
+		payload, err := json.MarshalIndent(
+			records,
+			"",
+			"  ",
+		)
 		if err != nil {
-			return
+			return fmt.Errorf(
+				"encode %s: %w",
+				path,
+				err,
+			)
 		}
 
-		_ = os.WriteFile(path, out, 0644)
+		if err := os.MkdirAll(
+			filepath.Dir(path),
+			0755,
+		); err != nil {
+			return fmt.Errorf(
+				"create traffic directory: %w",
+				err,
+			)
+		}
+
+		tempPath :=
+			path +
+				fmt.Sprintf(
+					".tmp-%d",
+					time.Now().UnixNano(),
+				)
+
+		if err := os.WriteFile(
+			tempPath,
+			payload,
+			0644,
+		); err != nil {
+			return fmt.Errorf(
+				"write temporary %s: %w",
+				path,
+				err,
+			)
+		}
+
+		if err := os.Rename(
+			tempPath,
+			path,
+		); err != nil {
+			_ = os.Remove(tempPath)
+
+			return fmt.Errorf(
+				"commit %s: %w",
+				path,
+				err,
+			)
+		}
+
+		return nil
 	}
 
-	currentPath := filepath.Join(DataBaseDir, "traffic", "current_stats.json")
-	patchListFile(currentPath, func(rec map[string]interface{}) {
-		rec["current_received"] = 0
-		rec["current_sent"] = 0
-		rec["current_total"] = 0
-		rec["daily_usage"] = 0
-		rec["monthly_usage"] = 0
-		rec["quota_used_percent"] = 0
-		rec["connected"] = false
-		rec["last_seen"] = now
-	})
+	currentPath := filepath.Join(
+		DataBaseDir,
+		"traffic",
+		"current_stats.json",
+	)
 
-	cumulativePath := filepath.Join(DataBaseDir, "traffic", "cumulative_totals.json")
-	patchListFile(cumulativePath, func(rec map[string]interface{}) {
-		rec["total_received"] = 0
-		rec["total_sent"] = 0
-		rec["last_session_received"] = 0
-		rec["last_session_sent"] = 0
-		rec["last_update"] = now
-	})
+	if err := patchListFile(
+		currentPath,
+		false,
+		func(record map[string]interface{}) {
+			record["current_received"] = 0
+			record["current_sent"] = 0
+			record["current_total"] = 0
+			record["daily_usage"] = 0
+			record["monthly_usage"] = 0
+			record["quota_used_percent"] = 0
+			record["connected"] = false
+			record["last_seen"] = now
+		},
+	); err != nil {
+		log.Printf(
+			"current traffic display reset warning for %s: %v",
+			clientName,
+			err,
+		)
+	}
+
+	cumulativePath := filepath.Join(
+		DataBaseDir,
+		"traffic",
+		"cumulative_totals.json",
+	)
+
+	if err := patchListFile(
+		cumulativePath,
+		true,
+		func(record map[string]interface{}) {
+			record["total_received"] = 0
+			record["total_sent"] = 0
+			record["last_session_received"] = 0
+			record["last_session_sent"] = 0
+			record["last_update"] = now
+		},
+	); err != nil {
+		return fmt.Errorf(
+			"reset cumulative OpenVPN traffic: %w",
+			err,
+		)
+	}
+
+	return nil
 }
 
 func enforceClientAfterEdit(name string, resetTraffic bool) {
@@ -837,12 +1159,13 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type UpdateClientRequest struct {
-		ExpirationDays    *int      `json:"expiration_days,omitempty"`
-		TrafficLimitBytes *int64    `json:"traffic_limit_bytes,omitempty"`
-		ConnectionLimit   *int      `json:"connection_limit,omitempty"`
-		Active            *bool     `json:"active,omitempty"`
-		ResetTraffic      bool      `json:"reset_traffic,omitempty"`
-		Nodes             *[]string `json:"nodes,omitempty"`
+		ExpirationDays       *int      `json:"expiration_days,omitempty"`
+		TrafficLimitBytes    *int64    `json:"traffic_limit_bytes,omitempty"`
+		ConnectionLimit      *int      `json:"connection_limit,omitempty"`
+		Active               *bool     `json:"active,omitempty"`
+		ResetTraffic         bool      `json:"reset_traffic,omitempty"`
+		Nodes                *[]string `json:"nodes,omitempty"`
+		OpenVPNPortLocations *[]string `json:"openvpn_port_locations,omitempty"`
 	}
 
 	var req UpdateClientRequest
@@ -868,6 +1191,27 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		nodeIDsFromClientData(
 			clientData,
 		)
+
+	var selectedPortLocationIDs []string
+
+	if req.OpenVPNPortLocations != nil {
+		selectedPortLocationIDs, err =
+			validateOpenVPNPortLocationSelection(
+				*req.OpenVPNPortLocations,
+			)
+
+		if err != nil {
+			sendError(
+				w,
+				err.Error(),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		clientData["openvpn_port_locations"] =
+			selectedPortLocationIDs
+	}
 
 	if req.ExpirationDays != nil {
 		if *req.ExpirationDays <= 0 || *req.ExpirationDays > 3650 {
@@ -974,7 +1318,17 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		clientData["active"] = false
 		clientData["status"] = "inactive"
 		delete(clientData, "traffic_exceeded_at")
-		resetClientTrafficDisplay(name)
+		if err := resetClientTrafficDisplay(
+			name,
+		); err != nil {
+			sendError(
+				w,
+				"Failed to reset traffic state: "+
+					err.Error(),
+				http.StatusInternalServerError,
+			)
+			return
+		}
 	}
 
 	if req.Active != nil {
@@ -1041,6 +1395,21 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.OpenVPNPortLocations != nil {
+		if err :=
+			killOpenVPNClientEverywhere(
+				name,
+			); err != nil {
+
+			log.Printf(
+				"port-location session refresh failed for %s: %v",
+				name,
+				err,
+			)
+		}
+	}
+
+	// IRANGATE_PORT_LOCATION_CLIENT_RUNTIME_STAGE5C
 	clientsCache.mutex.Lock()
 	clientsCache.data = nil
 	clientsCache.timestamp = time.Time{}
@@ -3497,28 +3866,36 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	subPortLocations :=
+		subscriptionOpenVPNPortLocationDownloads(
+			clientData,
+			token,
+			downloadCacheVersion,
+		)
+
 	pageData := map[string]interface{}{
-		"ClientName":         clientName,
-		"UserCount":          connectionLimit,
-		"Status":             statusText,
-		"OnlineStatus":       onlineText,
-		"IsOnline":           isOnline,
-		"ShowLastConnection": !isOnline,
-		"LastConnection":     lastConnectionText,
-		"Limit":              limitText,
-		"Used":               subFormatBytes(used),
-		"Left":               leftText,
-		"DaysLeft":           daysLeft,
-		"ProgressPercent":    fmt.Sprintf("%.2f", progressPercent),
-		"ProgressText":       progressText,
-		"DownloadURL":        downloadURL,
-		"MasterName":         masterName,
-		"MasterFlag":         masterFlag,
-		"MasterAllowed":      masterAllowed,
-		"NodeDownloads":      subNodes,
-		"SubscriptionURL":    subURL,
-		"IKEv2":              ikev2Cfg,
-		"IKEv2DownloadURL":   ikev2DownloadURL,
+		"ClientName":            clientName,
+		"UserCount":             connectionLimit,
+		"Status":                statusText,
+		"OnlineStatus":          onlineText,
+		"IsOnline":              isOnline,
+		"ShowLastConnection":    !isOnline,
+		"LastConnection":        lastConnectionText,
+		"Limit":                 limitText,
+		"Used":                  subFormatBytes(used),
+		"Left":                  leftText,
+		"DaysLeft":              daysLeft,
+		"ProgressPercent":       fmt.Sprintf("%.2f", progressPercent),
+		"ProgressText":          progressText,
+		"DownloadURL":           downloadURL,
+		"MasterName":            masterName,
+		"MasterFlag":            masterFlag,
+		"MasterAllowed":         masterAllowed,
+		"NodeDownloads":         subNodes,
+		"PortLocationDownloads": subPortLocations,
+		"SubscriptionURL":       subURL,
+		"IKEv2":                 ikev2Cfg,
+		"IKEv2DownloadURL":      ikev2DownloadURL,
 	}
 
 	tpl := template.Must(template.New("sub").Parse(`<!doctype html>
@@ -3709,6 +4086,9 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
         {{end}}
         {{range .NodeDownloads}}
         <a class="btn btn-ghost fresh-download" href="{{.URL}}">دانلود {{.Flag}} {{.Name}}</a>
+        {{end}}
+        {{range .PortLocationDownloads}}
+        <a class="btn btn-ghost fresh-download" href="{{.URL}}">دانلود {{.Flag}} {{.Name}} — UDP {{.Port}}</a>
         {{end}}
       </div>
     </div>
@@ -4024,6 +4404,7 @@ func main() {
 	r.HandleFunc("/sub/{token}/ikev2.txt", subscriptionIKEv2DownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/node/{node}/download", subscriptionNodeDownloadHandler).Methods("GET")
+	r.HandleFunc("/sub/{token}/port/{location}/download", subscriptionPortLocationDownloadHandler).Methods("GET")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
 	r.HandleFunc("/api/health", healthHandler).Methods("GET")
 	api := r.PathPrefix("/api").Subrouter()
@@ -4055,6 +4436,11 @@ func main() {
 	api.HandleFunc("/nodes/{id}", updateNodeHandler).Methods("PUT")
 	api.HandleFunc("/nodes/{id}", deleteNodeHandler).Methods("DELETE")
 	api.HandleFunc("/nodes/{id}/ping", pingNodeHandler).Methods("GET")
+	api.HandleFunc("/openvpn-port-locations", getOpenVPNPortLocationsHandler).Methods("GET")
+	api.HandleFunc("/openvpn-port-locations", createOpenVPNPortLocationHandler).Methods("POST")
+	api.HandleFunc("/openvpn-port-locations/{id}", updateOpenVPNPortLocationHandler).Methods("PUT")
+	api.HandleFunc("/openvpn-port-locations/{id}", deleteOpenVPNPortLocationHandler).Methods("DELETE")
+	api.HandleFunc("/openvpn-port-locations/apply", applyOpenVPNPortLocationsHandler).Methods("POST")
 	api.HandleFunc("/routing/status", getRoutingStatusHandler).Methods("GET")
 	api.HandleFunc("/routing/outbounds", getRoutingOutboundsHandler).Methods("GET")
 	api.HandleFunc("/routing/outbounds", createRoutingOutboundHandler).Methods("POST")

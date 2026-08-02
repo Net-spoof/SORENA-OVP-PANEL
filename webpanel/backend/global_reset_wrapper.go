@@ -38,11 +38,41 @@ func updateClientWithGlobalResetHandler(w http.ResponseWriter, r *http.Request) 
 		code = http.StatusOK
 	}
 
-	if resetRequested && code >= 200 && code < 300 && clientName != "" {
-		if err := resetClientPersistentUsage(clientName); err != nil {
-			log.Printf("global reset failed for %s: %v", clientName, err)
+	// IRANGATE_GLOBAL_RESET_ERROR_STAGE7C
+	if resetRequested &&
+		code >= 200 &&
+		code < 300 &&
+		clientName != "" {
+
+		if err :=
+			resetClientPersistentUsage(
+				clientName,
+			); err != nil {
+
+			log.Printf(
+				"global reset failed for %s: %v",
+				clientName,
+				err,
+			)
+
+			errorRecorder :=
+				httptest.NewRecorder()
+
+			sendError(
+				errorRecorder,
+				"Traffic reset failed: "+
+					err.Error(),
+				http.StatusInternalServerError,
+			)
+
+			rec = errorRecorder
+			code = rec.Code
+
 		} else {
-			log.Printf("global reset done for %s", clientName)
+			log.Printf(
+				"global reset done for %s",
+				clientName,
+			)
 		}
 	}
 
@@ -362,13 +392,34 @@ func unblockLocalClient(name string) {
 }
 
 func killLocalOpenVPNClient(name string) {
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:7505", 2*time.Second)
+	if err :=
+		killOpenVPNClientEverywhere(
+			name,
+		); err == nil {
+
+		return
+	}
+
+	// Fallback for installations that only have
+	// the original management endpoint.
+	conn, err := net.DialTimeout(
+		"tcp",
+		"127.0.0.1:7505",
+		2*time.Second,
+	)
 	if err != nil {
 		return
 	}
+
 	defer conn.Close()
 
-	_, _ = conn.Write([]byte("kill " + name + "\nquit\n"))
+	_, _ = conn.Write(
+		[]byte(
+			"kill " +
+				name +
+				"\nquit\n",
+		),
+	)
 }
 
 type resetNode struct {

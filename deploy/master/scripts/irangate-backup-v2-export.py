@@ -257,6 +257,8 @@ def copy_traffic_state(stage: Path) -> bool:
         "global_usage_totals.json": "{}",
         "usage_state.json": "{}",
         "sessions_state.json": "{}",
+        # IRANGATE_OPENVPN_PORT_LOCATION_BACKUP_STAGE6B
+        "openvpn_multiport_state.json": "{}",
         "ikev2_current_stats.json": "[]",
         "ikev2_last_seen.json": "{}",
     }
@@ -358,8 +360,10 @@ def copy_runtime_extras(stage: Path) -> int:
         "/opt/irangate/routing",
         "/etc/sing-box/irangate-routing.json",
         "/usr/local/bin/irangate-routing",
+        "/usr/local/sbin/irangate-openvpn-port-locations",
         "/etc/systemd/system/irangate-routing.service",
         "/etc/systemd/system/irangate-routing-rules.service",
+        "/etc/systemd/system/irangate-openvpn-port-locations.service",
         "/opt/irangate/panel-proxy.env",
         "/etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
     )
@@ -388,6 +392,7 @@ def copy_runtime_extras(stage: Path) -> int:
         + "\n"
         + "contains=ikev2\n"
         + "contains=outbound-routing\n"
+        + "contains=openvpn-port-locations\n"
         + "contains=panel-proxy\n"
         + "integrity=sha256\n",
         encoding="utf-8",

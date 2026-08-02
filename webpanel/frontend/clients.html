@@ -1357,7 +1357,8 @@
                         connection_limit: connectionLimit,
                         active: document.getElementById('editActive').checked,
                         reset_traffic: resetTraffic,
-                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local'])
+                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local']),
+                        openvpn_port_locations: getSelectedEditClientPortLocations()
                     })
                 });
 
@@ -1451,7 +1452,8 @@
                         expiration_days: expirationDays,
                         traffic_limit_bytes: trafficLimitBytes,
                         connection_limit: connectionLimit,
-                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local'])
+                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local']),
+                        openvpn_port_locations: getSelectedClientPortLocations()
                     })
                 });
                 
@@ -2063,6 +2065,459 @@
     </div>
 
 
+
+
+<script id="IRANGATE_OPENVPN_PORT_LOCATIONS_STAGE3">
+(function () {
+    function authHeaders() {
+        return {
+            'Authorization':
+                'Bearer ' +
+                (localStorage.getItem('token') || '')
+        };
+    }
+
+    async function fetchLocationData(endpoint) {
+        const response = await fetch(endpoint, {
+            headers: authHeaders(),
+            cache: 'no-store'
+        });
+
+        const result = await response.json();
+
+        if (
+            !response.ok ||
+            !result ||
+            result.success !== true
+        ) {
+            throw new Error(
+                result?.message ||
+                `HTTP ${response.status}`
+            );
+        }
+
+        return Array.isArray(result.data)
+            ? result.data
+            : [];
+    }
+
+    function escapeLocationHTML(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    window.getSelectedClientPortLocations =
+        function () {
+            return Array.from(
+                document.querySelectorAll(
+                    '.client-port-location-checkbox:checked'
+                )
+            ).map(
+                checkbox => checkbox.value
+            ).filter(Boolean);
+        };
+
+    window.getSelectedEditClientPortLocations =
+        function () {
+            return Array.from(
+                document.querySelectorAll(
+                    '.edit-client-port-location-checkbox:checked'
+                )
+            ).map(
+                checkbox => checkbox.value
+            ).filter(Boolean);
+        };
+
+    window.getClientSelectedPortLocations =
+        function (client) {
+            if (
+                client &&
+                Array.isArray(
+                    client.openvpn_port_locations
+                )
+            ) {
+                return client.openvpn_port_locations;
+            }
+
+            return [];
+        };
+
+    window.loadClientNodeOptions =
+        async function () {
+            const box =
+                document.getElementById(
+                    'remoteNodesList'
+                );
+
+            if (!box) return;
+
+            box.innerHTML =
+                '<div class="text-xs text-gray-500">Loading locations...</div>';
+
+            try {
+                const [nodes, portLocations] =
+                    await Promise.all([
+                        fetchLocationData('/api/nodes'),
+                        fetchLocationData(
+                            '/api/openvpn-port-locations'
+                        )
+                    ]);
+
+                const remoteNodes =
+                    nodes.filter(
+                        node =>
+                            node &&
+                            !node.is_local &&
+                            node.enabled
+                    );
+
+                const enabledPorts =
+                    portLocations.filter(
+                        location =>
+                            location &&
+                            location.enabled
+                    );
+
+                const sections = [];
+
+                if (remoteNodes.length) {
+                    sections.push(`
+                        <div class="pt-1 text-xs font-bold text-cyan-700">
+                            Remote Nodes
+                        </div>
+
+                        ${remoteNodes.map(node => `
+                            <label class="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    class="client-node-checkbox"
+                                    value="${escapeLocationHTML(node.id)}"
+                                >
+
+                                <span class="font-semibold text-gray-800">
+                                    ${escapeLocationHTML(node.flag || '🌐')}
+                                    ${escapeLocationHTML(node.name || node.id)}
+                                </span>
+
+                                <span class="text-xs text-gray-500">
+                                    (${escapeLocationHTML(node.location || node.id)})
+                                </span>
+                            </label>
+                        `).join('')}
+                    `);
+                }
+
+                if (enabledPorts.length) {
+                    sections.push(`
+                        <div class="pt-3 mt-2 border-t text-xs font-bold text-purple-700">
+                            OpenVPN Port Locations
+                        </div>
+
+                        ${enabledPorts.map(location => `
+                            <label class="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    class="client-port-location-checkbox"
+                                    value="${escapeLocationHTML(location.id)}"
+                                >
+
+                                <span class="font-semibold text-gray-800">
+                                    ${escapeLocationHTML(location.flag || '🌐')}
+                                    ${escapeLocationHTML(location.name || location.id)}
+                                </span>
+
+                                <span class="text-xs text-gray-500">
+                                    (UDP ${escapeLocationHTML(location.port)})
+                                </span>
+                            </label>
+                        `).join('')}
+                    `);
+                }
+
+                box.innerHTML =
+                    sections.length
+                        ? sections.join('')
+                        : '<div class="text-xs text-gray-500">No remote nodes or OpenVPN port locations enabled</div>';
+
+            } catch (error) {
+                console.error(
+                    'Failed to load client locations:',
+                    error
+                );
+
+                box.innerHTML =
+                    '<div class="text-xs text-red-600">Failed to load locations</div>';
+            }
+        };
+
+    window.loadEditClientNodeOptions =
+        async function (client) {
+            const box =
+                document.getElementById(
+                    'editClientNodesBox'
+                );
+
+            if (!box) return;
+
+            box.innerHTML =
+                '<div class="text-xs text-gray-500">Loading locations...</div>';
+
+            try {
+                const [nodes, portLocations] =
+                    await Promise.all([
+                        fetchLocationData('/api/nodes'),
+                        fetchLocationData(
+                            '/api/openvpn-port-locations'
+                        )
+                    ]);
+
+                const selectedNodes =
+                    new Set(
+                        Array.isArray(client?.nodes)
+                            ? client.nodes
+                            : ['local']
+                    );
+
+                const selectedPorts =
+                    new Set(
+                        window.getClientSelectedPortLocations(
+                            client
+                        )
+                    );
+
+                const enabledNodes =
+                    nodes.filter(
+                        node =>
+                            node &&
+                            node.enabled
+                    );
+
+                const enabledPorts =
+                    portLocations.filter(
+                        location =>
+                            location &&
+                            location.enabled
+                    );
+
+                const items = [];
+
+                enabledNodes.forEach(node => {
+                    const isLocal =
+                        node.is_local ||
+                        node.agent_url === 'local' ||
+                        node.id === 'local';
+
+                    items.push(`
+                        <label class="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                class="edit-client-node-checkbox"
+                                value="${escapeLocationHTML(node.id)}"
+                                ${selectedNodes.has(node.id) ? 'checked' : ''}
+                                ${isLocal ? 'disabled' : ''}
+                            >
+
+                            <span>
+                                ${escapeLocationHTML(node.flag || '🌐')}
+                                ${escapeLocationHTML(node.name || node.id)}
+
+                                <span class="text-xs text-gray-500">
+                                    ${isLocal
+                                        ? '(Local)'
+                                        : `(${escapeLocationHTML(node.location || node.id)})`
+                                    }
+                                </span>
+                            </span>
+                        </label>
+                    `);
+                });
+
+                if (
+                    !enabledNodes.some(
+                        node =>
+                            node.is_local ||
+                            node.agent_url === 'local' ||
+                            node.id === 'local'
+                    )
+                ) {
+                    items.unshift(`
+                        <label class="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                class="edit-client-node-checkbox"
+                                value="local"
+                                checked
+                                disabled
+                            >
+
+                            <span>
+                                🇩🇪 Germany Master
+                                <span class="text-xs text-gray-500">
+                                    (Local)
+                                </span>
+                            </span>
+                        </label>
+                    `);
+                }
+
+                if (enabledPorts.length) {
+                    items.push(`
+                        <div class="pt-3 mt-2 border-t text-xs font-bold text-purple-700">
+                            OpenVPN Port Locations
+                        </div>
+                    `);
+
+                    enabledPorts.forEach(location => {
+                        items.push(`
+                            <label class="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    class="edit-client-port-location-checkbox"
+                                    value="${escapeLocationHTML(location.id)}"
+                                    ${selectedPorts.has(location.id) ? 'checked' : ''}
+                                >
+
+                                <span>
+                                    ${escapeLocationHTML(location.flag || '🌐')}
+                                    ${escapeLocationHTML(location.name || location.id)}
+
+                                    <span class="text-xs text-gray-500">
+                                        (UDP ${escapeLocationHTML(location.port)})
+                                    </span>
+                                </span>
+                            </label>
+                        `);
+                    });
+                }
+
+                box.innerHTML =
+                    items.join('');
+
+            } catch (error) {
+                console.error(
+                    'Failed to load edit client locations:',
+                    error
+                );
+
+                box.innerHTML =
+                    '<div class="text-xs text-red-600">Failed to load locations</div>';
+            }
+        };
+
+    window.downloadClientConfigs =
+        async function (name) {
+            const client =
+                allClients.find(
+                    item => item.name === name
+                );
+
+            const nodes =
+                getClientSelectedNodes(client);
+
+            const portLocations =
+                window.getClientSelectedPortLocations(
+                    client
+                );
+
+            try {
+                await api.exportClient(name);
+
+                const remoteNodes =
+                    nodes.filter(
+                        id =>
+                            id &&
+                            id !== 'local'
+                    );
+
+                if (
+                    !remoteNodes.length &&
+                    !portLocations.length
+                ) {
+                    showToast(
+                        `Downloading master config for "${name}"...`,
+                        'success'
+                    );
+
+                    return;
+                }
+
+                const token =
+                    await ensureSubscriptionForDownload(
+                        name
+                    );
+
+                if (!token) {
+                    showToast(
+                        'Subscription token not ready for location downloads',
+                        'error'
+                    );
+
+                    return;
+                }
+
+                const downloads = [];
+
+                remoteNodes.forEach(nodeID => {
+                    downloads.push(
+                        `/sub/${encodeURIComponent(token)}/node/${encodeURIComponent(nodeID)}/download`
+                    );
+                });
+
+                portLocations.forEach(locationID => {
+                    downloads.push(
+                        `/sub/${encodeURIComponent(token)}/port/${encodeURIComponent(locationID)}/download`
+                    );
+                });
+
+                downloads.forEach(
+                    (downloadURL, index) => {
+                        setTimeout(
+                            () => {
+                                const anchor =
+                                    document.createElement(
+                                        'a'
+                                    );
+
+                                anchor.href =
+                                    downloadURL;
+
+                                anchor.download = '';
+
+                                document.body.appendChild(
+                                    anchor
+                                );
+
+                                anchor.click();
+                                anchor.remove();
+                            },
+                            500 + index * 500
+                        );
+                    }
+                );
+
+                showToast(
+                    `Downloading ${downloads.length + 1} config file(s) for "${name}"`,
+                    'success'
+                );
+
+            } catch (error) {
+                console.error(
+                    'Failed to download configs:',
+                    error
+                );
+
+                showToast(
+                    'Failed to download client config(s)',
+                    'error'
+                );
+            }
+        };
+})();
+</script>
 
 </body>
 </html>

@@ -107,6 +107,16 @@ install_binaries() {
     fail "offline-assets/irangate-webpanel not found; rebuild offline bundle"
   fi
 
+  # IRANGATE_OPENVPN_PORT_LOCATION_RUNTIME_STAGE5C
+  if [[ -f "$INSTALL_DIR/scripts/irangate-openvpn-port-locations" ]]; then
+    install -m 0755 "$INSTALL_DIR/scripts/irangate-openvpn-port-locations" /usr/local/sbin/irangate-openvpn-port-locations
+
+    if [[ -f "/etc/openvpn/server.conf" ]]; then
+      /usr/local/sbin/irangate-openvpn-port-locations apply \
+        || warn "OpenVPN port-location runtime apply had warnings"
+    fi
+  fi
+
   if [[ -f "$INSTALL_DIR/scripts/ovp-panel" ]]; then
     install -m 0755 "$INSTALL_DIR/scripts/ovp-panel" /usr/local/bin/ovp-panel
   fi

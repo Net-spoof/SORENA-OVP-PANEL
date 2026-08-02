@@ -208,8 +208,10 @@ restore_item /etc/systemd/system/irangate-ikev2-stats.timer
 restore_item /opt/irangate/routing
 restore_item /etc/sing-box/irangate-routing.json
 restore_item /usr/local/bin/irangate-routing
+restore_item /usr/local/sbin/irangate-openvpn-port-locations
 restore_item /etc/systemd/system/irangate-routing.service
 restore_item /etc/systemd/system/irangate-routing-rules.service
+restore_item /etc/systemd/system/irangate-openvpn-port-locations.service
 
 # Proxy
 restore_item /opt/irangate/panel-proxy.env
@@ -220,6 +222,7 @@ chmod 0755 \
     /usr/local/sbin/irangate-ikev2-stats-snapshot \
     /usr/local/sbin/irangate-ikev2-firewall.sh \
     /usr/local/bin/irangate-routing \
+    /usr/local/sbin/irangate-openvpn-port-locations \
     2>/dev/null || true
 
 chmod 0600 \
@@ -233,6 +236,19 @@ find /etc/swanctl/private \
 
 systemctl daemon-reload || true
 sysctl --system >/dev/null 2>&1 || true
+
+# IRANGATE_OPENVPN_PORT_LOCATION_WRAPPER_STAGE6B
+if [[ -x /usr/local/sbin/irangate-openvpn-port-locations &&
+      -f /opt/irangate/routing/openvpn-port-locations.json ]]
+then
+    echo         "[backup-extras] reconciling OpenVPN port locations"         >&2
+
+    if ! /usr/local/sbin/irangate-openvpn-port-locations apply         >&2
+    then
+        echo             "[backup-extras] OpenVPN port-location reconcile failed ❌"             >&2
+        exit 1
+    fi
+fi
 
 if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
     systemctl enable --now strongswan \

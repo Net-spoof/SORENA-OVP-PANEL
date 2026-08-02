@@ -29,7 +29,7 @@
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Outbounds</h1>
-                <p class="text-gray-500 mt-1">Route OpenVPN and IKEv2 client traffic through one shared outbound strategy.</p>
+                <p class="text-gray-500 mt-1">Route primary OpenVPN/IKEv2 traffic and each OpenVPN port location through independent outbound strategies.</p>
             </div>
 
             <div class="flex flex-wrap gap-2">
@@ -769,7 +769,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <script id="irangate-routing-inbound-static-js">
 (function () {
-    const profiles = {
+    const profiles = window.irangateRoutingInboundProfiles = window.irangateRoutingInboundProfiles || {
         "443": {
             name: "OpenVPN",
             portText: "UDP 443",
@@ -831,7 +831,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <script id="irangate-routing-overview-selected-inbound">
 (function () {
-  const inboundMap = {
+  const inboundMap = window.irangateRoutingInboundProfiles = window.irangateRoutingInboundProfiles || {
     "443":  { name: "OpenVPN",       title: "OpenVPN UDP 443",       badge: "OVPN"  },
     "500":  { name: "IKEv2 / IPSec",  title: "IKEv2 UDP 500",         badge: "IKE"   },
     "4500": { name: "IKEv2 NAT-T",    title: "IKEv2 NAT-T UDP 4500",  badge: "NAT-T" }
@@ -1089,6 +1089,523 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateOverview, 500);
     setTimeout(updateOverview, 1500);
   });
+})();
+</script>
+
+
+<script id="irangate-multi-port-routing-stage5e">
+/* IRANGATE_MULTI_PORT_ROUTING_UI_STAGE5E */
+(function () {
+    const profiles =
+        window.irangateRoutingInboundProfiles =
+        window.irangateRoutingInboundProfiles || {};
+
+    let portLocations = [];
+
+    function normalizeLocations(value) {
+        if (!value) return [];
+        if (Array.isArray(value)) return value;
+        if (value.data) return normalizeLocations(value.data);
+        if (Array.isArray(value.locations)) return value.locations;
+        return [];
+    }
+
+    function slugValue(value) {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replaceAll('_', '-')
+            .replace(/[^a-z0-9-]+/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
+    }
+
+    function routeInboundTag(profile) {
+        if (!profile || profile.locationId === 'primary') {
+            return 'openvpn-' + String(profile?.port || 443);
+        }
+
+        return 'openvpn-location-' +
+            slugValue(profile.locationId);
+    }
+
+    function selectedProfile() {
+        const select =
+            document.getElementById('inboundPortSelect');
+
+        const port = String(
+            select?.value ||
+            document.getElementById('bindPort')?.value ||
+            '443'
+        );
+
+        return profiles[port] || profiles['443'];
+    }
+
+    function populateInboundSelector() {
+        delete profiles['500'];
+        delete profiles['4500'];
+
+        profiles['443'] = {
+            name: 'OpenVPN اصلی + IKEv2',
+            title: 'OpenVPN اصلی + IKEv2 — UDP 443',
+            badge: 'PRIMARY',
+            portText: 'UDP 443',
+            note: 'Shared primary outbound for OpenVPN and IKEv2',
+            port: 443,
+            locationId: 'primary',
+            interface: 'tun0',
+            subnet: '10.8.0.0/24',
+            tproxyPort: 12345
+        };
+
+        for (const location of portLocations) {
+            if (!location || location.enabled === false) continue;
+
+            const port = Number(location.port || 0);
+            const id = slugValue(location.id);
+
+            if (!port || !id) continue;
+
+            const name =
+                String(location.name || id);
+
+            profiles[String(port)] = {
+                name,
+                title: name + ' — UDP ' + port,
+                badge: 'PORT',
+                portText: 'UDP ' + port,
+                note:
+                    String(location.location || '') ||
+                    'OpenVPN Port Location',
+                port,
+                locationId: id,
+                interface:
+                    String(location.interface || ''),
+                subnet:
+                    String(location.subnet || ''),
+                tproxyPort:
+                    Number(location.tproxy_port || 0)
+            };
+        }
+
+        const select =
+            document.getElementById('inboundPortSelect');
+
+        if (!select) return;
+
+        const previous = String(select.value || '443');
+
+        const ordered = Object.values(profiles)
+            .filter(item => item && item.port)
+            .sort((a, b) => {
+                if (a.locationId === 'primary') return -1;
+                if (b.locationId === 'primary') return 1;
+                return Number(a.port) - Number(b.port);
+            });
+
+        select.innerHTML = ordered.map(profile => {
+            const selected =
+                String(profile.port) === previous
+                    ? ' selected'
+                    : '';
+
+            return (
+                '<option value="' +
+                esc(profile.port) +
+                '" data-location-id="' +
+                esc(profile.locationId) +
+                '"' +
+                selected +
+                '>' +
+                esc(profile.title) +
+                '</option>'
+            );
+        }).join('');
+
+        if (!profiles[String(select.value)]) {
+            select.value = '443';
+        }
+
+        syncSelectedInbound();
+    }
+
+    function syncSelectedInbound() {
+        const profile = selectedProfile();
+
+        if (!profile) return;
+
+        const portInput =
+            document.getElementById('bindPort');
+
+        if (portInput) {
+            portInput.value = String(profile.port);
+        }
+
+        const name =
+            document.getElementById('selectedInboundName');
+
+        const portText =
+            document.getElementById('selectedInboundPortText');
+
+        const note =
+            document.getElementById('selectedInboundNote');
+
+        if (name) name.textContent = profile.name;
+        if (portText) portText.textContent = profile.portText;
+        if (note) {
+            note.textContent =
+                profile.note +
+                ' / ' +
+                profile.interface +
+                ' / ' +
+                profile.subnet;
+        }
+
+        syncCheckedOutbounds();
+        refreshSelectionPreview();
+        renderOverview();
+    }
+
+    function selectedBalancer() {
+        const profile = selectedProfile();
+        const inboundTag = routeInboundTag(profile);
+
+        const balancers =
+            ((routingData.balancers || {}).balancers) || [];
+
+        return balancers.find(
+            item => item.tag === 'bal-' + inboundTag
+        ) || {};
+    }
+
+    function selectedRule() {
+        const profile = selectedProfile();
+        const inboundTag = routeInboundTag(profile);
+
+        const rules =
+            ((routingData.rules || {}).rules) || [];
+
+        return rules.find(
+            item =>
+                item.inboundTag === inboundTag ||
+                item.tag === 'route-' + inboundTag ||
+                (
+                    item.inbound &&
+                    String(item.inbound.location_id || '') ===
+                    String(profile.locationId || '')
+                )
+        ) || {};
+    }
+
+    function syncCheckedOutbounds() {
+        const balancer = selectedBalancer();
+
+        const selector =
+            Array.isArray(balancer.selector)
+                ? balancer.selector
+                : [];
+
+        if (!selector.length) return;
+
+        document.querySelectorAll(
+            '.outbound-check'
+        ).forEach(input => {
+            input.checked =
+                selector.includes(input.value);
+        });
+    }
+
+    window.currentSelectorFromState = function () {
+        const balancer = selectedBalancer();
+
+        return Array.isArray(balancer.selector)
+            ? balancer.selector
+            : [];
+    };
+
+    window.renderOverview = function () {
+        const box =
+            document.getElementById('routeCards');
+
+        const badge =
+            document.getElementById('statusBadge');
+
+        if (!box || !badge) return;
+
+        const profile = selectedProfile();
+        const balancer = selectedBalancer();
+        const rule = selectedRule();
+
+        const selector =
+            Array.isArray(balancer.selector)
+                ? balancer.selector
+                : [];
+
+        const strategy =
+            balancer.strategy ||
+            rule.mode ||
+            '-';
+
+        const service =
+            routingData.service_active ||
+            routingData.routing_service ||
+            'unknown';
+
+        const active =
+            balancer.active ||
+            rule.active_outbound ||
+            selector[0] ||
+            'direct';
+
+        badge.textContent = service;
+
+        badge.className =
+            'inline-flex px-3 py-1 rounded-full text-xs ' +
+            (
+                service === 'active'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-red-100 text-red-700'
+            );
+
+        box.innerHTML = `
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div class="rounded-xl border p-4 bg-gray-50">
+                    <div class="text-xs text-gray-500">Inbound</div>
+                    <div class="font-bold">${esc(profile.title)}</div>
+                </div>
+                <div class="rounded-xl border p-4 bg-gray-50">
+                    <div class="text-xs text-gray-500">Mode / Strategy</div>
+                    <div class="font-bold">${esc(strategy)}</div>
+                </div>
+                <div class="rounded-xl border p-4 bg-gray-50">
+                    <div class="text-xs text-gray-500">Active</div>
+                    <div class="font-bold">${esc(active)}</div>
+                </div>
+                <div class="rounded-xl border p-4 bg-gray-50">
+                    <div class="text-xs text-gray-500">TPROXY</div>
+                    <div class="font-bold">${esc(profile.tproxyPort)}</div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border p-4 bg-white">
+                <div class="text-sm font-bold text-gray-700 mb-2">
+                    Selector for ${esc(profile.name)}
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    ${
+                        selector.length
+                            ? selector.map(tag =>
+                                `<span class="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-bold">${esc(tag)}</span>`
+                            ).join('')
+                            : '<span class="text-gray-500">Direct / no selector configured</span>'
+                    }
+                </div>
+                <div class="text-xs text-gray-500 mt-3 font-mono">
+                    ${esc(profile.interface)} ·
+                    ${esc(profile.subnet)} ·
+                    UDP ${esc(profile.port)}
+                </div>
+            </div>
+        `;
+    };
+
+    window.bindCheckedOnly = async function () {
+        try {
+            const profile = selectedProfile();
+
+            const uiMode =
+                document.getElementById('bindMode').value;
+
+            const mode =
+                uiMode === 'failover'
+                    ? document.getElementById(
+                        'balancerStrategy'
+                    ).value
+                    : 'single';
+
+            const outboundsCsv = selectedCsv();
+
+            const res = await apiRequest(
+                '/routing/bind',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        port: profile.port,
+                        location_id: profile.locationId,
+                        mode,
+                        outbounds: outboundsCsv
+                    })
+                }
+            );
+
+            showResult(res);
+            showMessage(
+                'Routing bind updated for ' +
+                profile.name
+            );
+
+            await loadRouting(true);
+
+        } catch (err) {
+            showResult(err.message);
+            showMessage(err.message, 'error');
+        }
+    };
+
+    window.activateChecked = async function () {
+        try {
+            const profile = selectedProfile();
+
+            const uiMode =
+                document.getElementById('bindMode').value;
+
+            const mode =
+                uiMode === 'failover'
+                    ? document.getElementById(
+                        'balancerStrategy'
+                    ).value
+                    : 'single';
+
+            const outboundsCsv = selectedCsv();
+
+            showResult('Step 1/3: Bind...');
+
+            const bind = await apiRequest(
+                '/routing/bind',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        port: profile.port,
+                        location_id: profile.locationId,
+                        mode,
+                        outbounds: outboundsCsv
+                    })
+                }
+            );
+
+            showResult('Step 2/3: Generate...');
+
+            const generate = await apiRequest(
+                '/routing/generate',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({})
+                }
+            );
+
+            showResult('Step 3/3: Apply...');
+
+            const apply = await apiRequest(
+                '/routing/apply',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({})
+                }
+            );
+
+            await loadRouting(true);
+
+            showResult({
+                success: true,
+                message:
+                    'Activated behind ' +
+                    profile.title,
+                location_id: profile.locationId,
+                port: profile.port,
+                interface: profile.interface,
+                subnet: profile.subnet,
+                tproxy_port: profile.tproxyPort,
+                mode,
+                outbounds: outboundsCsv,
+                bind,
+                generate,
+                apply,
+                current_selector:
+                    currentSelectorFromState()
+            });
+
+            showMessage(
+                'Routing activated for ' +
+                profile.name
+            );
+
+        } catch (err) {
+            showResult(err.message);
+            showMessage(err.message, 'error');
+        }
+    };
+
+    const originalLoadRouting =
+        window.loadRouting;
+
+    window.loadRouting = async function (
+        silent = false
+    ) {
+        try {
+            const locationsResponse =
+                await apiRequest(
+                    '/openvpn-port-locations'
+                );
+
+            portLocations = normalizeLocations(
+                locationsResponse
+            );
+
+            populateInboundSelector();
+
+        } catch (error) {
+            console.warn(
+                'Port-location routing list failed',
+                error
+            );
+
+            portLocations = [];
+            populateInboundSelector();
+        }
+
+        const result =
+            await originalLoadRouting(silent);
+
+        populateInboundSelector();
+        syncCheckedOutbounds();
+        renderOverview();
+
+        return result;
+    };
+
+    document.addEventListener(
+        'change',
+        function (event) {
+            if (
+                event.target &&
+                event.target.id ===
+                'inboundPortSelect'
+            ) {
+                setTimeout(
+                    syncSelectedInbound,
+                    0
+                );
+            }
+        }
+    );
+
+    document.addEventListener(
+        'DOMContentLoaded',
+        function () {
+            const description =
+                document.querySelector(
+                    'h1 + p'
+                );
+
+            if (description) {
+                description.textContent =
+                    'Route the primary VPN and each OpenVPN port location through independent outbound strategies.';
+            }
+
+            populateInboundSelector();
+        }
+    );
 })();
 </script>
 

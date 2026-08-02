@@ -99,7 +99,7 @@ func RevokeClientCertificate(clientName string, reason string) error {
 		log.Printf("Warning: Failed to copy CRL to OpenVPN directory: %v", err)
 	}
 
-	exec.Command("systemctl", "reload", "openvpn@server").Run()
+	_ = reloadAllLocalOpenVPNInstances()
 
 	logRevocation(clientName, reason, true, "")
 	return nil
@@ -172,10 +172,11 @@ func ActivateClient(clientName string) error {
 }
 
 type localOpenVPNSession struct {
-	ClientName  string
-	RealAddress string
-	ClientID    string
-	ConnectedAt time.Time
+	ClientName     string
+	RealAddress    string
+	ClientID       string
+	ConnectedAt    time.Time
+	ManagementPort int
 }
 
 func fastEnforceNumber(value interface{}) int64 {
@@ -365,95 +366,213 @@ func fastEnforceStopClient(
 }
 
 func fastEnforceLoadLocalSessions() ([]localOpenVPNSession, error) {
-	conn, err := net.DialTimeout(
-		"tcp",
-		"127.0.0.1:7505",
-		2*time.Second,
-	)
-	if err != nil {
-		return nil, err
-	}
+	ports := openVPNManagementPorts()
 
-	defer conn.Close()
-
-	_ = conn.SetDeadline(
-		time.Now().Add(4 * time.Second),
+	allSessions := make(
+		[]localOpenVPNSession,
+		0,
 	)
 
-	if _, err := conn.Write(
-		[]byte("status 3\nquit\n"),
-	); err != nil {
-		return nil, err
-	}
+	successfulEndpoints := 0
 
-	scanner := bufio.NewScanner(conn)
-	sessions := make([]localOpenVPNSession, 0)
+	failures := make(
+		[]string,
+		0,
+	)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	loadFromPort := func(
+		port int,
+	) (
+		[]localOpenVPNSession,
+		error,
+	) {
+		address := net.JoinHostPort(
+			"127.0.0.1",
+			strconv.Itoa(port),
+		)
 
-		if !strings.HasPrefix(line, "CLIENT_LIST,") {
-			continue
+		conn, err := net.DialTimeout(
+			"tcp",
+			address,
+			2*time.Second,
+		)
+		if err != nil {
+			return nil, err
 		}
 
-		parts := strings.Split(line, ",")
+		defer conn.Close()
 
-		if len(parts) < 11 {
-			continue
+		_ = conn.SetDeadline(
+			time.Now().Add(
+				4 * time.Second,
+			),
+		)
+
+		if _, err := conn.Write(
+			[]byte(
+				"status 3\nquit\n",
+			),
+		); err != nil {
+			return nil, err
 		}
 
-		clientName := strings.TrimSpace(parts[1])
-		realAddress := strings.TrimSpace(parts[2])
-		clientID := strings.TrimSpace(parts[10])
+		scanner :=
+			bufio.NewScanner(conn)
 
-		if clientName == "" {
-			continue
-		}
+		sessions := make(
+			[]localOpenVPNSession,
+			0,
+		)
 
-		var connectedAt time.Time
+		for scanner.Scan() {
+			line :=
+				strings.TrimSpace(
+					scanner.Text(),
+				)
 
-		if unixValue, err := strconv.ParseInt(
-			strings.TrimSpace(parts[8]),
-			10,
-			64,
-		); err == nil && unixValue > 0 {
-			connectedAt = time.Unix(
-				unixValue,
-				0,
-			).UTC()
-		}
+			if !strings.HasPrefix(
+				line,
+				"CLIENT_LIST,",
+			) {
+				continue
+			}
 
-		if connectedAt.IsZero() {
-			connectedAt, _ = time.Parse(
-				"2006-01-02 15:04:05",
-				strings.TrimSpace(parts[7]),
+			parts :=
+				strings.Split(
+					line,
+					",",
+				)
+
+			if len(parts) < 11 {
+				continue
+			}
+
+			clientName :=
+				strings.TrimSpace(
+					parts[1],
+				)
+
+			realAddress :=
+				strings.TrimSpace(
+					parts[2],
+				)
+
+			clientID :=
+				strings.TrimSpace(
+					parts[10],
+				)
+
+			if clientName == "" {
+				continue
+			}
+
+			var connectedAt time.Time
+
+			if unixValue, err :=
+				strconv.ParseInt(
+					strings.TrimSpace(
+						parts[8],
+					),
+					10,
+					64,
+				); err == nil &&
+				unixValue > 0 {
+
+				connectedAt =
+					time.Unix(
+						unixValue,
+						0,
+					).UTC()
+			}
+
+			if connectedAt.IsZero() {
+				connectedAt, _ =
+					time.Parse(
+						"2006-01-02 15:04:05",
+						strings.TrimSpace(
+							parts[7],
+						),
+					)
+			}
+
+			sessions = append(
+				sessions,
+				localOpenVPNSession{
+					ClientName:     clientName,
+					RealAddress:    realAddress,
+					ClientID:       clientID,
+					ConnectedAt:    connectedAt,
+					ManagementPort: port,
+				},
 			)
 		}
 
-		sessions = append(
-			sessions,
-			localOpenVPNSession{
-				ClientName:  clientName,
-				RealAddress: realAddress,
-				ClientID:    clientID,
-				ConnectedAt: connectedAt,
-			},
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+
+		return sessions, nil
+	}
+
+	for _, port := range ports {
+		sessions, err :=
+			loadFromPort(port)
+
+		if err != nil {
+			failures = append(
+				failures,
+				fmt.Sprintf(
+					"%d: %v",
+					port,
+					err,
+				),
+			)
+
+			continue
+		}
+
+		successfulEndpoints++
+
+		allSessions = append(
+			allSessions,
+			sessions...,
 		)
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	// IRANGATE_GLOBAL_CONNECTION_LIMIT_STAGE7C
+	if len(failures) > 0 {
+		return nil, fmt.Errorf(
+			"incomplete local OpenVPN session snapshot: "+
+				"successful=%d expected=%d failures=%s",
+			successfulEndpoints,
+			len(ports),
+			strings.Join(
+				failures,
+				"; ",
+			),
+		)
 	}
 
-	return sessions, nil
+	return allSessions, nil
 }
 
 func fastEnforceKillSession(
 	session localOpenVPNSession,
 ) error {
+	port := session.ManagementPort
+
+	if port <= 0 {
+		port = 7505
+	}
+
+	address := net.JoinHostPort(
+		"127.0.0.1",
+		strconv.Itoa(port),
+	)
+
 	conn, err := net.DialTimeout(
 		"tcp",
-		"127.0.0.1:7505",
+		address,
 		2*time.Second,
 	)
 	if err != nil {
@@ -463,17 +582,23 @@ func fastEnforceKillSession(
 	defer conn.Close()
 
 	_ = conn.SetDeadline(
-		time.Now().Add(4 * time.Second),
+		time.Now().Add(
+			4 * time.Second,
+		),
 	)
 
 	command := ""
 
 	if session.ClientID != "" {
-		command = "client-kill " +
-			session.ClientID
+		command =
+			"client-kill " +
+				session.ClientID
+
 	} else if session.RealAddress != "" {
-		command = "kill " +
-			session.RealAddress
+		command =
+			"kill " +
+				session.RealAddress
+
 	} else {
 		return fmt.Errorf(
 			"session has no client id or address",
@@ -481,32 +606,109 @@ func fastEnforceKillSession(
 	}
 
 	if _, err := conn.Write(
-		[]byte(command + "\nquit\n"),
+		[]byte(
+			command +
+				"\nquit\n",
+		),
 	); err != nil {
 		return err
 	}
 
-	scanner := bufio.NewScanner(conn)
+	scanner :=
+		bufio.NewScanner(conn)
+
 	var response strings.Builder
 
 	for scanner.Scan() {
-		response.WriteString(scanner.Text())
+		response.WriteString(
+			scanner.Text(),
+		)
+
 		response.WriteByte('\n')
 	}
 
-	output := response.String()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	output :=
+		response.String()
 
 	if strings.Contains(
 		strings.ToUpper(output),
 		"ERROR",
 	) {
 		return fmt.Errorf(
-			"management error: %s",
+			"management error on port %d: %s",
+			port,
 			strings.TrimSpace(output),
 		)
 	}
 
 	return nil
+}
+
+func connectionLimitExcessSessions(
+	sessions []localOpenVPNSession,
+	limit int,
+) []localOpenVPNSession {
+	if limit < 1 ||
+		len(sessions) <= limit {
+
+		return nil
+	}
+
+	ordered :=
+		append(
+			[]localOpenVPNSession(nil),
+			sessions...,
+		)
+
+	sort.Slice(
+		ordered,
+		func(i, j int) bool {
+			left := ordered[i]
+			right := ordered[j]
+
+			if left.ConnectedAt.Equal(
+				right.ConnectedAt,
+			) {
+				if left.ManagementPort !=
+					right.ManagementPort {
+
+					return left.ManagementPort <
+						right.ManagementPort
+				}
+
+				if left.RealAddress !=
+					right.RealAddress {
+
+					return left.RealAddress <
+						right.RealAddress
+				}
+
+				return left.ClientID <
+					right.ClientID
+			}
+
+			if left.ConnectedAt.IsZero() {
+				return true
+			}
+
+			if right.ConnectedAt.IsZero() {
+				return false
+			}
+
+			return left.ConnectedAt.Before(
+				right.ConnectedAt,
+			)
+		},
+	)
+
+	return append(
+		[]localOpenVPNSession(nil),
+		ordered[limit:]...,
+	)
 }
 
 func CheckConnectionLimits() error {
@@ -616,33 +818,13 @@ func CheckConnectionLimits() error {
 			continue
 		}
 
-		sort.Slice(
-			clientSessions,
-			func(i, j int) bool {
-				left := clientSessions[i].ConnectedAt
-				right := clientSessions[j].ConnectedAt
+		excessSessions :=
+			connectionLimitExcessSessions(
+				clientSessions,
+				limit,
+			)
 
-				if left.Equal(right) {
-					return clientSessions[i].RealAddress <
-						clientSessions[j].RealAddress
-				}
-
-				if left.IsZero() {
-					return true
-				}
-
-				if right.IsZero() {
-					return false
-				}
-
-				return left.Before(right)
-			},
-		)
-
-		extra := len(clientSessions) - limit
-
-		for index := 0; index < extra; index++ {
-			session := clientSessions[index]
+		for _, session := range excessSessions {
 
 			if err := fastEnforceKillSession(
 				session,
@@ -658,7 +840,7 @@ func CheckConnectionLimits() error {
 			}
 
 			log.Printf(
-				"Connection limit enforced for %s: killed oldest session %s, active=%d, limit=%d",
+				"Connection limit enforced for %s: killed excess newest session %s, active=%d, limit=%d",
 				session.ClientName,
 				session.RealAddress,
 				len(clientSessions),

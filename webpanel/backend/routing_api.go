@@ -34,10 +34,13 @@ type createRoutingOutboundRequest struct {
 }
 
 type bindRoutingRequest struct {
-	Port      int    `json:"port"`
-	Mode      string `json:"mode"`
-	Outbounds string `json:"outbounds"`
+	Port       int    `json:"port"`
+	LocationID string `json:"location_id,omitempty"`
+	Mode       string `json:"mode"`
+	Outbounds  string `json:"outbounds"`
 }
+
+// IRANGATE_MULTI_PORT_ROUTING_API_STAGE5E
 
 type updateRoutingOutboundRequest struct {
 	Name     string `json:"name"`
@@ -200,40 +203,181 @@ func createRoutingOutboundHandler(w http.ResponseWriter, r *http.Request) {
 	sendSuccess(w, "Outbound added", result)
 }
 
-func bindRoutingHandler(w http.ResponseWriter, r *http.Request) {
+func bindRoutingHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	var req bindRoutingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, "Invalid request body", http.StatusBadRequest)
+
+	if err := json.NewDecoder(
+		r.Body,
+	).Decode(&req); err != nil {
+
+		sendError(
+			w,
+			"Invalid request body",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
-	if req.Port <= 0 {
-		req.Port = 443
+	req.LocationID =
+		normalizeOpenVPNPortLocationID(
+			req.LocationID,
+		)
+
+	locationID := req.LocationID
+	port := req.Port
+	interfaceName := "tun0"
+	subnet := "10.8.0.0/24"
+	tproxyPort := 12345
+
+	if locationID == "" ||
+		locationID == "primary" {
+
+		locationID = "primary"
+
+		if port <= 0 {
+			port = 443
+		}
+
+		if port == 500 ||
+			port == 4500 {
+
+			sendError(
+				w,
+				"UDP 500 and 4500 are reserved for IKEv2",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+	} else {
+		location, found :=
+			findOpenVPNPortLocation(
+				locationID,
+			)
+
+		if !found {
+			sendError(
+				w,
+				"OpenVPN port location not found",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		if !location.Enabled {
+			sendError(
+				w,
+				"OpenVPN port location is disabled",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if port > 0 &&
+			port != location.Port {
+
+			sendError(
+				w,
+				"Port does not match selected OpenVPN port location",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		port = location.Port
+		interfaceName = location.Interface
+		subnet = location.Subnet
+		tproxyPort = location.TProxyPort
 	}
-	req.Mode = strings.TrimSpace(req.Mode)
+
+	if port < 1 ||
+		port > 65535 {
+
+		sendError(
+			w,
+			"Invalid OpenVPN port",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	req.Mode =
+		strings.TrimSpace(
+			req.Mode,
+		)
+
 	if req.Mode == "" {
 		req.Mode = "single"
 	}
-	req.Outbounds = strings.TrimSpace(req.Outbounds)
+
+	req.Outbounds =
+		strings.TrimSpace(
+			req.Outbounds,
+		)
+
 	if req.Outbounds == "" {
-		sendError(w, "Outbounds is required", http.StatusBadRequest)
+		sendError(
+			w,
+			"Outbounds is required",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
-	result, err := runRoutingCommand(
-		r,
-		30*time.Second,
-		"bind",
-		"--port", fmt.Sprintf("%d", req.Port),
-		"--mode", req.Mode,
-		"--outbounds", req.Outbounds,
-	)
+	result, err :=
+		runRoutingCommand(
+			r,
+			30*time.Second,
+			"bind",
+			"--port",
+			fmt.Sprintf(
+				"%d",
+				port,
+			),
+			"--location-id",
+			locationID,
+			"--interface",
+			interfaceName,
+			"--subnet",
+			subnet,
+			"--tproxy-port",
+			fmt.Sprintf(
+				"%d",
+				tproxyPort,
+			),
+			"--mode",
+			req.Mode,
+			"--outbounds",
+			req.Outbounds,
+		)
+
 	if err != nil {
-		sendError(w, fmt.Sprintf("Failed to bind routing: %v", err), http.StatusBadRequest)
+		sendError(
+			w,
+			fmt.Sprintf(
+				"Failed to bind routing: %v",
+				err,
+			),
+			http.StatusBadRequest,
+		)
 		return
 	}
 
-	sendSuccess(w, "Routing bind updated", result)
+	sendSuccess(
+		w,
+		"Routing bind updated",
+		map[string]interface{}{
+			"result":      result,
+			"location_id": locationID,
+			"port":        port,
+			"interface":   interfaceName,
+			"subnet":      subnet,
+			"tproxy_port": tproxyPort,
+		},
+	)
 }
 
 func generateRoutingHandler(w http.ResponseWriter, r *http.Request) {

@@ -81,18 +81,41 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 
 log "Exporting repo source from ${BRANCH}@${COMMIT}"
-git archive --format=tar HEAD | tar -x -C "$WORK"
+
+# IRANGATE_WORKTREE_OFFLINE_BUNDLE_STAGE6B
+SOURCE_MODE="git-head"
+
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  SOURCE_MODE="working-tree"
+
+  log "Working-tree changes detected; including modified and untracked feature files"
+
+  tar     -C "$REPO_DIR"     --exclude='./.git'     --exclude='./offline-bundles'     --exclude='*/__pycache__'     --exclude='*.pyc'     --exclude='*.pyo'     -cf -     . |
+  tar -xf - -C "$WORK"
+else
+  git archive --format=tar HEAD |
+  tar -x -C "$WORK"
+fi
 
 mkdir -p "$WORK/offline-assets"
 
 WEBPANEL_OUT="$WORK/offline-assets/irangate-webpanel"
 
-if ! try_build_webpanel "$WEBPANEL_OUT"; then
+# IRANGATE_EXPLICIT_OFFLINE_BINARY_STAGE6B
+if [[ -n "${OFFLINE_WEBPANEL_BIN:-}" &&
+      -x "${OFFLINE_WEBPANEL_BIN}" ]]
+then
+  log "Using explicitly supplied webpanel binary: ${OFFLINE_WEBPANEL_BIN}"
+  install -m 0755     "${OFFLINE_WEBPANEL_BIN}"     "$WEBPANEL_OUT"
+
+elif ! try_build_webpanel "$WEBPANEL_OUT"; then
   warn "Could not build webpanel from source"
+
   if ! copy_existing_webpanel "$WEBPANEL_OUT"; then
     if [[ "$REQUIRE_WEBPANEL_BINARY" == "1" ]]; then
       fail "No usable webpanel binary found. Install newer Go or set OFFLINE_WEBPANEL_BIN=/path/to/irangate-webpanel"
     fi
+
     warn "Creating source-only bundle without webpanel binary"
   fi
 fi
@@ -101,6 +124,7 @@ cat > "$WORK/offline-assets/manifest.txt" <<EOF
 IranGate Offline Assets
 Branch: ${BRANCH}
 Commit: ${COMMIT}
+Source mode: ${SOURCE_MODE}
 Created: $(date -Is)
 Webpanel binary included: $([[ -x "$WEBPANEL_OUT" ]] && echo yes || echo no)
 EOF
@@ -109,6 +133,7 @@ cat > "$WORK/OFFLINE-INSTALL-README.txt" <<EOF
 IranGate Offline Panel Bundle
 Branch: ${BRANCH}
 Commit: ${COMMIT}
+Source mode: ${SOURCE_MODE}
 Created: $(date -Is)
 
 Install/update on target server:
@@ -131,17 +156,17 @@ ARCHIVE="$OUT_DIR/${NAME}.tar.gz"
 log "Building irangate CLI binary"
 CLI_BUILT=0
 
-for go_bin in /usr/local/go/bin/go /snap/bin/go /usr/bin/go "$(command -v go 2>/dev/null || true)"; do
+for go_bin in "$(command -v go 2>/dev/null || true)" /usr/local/go/bin/go /snap/bin/go /usr/bin/go; do
   [[ -n "$go_bin" && -x "$go_bin" ]] || continue
   log "Trying irangate CLI build with $("$go_bin" version)"
 
-  if (cd "$WORK" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" ./cmd); then
+  if (cd "$WORK" && env -u GOROOT -u GOTOOLDIR "$go_bin" build -o "$WORK/offline-assets/irangate-cli" ./cmd); then
     CLI_BUILT=1
     log "Built irangate CLI binary: $WORK/offline-assets/irangate-cli"
     break
   fi
 
-  if (cd "$WORK" && "$go_bin" build -o "$WORK/offline-assets/irangate-cli" .); then
+  if (cd "$WORK" && env -u GOROOT -u GOTOOLDIR "$go_bin" build -o "$WORK/offline-assets/irangate-cli" .); then
     CLI_BUILT=1
     log "Built irangate CLI binary from root: $WORK/offline-assets/irangate-cli"
     break

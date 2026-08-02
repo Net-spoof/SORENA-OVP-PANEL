@@ -29,24 +29,29 @@ type OpenVPNClient struct {
 	BytesSent      int64
 	ConnectedSince time.Time
 	VirtualIP      string
+
+	// IRANGATE_MULTI_PORT_TRAFFIC_STAGE4
+	Source     string
+	SessionKey string
 }
 
 func NewOpenVPNStatusParser() *OpenVPNStatusParser {
-	ctx, cancel := context.WithCancel(context.Background())
-	statusLogPath := os.Getenv("OPENVPN_STATUS_LOG_PATH")
-	if statusLogPath == "" {
-		statusLogPath = "/etc/openvpn/openvpn-status.log"
-	}
+	ctx, cancel :=
+		context.WithCancel(
+			context.Background(),
+		)
+
 	return &OpenVPNStatusParser{
-		StatusFiles: []string{
-			statusLogPath,
-		},
+		StatusFiles: configuredOpenVPNStatusFiles(),
+
 		Database: NewTrafficDatabase(),
-		ctx:      ctx,
-		cancel:   cancel,
-		running:  false,
+
+		ctx:     ctx,
+		cancel:  cancel,
+		running: false,
 	}
 }
+
 func (p *OpenVPNStatusParser) ParseStatusLog(filename string) ([]OpenVPNClient, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -115,91 +120,253 @@ func (p *OpenVPNStatusParser) ParseStatusLog(filename string) ([]OpenVPNClient, 
 	return clients, scanner.Err()
 }
 func (p *OpenVPNStatusParser) CollectTrafficData() error {
-	var allClients []OpenVPNClient
+	now := time.Now().UTC()
 
-	for _, statusFile := range p.StatusFiles {
-		clients, err := p.ParseStatusLog(statusFile)
+	statusFiles :=
+		configuredOpenVPNStatusFiles()
+
+	p.mu.Lock()
+
+	p.StatusFiles =
+		append(
+			[]string(nil),
+			statusFiles...,
+		)
+
+	p.mu.Unlock()
+
+	allClients := make(
+		[]OpenVPNClient,
+		0,
+	)
+
+	for _, statusFile := range statusFiles {
+
+		clients, err :=
+			p.ParseStatusLog(
+				statusFile,
+			)
+
 		if err != nil {
-			fmt.Printf("Warning: Failed to parse %s: %v\n", statusFile, err)
+			fmt.Printf(
+				"Warning: Failed to parse %s: %v\n",
+				statusFile,
+				err,
+			)
+
 			continue
 		}
 
-		allClients = append(allClients, clients...)
-	}
+		for index := range clients {
 
-	existingStats, err := p.Database.GetCurrentClientStats()
-	if err != nil {
-		fmt.Printf("Warning: Failed to load current stats: %v\n", err)
-		existingStats = []ClientTrafficStats{}
-	}
+			clients[index].Source =
+				statusFile
 
-	existingByName := make(map[string]ClientTrafficStats, len(existingStats))
-	for _, stat := range existingStats {
-		existingByName[stat.ClientName] = stat
-	}
-
-	// فقط یک بار در هر چرخه، نه یک بار برای هر کاربر
-	quotaBytesByClient := loadClientQuotaBytes()
-
-	currentStats := make(
-		[]ClientTrafficStats,
-		0,
-		len(allClients),
-	)
-
-	const maxBatchSize = 100
-
-	for i := 0; i < len(allClients); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(allClients) {
-			end = len(allClients)
+			clients[index].SessionKey =
+				openVPNSessionKey(
+					clients[index],
+				)
 		}
 
-		batch := allClients[i:end]
+		allClients = append(
+			allClients,
+			clients...,
+		)
+	}
 
-		if err := p.processClientBatch(
-			batch,
-			&currentStats,
-			existingByName,
-		); err != nil {
-			return fmt.Errorf(
-				"failed to process client batch: %v",
+	deltas, totals, err :=
+		p.Database.
+			ApplyOpenVPNMultiPortSnapshots(
+				allClients,
+				now,
+			)
+
+	if err != nil {
+		return fmt.Errorf(
+			"apply OpenVPN multi-port snapshots: %w",
+			err,
+		)
+	}
+
+	type activeClientAggregate struct {
+		RealAddress string
+		VirtualIP   string
+	}
+
+	activeClients := make(
+		map[string]activeClientAggregate,
+	)
+
+	for _, client := range allClients {
+
+		name :=
+			strings.TrimSpace(
+				client.CommonName,
+			)
+
+		if name == "" ||
+			name == "UNDEF" {
+
+			continue
+		}
+
+		item := activeClients[name]
+
+		if item.RealAddress == "" {
+			item.RealAddress =
+				client.RealAddress
+		}
+
+		if item.VirtualIP == "" {
+			item.VirtualIP =
+				client.VirtualIP
+		}
+
+		activeClients[name] = item
+	}
+
+	for name, delta := range deltas {
+
+		if delta.Received <= 0 &&
+			delta.Sent <= 0 {
+
+			continue
+		}
+
+		active :=
+			activeClients[name]
+
+		record :=
+			TrafficRecord{
+				ClientName: name,
+
+				Timestamp: now,
+
+				BytesReceived: delta.Received,
+
+				BytesSent: delta.Sent,
+
+				TotalBytes: delta.Received +
+					delta.Sent,
+
+				Connected: true,
+
+				RealAddress: active.RealAddress,
+
+				VirtualIP: active.VirtualIP,
+			}
+
+		if err :=
+			p.Database.
+				StoreOpenVPNTrafficDeltaRecord(
+					record,
+				); err != nil {
+
+			fmt.Printf(
+				"Warning: Failed to store multi-port delta for %s: %v\n",
+				name,
 				err,
 			)
 		}
 	}
 
-	// بعد از ثبت نمونه‌های جدید، cumulative_totals فقط یک بار خوانده شود
-	freshTotals := p.Database.loadCumulativeTotalsMap()
+	existingStats, err :=
+		p.Database.
+			GetCurrentClientStats()
 
-	for i := range currentStats {
-		name := currentStats[i].ClientName
+	if err != nil {
+		fmt.Printf(
+			"Warning: Failed to load current stats: %v\n",
+			err,
+		)
 
-		if total, exists := freshTotals[name]; exists {
-			received := total.TotalReceived +
-				total.LastSessionReceived
-
-			sent := total.TotalSent +
-				total.LastSessionSent
-
-			currentStats[i].CurrentReceived = received
-			currentStats[i].CurrentSent = sent
-			currentStats[i].CurrentTotal = received + sent
-		}
-
-		quotaBytes := quotaBytesByClient[name]
-		if quotaBytes > 0 {
-			currentStats[i].QuotaUsed =
-				(float64(currentStats[i].CurrentTotal) /
-					float64(quotaBytes)) * 100
-		} else {
-			currentStats[i].QuotaUsed = 0
-		}
+		existingStats =
+			[]ClientTrafficStats{}
 	}
 
-	if err := p.Database.UpdateCurrentStats(currentStats); err != nil {
+	existingByName := make(
+		map[string]ClientTrafficStats,
+		len(existingStats),
+	)
+
+	for _, stat := range existingStats {
+
+		existingByName[stat.ClientName] = stat
+	}
+
+	quotaBytesByClient :=
+		loadClientQuotaBytes()
+
+	currentStats := make(
+		[]ClientTrafficStats,
+		0,
+		len(activeClients),
+	)
+
+	for name, active := range activeClients {
+
+		total :=
+			totals[name]
+
+		previous :=
+			existingByName[name]
+
+		stats :=
+			ClientTrafficStats{
+				ClientName: name,
+
+				CurrentReceived: total.Received,
+
+				CurrentSent: total.Sent,
+
+				CurrentTotal: total.Received +
+					total.Sent,
+
+				LastSeen: now,
+
+				Connected: true,
+
+				RealAddress: active.RealAddress,
+
+				VirtualIP: active.VirtualIP,
+
+				DailyUsage: previous.DailyUsage,
+
+				MonthlyUsage: previous.MonthlyUsage,
+
+				QuotaUsed: previous.QuotaUsed,
+			}
+
+		quotaBytes :=
+			quotaBytesByClient[name]
+
+		if quotaBytes > 0 {
+			stats.QuotaUsed =
+				(float64(
+					stats.CurrentTotal,
+				) /
+					float64(
+						quotaBytes,
+					)) *
+					100
+		} else {
+			stats.QuotaUsed = 0
+		}
+
+		currentStats = append(
+			currentStats,
+			stats,
+		)
+	}
+
+	if err :=
+		p.Database.
+			UpdateCurrentStats(
+				currentStats,
+			); err != nil {
+
 		return fmt.Errorf(
-			"failed to update current stats: %v",
+			"update multi-port current stats: %w",
 			err,
 		)
 	}

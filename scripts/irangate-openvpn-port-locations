@@ -1,0 +1,1658 @@
+#!/usr/bin/env python3
+
+import argparse
+import datetime
+import grp
+import ipaddress
+import json
+import os
+import pathlib
+import pwd
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+
+ROOT = pathlib.Path(
+    os.environ.get(
+        "IRANGATE_RUNTIME_ROOT",
+        "",
+    )
+)
+
+IS_TEST_ROOT = str(ROOT) not in {"", "."}
+
+CONFIG_JSON = "/opt/irangate/routing/openvpn-port-locations.json"
+STATE_JSON = "/opt/irangate/routing/openvpn-port-locations-runtime.json"
+CLIENT_DIR = "/opt/irangate/database/clients"
+
+OPENVPN_DIR = "/etc/openvpn"
+BASE_CONFIG = "/etc/openvpn/server.conf"
+HOOK_DIR = "/etc/openvpn/port-location-hooks"
+LOG_DIR = "/etc/openvpn/logs"
+
+SYSTEMD_DIR = "/etc/systemd/system"
+BOOT_SERVICE = (
+    "/etc/systemd/system/"
+    "irangate-openvpn-port-locations.service"
+)
+
+RUNTIME_BIN = "/usr/local/sbin/irangate-openvpn-port-locations"
+
+INPUT_CHAIN = "IRANGATE_OVPN_PL_IN"
+FORWARD_CHAIN = "IRANGATE_OVPN_PL_FWD"
+NAT_CHAIN = "IRANGATE_OVPN_PL_NAT"
+
+CAPABILITIES = (
+    "CAP_IPC_LOCK "
+    "CAP_NET_ADMIN "
+    "CAP_NET_RAW "
+    "CAP_SETGID "
+    "CAP_SETUID "
+    "CAP_SYS_CHROOT "
+    "CAP_DAC_OVERRIDE "
+    "CAP_SETPCAP "
+    "CAP_NET_BIND_SERVICE"
+)
+
+UNIQUE_DIRECTIVES = {
+    "port",
+    "proto",
+    "dev",
+    "server",
+    "ifconfig-pool-persist",
+    "management",
+    "status",
+    "log",
+    "log-append",
+    "client-connect",
+    "script-security",
+}
+
+
+def rooted(value: str) -> pathlib.Path:
+    path = pathlib.Path(value)
+
+    if not path.is_absolute():
+        raise ValueError(
+            f"path must be absolute: {value}"
+        )
+
+    if not IS_TEST_ROOT:
+        return path
+
+    return ROOT / value.lstrip("/")
+
+
+def now_iso() -> str:
+    return (
+        datetime.datetime.now(
+            datetime.timezone.utc
+        )
+        .replace(microsecond=0)
+        .isoformat()
+    )
+
+
+def log(message: str) -> None:
+    print(
+        f"[openvpn-port-locations] {message}",
+        flush=True,
+    )
+
+
+def run(
+    command: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess:
+    log(
+        "RUN: "
+        + " ".join(command)
+    )
+
+    return subprocess.run(
+        command,
+        check=check,
+        text=True,
+        stdout=(
+            subprocess.PIPE
+            if capture
+            else None
+        ),
+        stderr=(
+            subprocess.STDOUT
+            if capture
+            else None
+        ),
+    )
+
+
+def atomic_write(
+    path: pathlib.Path,
+    content: str,
+    mode: int,
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = path.with_name(
+        f".{path.name}.tmp-{os.getpid()}"
+    )
+
+    temporary.write_text(
+        content,
+        encoding="utf-8",
+    )
+
+    os.chmod(
+        temporary,
+        mode,
+    )
+
+    os.replace(
+        temporary,
+        path,
+    )
+
+
+def load_json(
+    path: pathlib.Path,
+    default: Any,
+) -> Any:
+    if not path.exists():
+        return default
+
+    text = path.read_text(
+        encoding="utf-8",
+    ).strip()
+
+    if not text:
+        return default
+
+    return json.loads(text)
+
+
+def save_json(
+    path: pathlib.Path,
+    data: Any,
+    mode: int = 0o600,
+) -> None:
+    atomic_write(
+        path,
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        mode,
+    )
+
+
+def location_id(value: Any) -> str:
+    value = str(value or "").strip().lower()
+    value = value.replace("_", "-")
+    return value.strip("-")
+
+
+def validate_location(
+    item: dict[str, Any],
+) -> dict[str, Any]:
+    result = dict(item)
+
+    result["id"] = location_id(
+        result.get("id")
+    )
+
+    if not result["id"]:
+        raise ValueError(
+            "location ID is empty"
+        )
+
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789-"
+    )
+
+    if any(
+        character not in allowed
+        for character in result["id"]
+    ):
+        raise ValueError(
+            f"invalid location ID: {result['id']}"
+        )
+
+    result["port"] = int(
+        result.get("port", 0)
+    )
+
+    if (
+        result["port"] < 1
+        or result["port"] > 65535
+        or result["port"] in {500, 4500}
+    ):
+        raise ValueError(
+            f"invalid UDP port for {result['id']}"
+        )
+
+    result["protocol"] = str(
+        result.get("protocol", "udp")
+    ).strip().lower()
+
+    if result["protocol"] != "udp":
+        raise ValueError(
+            f"only UDP is supported: {result['id']}"
+        )
+
+    result["interface"] = str(
+        result.get("interface", "")
+    ).strip()
+
+    if not result["interface"].startswith(
+        "tunpl"
+    ):
+        raise ValueError(
+            f"invalid interface for {result['id']}"
+        )
+
+    network = ipaddress.ip_network(
+        str(result.get("subnet", "")),
+        strict=True,
+    )
+
+    if (
+        not isinstance(
+            network,
+            ipaddress.IPv4Network,
+        )
+        or network.prefixlen != 24
+    ):
+        raise ValueError(
+            f"invalid /24 subnet for {result['id']}"
+        )
+
+    for reserved in (
+        ipaddress.ip_network(
+            "10.8.0.0/24"
+        ),
+        ipaddress.ip_network(
+            "10.10.0.0/24"
+        ),
+    ):
+        if network.overlaps(reserved):
+            raise ValueError(
+                f"reserved subnet overlap: {result['id']}"
+            )
+
+    result["subnet"] = str(network)
+
+    result["management_port"] = int(
+        result.get(
+            "management_port",
+            0,
+        )
+    )
+
+    if not (
+        1024
+        <= result["management_port"]
+        <= 65535
+    ):
+        raise ValueError(
+            f"invalid management port: {result['id']}"
+        )
+
+    status_file = str(
+        result.get(
+            "status_file",
+            "",
+        )
+    ).strip()
+
+    if (
+        not status_file.startswith(
+            "/etc/openvpn/"
+        )
+        or ".." in status_file
+    ):
+        raise ValueError(
+            f"invalid status file: {result['id']}"
+        )
+
+    result["status_file"] = status_file
+    result["enabled"] = bool(
+        result.get("enabled", True)
+    )
+
+    return result
+
+
+def load_locations() -> list[dict[str, Any]]:
+    payload = load_json(
+        rooted(CONFIG_JSON),
+        {
+            "version": 1,
+            "locations": [],
+        },
+    )
+
+    raw_locations = payload.get(
+        "locations",
+        [],
+    )
+
+    if not isinstance(
+        raw_locations,
+        list,
+    ):
+        raise ValueError(
+            "locations must be an array"
+        )
+
+    locations = [
+        validate_location(item)
+        for item in raw_locations
+        if isinstance(item, dict)
+    ]
+
+    ids: set[str] = set()
+    ports: set[int] = set()
+    interfaces: set[str] = set()
+    subnets: list[
+        ipaddress.IPv4Network
+    ] = []
+    management_ports: set[int] = set()
+
+    for item in locations:
+        item_id = item["id"]
+
+        if item_id in ids:
+            raise ValueError(
+                f"duplicate ID: {item_id}"
+            )
+
+        if item["port"] in ports:
+            raise ValueError(
+                f"duplicate UDP port: {item['port']}"
+            )
+
+        if item["interface"] in interfaces:
+            raise ValueError(
+                f"duplicate interface: {item['interface']}"
+            )
+
+        if (
+            item["management_port"]
+            in management_ports
+        ):
+            raise ValueError(
+                "duplicate management port: "
+                f"{item['management_port']}"
+            )
+
+        network = ipaddress.ip_network(
+            item["subnet"]
+        )
+
+        if any(
+            network.overlaps(current)
+            for current in subnets
+        ):
+            raise ValueError(
+                f"overlapping subnet: {item['subnet']}"
+            )
+
+        ids.add(item_id)
+        ports.add(item["port"])
+        interfaces.add(
+            item["interface"]
+        )
+        management_ports.add(
+            item["management_port"]
+        )
+        subnets.append(network)
+
+    return locations
+
+
+def read_base_config() -> str:
+    path = rooted(BASE_CONFIG)
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"base OpenVPN config missing: {path}"
+        )
+
+    return path.read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+
+def config_runtime_group(
+    base_config: str,
+) -> str:
+    for raw_line in base_config.splitlines():
+        line = raw_line.strip()
+
+        if (
+            not line
+            or line.startswith(("#", ";"))
+        ):
+            continue
+
+        parts = line.split()
+
+        if (
+            len(parts) >= 2
+            and parts[0] == "group"
+        ):
+            return parts[1]
+
+    return "nogroup"
+
+
+def render_server_config(
+    base_config: str,
+    item: dict[str, Any],
+) -> str:
+    retained: list[str] = []
+
+    for raw_line in base_config.splitlines():
+        stripped = raw_line.strip()
+
+        if not stripped:
+            retained.append(raw_line)
+            continue
+
+        if stripped.startswith(
+            ("#", ";")
+        ):
+            retained.append(raw_line)
+            continue
+
+        directive = stripped.split(
+            None,
+            1,
+        )[0].lower()
+
+        if directive in UNIQUE_DIRECTIVES:
+            continue
+
+        retained.append(raw_line)
+
+    network = ipaddress.ip_network(
+        item["subnet"]
+    )
+
+    hook_path = (
+        f"{HOOK_DIR}/{item['id']}.sh"
+    )
+
+    ipp_path = (
+        f"{OPENVPN_DIR}/"
+        f"ipp-port-{item['id']}.txt"
+    )
+
+    log_path = (
+        f"{LOG_DIR}/"
+        f"openvpn-port-{item['id']}.log"
+    )
+
+    unique = [
+        "",
+        "# IRANGATE_OPENVPN_PORT_LOCATION_V1",
+        f"port {item['port']}",
+        "proto udp",
+        f"dev {item['interface']}",
+        (
+            f"server {network.network_address} "
+            "255.255.255.0"
+        ),
+        f"ifconfig-pool-persist {ipp_path}",
+        (
+            "management 127.0.0.1 "
+            f"{item['management_port']}"
+        ),
+        f"status {item['status_file']} 10",
+        f"log-append {log_path}",
+        "script-security 2",
+        f"client-connect {hook_path}",
+        "",
+    ]
+
+    return (
+        "\n".join(retained).rstrip()
+        + "\n"
+        + "\n".join(unique)
+    )
+
+
+def render_hook(
+    item: dict[str, Any],
+) -> str:
+    item_id = item["id"]
+
+    return f"""#!/bin/sh
+set -eu
+
+LOCATION_ID='{item_id}'
+CN="${{common_name:-}}"
+
+case "$CN" in
+  ""|*[!A-Za-z0-9._-]*)
+    echo "IranGate invalid common name" >&2
+    exit 1
+    ;;
+esac
+
+if [ -f "/etc/openvpn/blocked-clients/$CN" ]; then
+  echo "IranGate global quota/expiry block: $CN" >&2
+  exit 1
+fi
+
+CLIENT_JSON="/opt/irangate/database/clients/$CN.json"
+
+if [ ! -r "$CLIENT_JSON" ]; then
+  echo "IranGate client metadata missing: $CN" >&2
+  exit 1
+fi
+
+# IRANGATE_PORT_LOCATION_HOOK_FAILSAFE_STAGE7C
+if ! /usr/bin/python3 - "$CLIENT_JSON" "$LOCATION_ID" <<'ACL_PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+wanted = sys.argv[2]
+
+try:
+    data = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+except Exception:
+    raise SystemExit(1)
+
+selected = data.get(
+    "openvpn_port_locations",
+    [],
+)
+
+if not isinstance(selected, list):
+    raise SystemExit(1)
+
+normalized = {{
+    str(value).strip().lower().replace("_", "-")
+    for value in selected
+}}
+
+raise SystemExit(
+    0 if wanted in normalized else 1
+)
+ACL_PY
+then
+  echo "IranGate port location denied: $CN / $LOCATION_ID" >&2
+  exit 1
+fi
+
+exit 0
+"""
+
+
+def service_name(
+    item_id: str,
+) -> str:
+    return (
+        "openvpn@server-"
+        + item_id
+        + ".service"
+    )
+
+
+def config_path(
+    item_id: str,
+) -> str:
+    return (
+        f"{OPENVPN_DIR}/"
+        f"server-{item_id}.conf"
+    )
+
+
+def render_unit(
+    item: dict[str, Any],
+) -> str:
+    conf = config_path(
+        item["id"]
+    )
+
+    return f"""[Unit]
+Description=IranGate OpenVPN Port Location {item['id']}
+Documentation=man:openvpn(8)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+PrivateTmp=true
+WorkingDirectory=/etc/openvpn
+ExecStart=/usr/sbin/openvpn --config {conf}
+CapabilityBoundingSet={CAPABILITIES}
+LimitNPROC=10
+DeviceAllow=/dev/null rw
+DeviceAllow=/dev/net/tun rw
+ProtectSystem=true
+ProtectHome=true
+KillMode=process
+RestartSec=5s
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def render_boot_service() -> str:
+    return f"""[Unit]
+Description=IranGate OpenVPN Port Locations Runtime
+After=network-online.target openvpn@server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={RUNTIME_BIN} apply --boot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def touch_runtime_file(
+    path: pathlib.Path,
+    mode: int,
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    path.touch(
+        exist_ok=True,
+    )
+
+    os.chmod(
+        path,
+        mode,
+    )
+
+
+def fix_runtime_ownership(
+    base_config: str,
+    paths: list[pathlib.Path],
+) -> None:
+    if IS_TEST_ROOT:
+        return
+
+    username = "nobody"
+    groupname = config_runtime_group(
+        base_config
+    )
+
+    try:
+        uid = pwd.getpwnam(
+            username
+        ).pw_uid
+        gid = grp.getgrnam(
+            groupname
+        ).gr_gid
+    except KeyError:
+        log(
+            "Runtime user/group ownership "
+            "could not be resolved; skipped"
+        )
+        return
+
+    for path in paths:
+        try:
+            os.chown(
+                path,
+                uid,
+                gid,
+            )
+        except FileNotFoundError:
+            pass
+
+
+def systemctl(
+    *arguments: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess | None:
+    if IS_TEST_ROOT:
+        log(
+            "TEST ROOT: systemctl "
+            + " ".join(arguments)
+        )
+        return None
+
+    return run(
+        [
+            "systemctl",
+            *arguments,
+        ],
+        check=check,
+        capture=not check,
+    )
+
+
+def validate_openvpn_config(
+    path: pathlib.Path,
+) -> None:
+    if IS_TEST_ROOT:
+        return
+
+    binary = shutil.which(
+        "openvpn"
+    )
+
+    if not binary:
+        raise RuntimeError(
+            "openvpn binary not found"
+        )
+
+    result = run(
+        [
+            binary,
+            "--config",
+            str(path),
+            "--test-crypto",
+        ],
+        check=False,
+        capture=True,
+    )
+
+    output = (
+        result.stdout
+        or ""
+    )
+
+    if (
+        result.returncode != 0
+        and "Options error" in output
+    ):
+        raise RuntimeError(
+            f"OpenVPN config validation failed "
+            f"for {path}: {output.strip()}"
+        )
+
+
+def default_interface() -> str:
+    if IS_TEST_ROOT:
+        return "eth0"
+
+    result = run(
+        [
+            "ip",
+            "-4",
+            "route",
+            "show",
+            "default",
+        ],
+        check=False,
+        capture=True,
+    )
+
+    for line in (
+        result.stdout
+        or ""
+    ).splitlines():
+        parts = line.split()
+
+        if "dev" in parts:
+            index = parts.index("dev")
+
+            if index + 1 < len(parts):
+                return parts[index + 1]
+
+    raise RuntimeError(
+        "default network interface not found"
+    )
+
+
+def iptables(
+    arguments: list[str],
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess | None:
+    if IS_TEST_ROOT:
+        log(
+            "TEST ROOT: iptables "
+            + " ".join(arguments)
+        )
+        return None
+
+    return run(
+        [
+            "iptables",
+            *arguments,
+        ],
+        check=check,
+        capture=not check,
+    )
+
+
+def ensure_chain(
+    table: str | None,
+    chain: str,
+) -> None:
+    prefix = (
+        ["-t", table]
+        if table
+        else []
+    )
+
+    iptables(
+        prefix + [
+            "-N",
+            chain,
+        ],
+        check=False,
+    )
+
+    iptables(
+        prefix + [
+            "-F",
+            chain,
+        ],
+    )
+
+
+def ensure_jump(
+    table: str | None,
+    parent: str,
+    child: str,
+) -> None:
+    prefix = (
+        ["-t", table]
+        if table
+        else []
+    )
+
+    check_result = iptables(
+        prefix + [
+            "-C",
+            parent,
+            "-j",
+            child,
+        ],
+        check=False,
+    )
+
+    if (
+        not IS_TEST_ROOT
+        and check_result is not None
+        and check_result.returncode != 0
+    ):
+        iptables(
+            prefix + [
+                "-I",
+                parent,
+                "1",
+                "-j",
+                child,
+            ],
+        )
+
+
+def apply_firewall(
+    locations: list[dict[str, Any]],
+) -> None:
+    interface = default_interface()
+
+    ensure_chain(
+        None,
+        INPUT_CHAIN,
+    )
+    ensure_chain(
+        None,
+        FORWARD_CHAIN,
+    )
+    ensure_chain(
+        "nat",
+        NAT_CHAIN,
+    )
+
+    ensure_jump(
+        None,
+        "INPUT",
+        INPUT_CHAIN,
+    )
+    ensure_jump(
+        None,
+        "FORWARD",
+        FORWARD_CHAIN,
+    )
+    ensure_jump(
+        "nat",
+        "POSTROUTING",
+        NAT_CHAIN,
+    )
+
+    for item in locations:
+        if not item["enabled"]:
+            continue
+
+        iptables([
+            "-A",
+            INPUT_CHAIN,
+            "-p",
+            "udp",
+            "--dport",
+            str(item["port"]),
+            "-m",
+            "comment",
+            "--comment",
+            f"irangate-port-{item['id']}",
+            "-j",
+            "ACCEPT",
+        ])
+
+        iptables([
+            "-A",
+            FORWARD_CHAIN,
+            "-s",
+            item["subnet"],
+            "-j",
+            "ACCEPT",
+        ])
+
+        iptables([
+            "-A",
+            FORWARD_CHAIN,
+            "-d",
+            item["subnet"],
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ])
+
+        iptables([
+            "-t",
+            "nat",
+            "-A",
+            NAT_CHAIN,
+            "-s",
+            item["subnet"],
+            "!",
+            "-d",
+            item["subnet"],
+            "-o",
+            interface,
+            "-j",
+            "MASQUERADE",
+        ])
+
+
+def cleanup_firewall() -> None:
+    if IS_TEST_ROOT:
+        return
+
+    for table, parent, child in (
+        (None, "INPUT", INPUT_CHAIN),
+        (None, "FORWARD", FORWARD_CHAIN),
+        ("nat", "POSTROUTING", NAT_CHAIN),
+    ):
+        prefix = (
+            ["-t", table]
+            if table
+            else []
+        )
+
+        while True:
+            result = iptables(
+                prefix + [
+                    "-C",
+                    parent,
+                    "-j",
+                    child,
+                ],
+                check=False,
+            )
+
+            if (
+                result is None
+                or result.returncode != 0
+            ):
+                break
+
+            iptables(
+                prefix + [
+                    "-D",
+                    parent,
+                    "-j",
+                    child,
+                ],
+                check=False,
+            )
+
+    for table, chain in (
+        (None, INPUT_CHAIN),
+        (None, FORWARD_CHAIN),
+        ("nat", NAT_CHAIN),
+    ):
+        prefix = (
+            ["-t", table]
+            if table
+            else []
+        )
+
+        iptables(
+            prefix + [
+                "-F",
+                chain,
+            ],
+            check=False,
+        )
+
+        iptables(
+            prefix + [
+                "-X",
+                chain,
+            ],
+            check=False,
+        )
+
+
+def client_allows_location(
+    client_name: str,
+    item_id: str,
+) -> bool:
+    if (
+        rooted(
+            f"{OPENVPN_DIR}/"
+            f"blocked-clients/{client_name}"
+        ).exists()
+    ):
+        return False
+
+    path = rooted(
+        f"{CLIENT_DIR}/{client_name}.json"
+    )
+
+    try:
+        data = load_json(
+            path,
+            {},
+        )
+    except Exception:
+        return False
+
+    selected = data.get(
+        "openvpn_port_locations",
+        [],
+    )
+
+    if not isinstance(
+        selected,
+        list,
+    ):
+        return False
+
+    return item_id in {
+        location_id(value)
+        for value in selected
+    }
+
+
+def management_command(
+    port: int,
+    command: str,
+) -> str:
+    with socket.create_connection(
+        (
+            "127.0.0.1",
+            port,
+        ),
+        timeout=2,
+    ) as connection:
+        connection.settimeout(2)
+
+        try:
+            connection.recv(8192)
+        except socket.timeout:
+            pass
+
+        connection.sendall(
+            (
+                command.rstrip()
+                + "\n"
+            ).encode()
+        )
+
+        chunks: list[bytes] = []
+
+        while True:
+            try:
+                chunk = connection.recv(
+                    65536
+                )
+            except socket.timeout:
+                break
+
+            if not chunk:
+                break
+
+            chunks.append(chunk)
+
+            text = b"".join(
+                chunks
+            )
+
+            if (
+                b"\nEND\n" in text
+                or text.rstrip().endswith(
+                    b"END"
+                )
+                or b"SUCCESS:" in text
+                or b"ERROR:" in text
+            ):
+                break
+
+        try:
+            connection.sendall(
+                b"quit\n"
+            )
+        except OSError:
+            pass
+
+    return b"".join(
+        chunks
+    ).decode(
+        errors="ignore"
+    )
+
+
+def disconnect_disallowed(
+    item: dict[str, Any],
+) -> None:
+    if IS_TEST_ROOT:
+        return
+
+    try:
+        status = management_command(
+            item["management_port"],
+            "status 3",
+        )
+    except OSError:
+        return
+
+    names: set[str] = set()
+
+    for line in status.splitlines():
+        if not line.startswith(
+            "CLIENT_LIST,"
+        ):
+            continue
+
+        parts = line.split(",")
+
+        if len(parts) >= 2:
+            name = parts[1].strip()
+
+            if (
+                name
+                and name != "UNDEF"
+            ):
+                names.add(name)
+
+    for name in sorted(names):
+        if client_allows_location(
+            name,
+            item["id"],
+        ):
+            continue
+
+        try:
+            management_command(
+                item["management_port"],
+                f"kill {name}",
+            )
+            log(
+                f"Disconnected disallowed client "
+                f"{name} from {item['id']}"
+            )
+        except OSError:
+            pass
+
+
+def state_ids() -> set[str]:
+    state = load_json(
+        rooted(STATE_JSON),
+        {},
+    )
+
+    values = state.get(
+        "managed_ids",
+        [],
+    )
+
+    if not isinstance(values, list):
+        return set()
+
+    return {
+        location_id(value)
+        for value in values
+        if location_id(value)
+    }
+
+
+def remove_runtime_files(
+    item_id: str,
+) -> None:
+    paths = [
+        rooted(
+            config_path(item_id)
+        ),
+        rooted(
+            f"{HOOK_DIR}/{item_id}.sh"
+        ),
+        rooted(
+            f"{SYSTEMD_DIR}/"
+            f"{service_name(item_id)}"
+        ),
+        rooted(
+            f"{OPENVPN_DIR}/"
+            f"ipp-port-{item_id}.txt"
+        ),
+    ]
+
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def apply_runtime(
+    boot: bool,
+) -> None:
+    locations = load_locations()
+
+    enabled = [
+        item
+        for item in locations
+        if item["enabled"]
+    ]
+
+    base_config = read_base_config()
+
+    rooted(OPENVPN_DIR).mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    rooted(HOOK_DIR).mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    rooted(LOG_DIR).mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    rooted(SYSTEMD_DIR).mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    rooted(
+        pathlib.PurePosixPath(
+            STATE_JSON
+        ).parent.as_posix()
+    ).mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    previous_ids = state_ids()
+
+    enabled_ids = {
+        item["id"]
+        for item in enabled
+    }
+
+    stale_ids = (
+        previous_ids
+        - enabled_ids
+    )
+
+    atomic_write(
+        rooted(BOOT_SERVICE),
+        render_boot_service(),
+        0o644,
+    )
+
+    for item_id in sorted(stale_ids):
+        systemctl(
+            "disable",
+            "--now",
+            service_name(item_id),
+            check=False,
+        )
+
+        remove_runtime_files(
+            item_id
+        )
+
+    runtime_files: list[
+        pathlib.Path
+    ] = []
+
+    for item in enabled:
+        item_id = item["id"]
+
+        conf_path = rooted(
+            config_path(item_id)
+        )
+
+        hook_path = rooted(
+            f"{HOOK_DIR}/{item_id}.sh"
+        )
+
+        unit_path = rooted(
+            f"{SYSTEMD_DIR}/"
+            f"{service_name(item_id)}"
+        )
+
+        status_path = rooted(
+            item["status_file"]
+        )
+
+        ipp_path = rooted(
+            f"{OPENVPN_DIR}/"
+            f"ipp-port-{item_id}.txt"
+        )
+
+        log_path = rooted(
+            f"{LOG_DIR}/"
+            f"openvpn-port-{item_id}.log"
+        )
+
+        atomic_write(
+            conf_path,
+            render_server_config(
+                base_config,
+                item,
+            ),
+            0o600,
+        )
+
+        atomic_write(
+            hook_path,
+            render_hook(item),
+            0o750,
+        )
+
+        atomic_write(
+            unit_path,
+            render_unit(item),
+            0o644,
+        )
+
+        touch_runtime_file(
+            status_path,
+            0o640,
+        )
+        touch_runtime_file(
+            ipp_path,
+            0o640,
+        )
+        touch_runtime_file(
+            log_path,
+            0o640,
+        )
+
+        fix_runtime_ownership(
+            base_config,
+            [
+                status_path,
+                ipp_path,
+                log_path,
+            ],
+        )
+
+        validate_openvpn_config(
+            conf_path
+        )
+
+        runtime_files.extend([
+            conf_path,
+            hook_path,
+            unit_path,
+            status_path,
+            ipp_path,
+            log_path,
+        ])
+
+    systemctl(
+        "daemon-reload",
+    )
+
+    for item in enabled:
+        unit = service_name(
+            item["id"]
+        )
+
+        systemctl(
+            "enable",
+            unit,
+        )
+
+        systemctl(
+            "restart",
+            unit,
+        )
+
+        if not IS_TEST_ROOT:
+            result = systemctl(
+                "is-active",
+                "--quiet",
+                unit,
+                check=False,
+            )
+
+            if (
+                result is None
+                or result.returncode != 0
+            ):
+                raise RuntimeError(
+                    f"OpenVPN service failed: {unit}"
+                )
+
+    apply_firewall(
+        enabled
+    )
+
+    if not boot:
+        systemctl(
+            "enable",
+            "irangate-openvpn-port-locations.service",
+        )
+
+    for item in enabled:
+        disconnect_disallowed(
+            item
+        )
+
+    save_json(
+        rooted(STATE_JSON),
+        {
+            "version": 1,
+            "managed_ids": sorted(
+                enabled_ids
+            ),
+            "updated_at": now_iso(),
+            "test_root": (
+                str(ROOT)
+                if IS_TEST_ROOT
+                else ""
+            ),
+        },
+        0o600,
+    )
+
+    log(
+        "Applied OpenVPN port locations: "
+        + (
+            ", ".join(
+                sorted(enabled_ids)
+            )
+            if enabled_ids
+            else "none"
+        )
+    )
+
+
+def cleanup_runtime() -> None:
+    ids = state_ids()
+
+    for item_id in sorted(ids):
+        systemctl(
+            "disable",
+            "--now",
+            service_name(item_id),
+            check=False,
+        )
+
+        remove_runtime_files(
+            item_id
+        )
+
+    cleanup_firewall()
+
+    try:
+        rooted(
+            STATE_JSON
+        ).unlink()
+    except FileNotFoundError:
+        pass
+
+    systemctl(
+        "daemon-reload",
+        check=False,
+    )
+
+    log(
+        "OpenVPN port location runtime removed"
+    )
+
+
+def status_runtime() -> None:
+    locations = load_locations()
+
+    output = []
+
+    for item in locations:
+        unit = service_name(
+            item["id"]
+        )
+
+        active = False
+
+        if not IS_TEST_ROOT:
+            result = systemctl(
+                "is-active",
+                "--quiet",
+                unit,
+                check=False,
+            )
+
+            active = (
+                result is not None
+                and result.returncode == 0
+            )
+
+        output.append({
+            "id": item["id"],
+            "enabled": item["enabled"],
+            "service": unit,
+            "active": active,
+            "config_exists": rooted(
+                config_path(item["id"])
+            ).exists(),
+            "hook_exists": rooted(
+                f"{HOOK_DIR}/{item['id']}.sh"
+            ).exists(),
+            "port": item["port"],
+            "interface": item["interface"],
+            "subnet": item["subnet"],
+            "management_port": item[
+                "management_port"
+            ],
+        })
+
+    print(
+        json.dumps(
+            output,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "IranGate OpenVPN "
+            "Port Location Runtime"
+        )
+    )
+
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+    )
+
+    apply_parser = sub.add_parser(
+        "apply"
+    )
+    apply_parser.add_argument(
+        "--boot",
+        action="store_true",
+    )
+
+    sub.add_parser(
+        "status"
+    )
+
+    sub.add_parser(
+        "cleanup"
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "apply":
+        apply_runtime(
+            bool(args.boot)
+        )
+    elif args.command == "status":
+        status_runtime()
+    elif args.command == "cleanup":
+        cleanup_runtime()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(
+            f"OpenVPN port location runtime failed: {error}",
+            file=sys.stderr,
+        )
+        raise
