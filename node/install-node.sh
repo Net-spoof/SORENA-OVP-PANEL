@@ -2106,10 +2106,31 @@ start_services() {
 
 
 install_vpn_direct_bypass() {
-  # IRANGATE_VPN_DIRECT_BYPASS_NODE_V1
+  # IRANGATE_VPN_DIRECT_BYPASS_NODE_LOCAL_FIRST_V2
+  local script_dir
+  local repo_root
+  local local_installer
   local raw_base
   local installer_url
   local temp_installer
+
+  script_dir="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+    pwd
+  )"
+
+  repo_root="$(
+    cd -- "$script_dir/.." &&
+    pwd
+  )"
+
+  local_installer="$repo_root/scripts/install-vpn-direct-bypass.sh"
+
+  if [ -f "$local_installer" ]; then
+    bash -n "$local_installer"
+    bash "$local_installer" node
+    return 0
+  fi
 
   raw_base="${IRANGATE_RAW_BASE:-https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat}"
   installer_url="${raw_base}/scripts/install-vpn-direct-bypass.sh"
@@ -2124,7 +2145,7 @@ install_vpn_direct_bypass() {
       "$installer_url"
   then
     rm -f "$temp_installer"
-    echo "Unable to download VPN direct bypass installer" >&2
+    echo "Unable to obtain VPN direct bypass installer" >&2
     return 1
   fi
 
