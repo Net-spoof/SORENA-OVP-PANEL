@@ -2999,6 +2999,22 @@ view_logs() {
     done
 }
 
+
+# IRANGATE_NODE_MIGRATION_MENU_V1
+restore_replaced_node() {
+    local helper
+
+    helper="/usr/local/bin/irangate-node-migrate-restore"
+
+    if [[ ! -x "$helper" ]]; then
+        echo -e "${RED}Node migration helper not found.${NC}"
+        echo "$helper"
+        return 1
+    fi
+
+    "$helper"
+}
+
 create_backup() {
     local exporter
     local importer
@@ -4312,8 +4328,9 @@ menu() {
         echo " 13) Update Panel"
         echo " 14) Backup Panel"
         echo " 15) Restore Backup"
+        echo " 16) Restore Replaced Node"
         echo
-        echo " 16) Uninstall IranGate"
+        echo " 17) Uninstall IranGate"
         echo
         echo "  0) Exit"
         echo
@@ -4337,7 +4354,8 @@ menu() {
             13) update_panel; pause ;;
             14) create_backup; pause ;;
             15) restore_backup; pause ;;
-            16) full_uninstall ;;
+            16) restore_replaced_node; pause ;;
+            17) full_uninstall ;;
             0) exit 0 ;;
             *)
                 echo "Invalid option."
@@ -4350,6 +4368,10 @@ menu() {
 require_root
 
 case "${1:-}" in
+    --restore-replaced-node)
+        /usr/local/bin/irangate-node-migrate-restore
+        ;;
+
     --rebuild-nginx)
         echo -e "${CYAN}Rebuilding Nginx configuration from webpanel.env...${NC}"
 
@@ -4367,7 +4389,7 @@ case "${1:-}" in
         ;;
 
     *)
-        echo "Usage: ovp-panel [--rebuild-nginx]"
+        echo "Usage: ovp-panel [--rebuild-nginx|--restore-replaced-node]"
         exit 2
         ;;
 esac

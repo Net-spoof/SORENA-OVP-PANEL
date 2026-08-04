@@ -1,0 +1,1095 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import hmac
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+NODES_PATH = Path("/opt/irangate/webpanel/nodes.json")
+
+BACKUP_DIRECTORIES = (
+    Path("/opt/irangate/webpanel/backups/backups"),
+    Path("/opt/irangate/backups/v2"),
+)
+
+EXPORTER = Path("/usr/local/bin/irangate-backup-v2-export")
+
+RESTORE_PATH = "/backup/restore"
+STATUS_PATH = "/status"
+
+MAX_ARCHIVE_BYTES = 1_500_000_000
+MAX_NESTED_BYTES = 200_000_000
+MAX_SNAPSHOT_BYTES = 2_000_000_000
+MAX_CANDIDATES = 30
+
+LOCK_DIRECTORY = Path(
+    "/run/irangate-node-migrate-restore.lock"
+)
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def load_json(path: Path) -> Any:
+    return json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+
+def load_nodes() -> list[dict[str, Any]]:
+    if not NODES_PATH.is_file():
+        fail(f"nodes database not found: {NODES_PATH}")
+
+    data = load_json(NODES_PATH)
+
+    if isinstance(data, dict):
+        nodes = data.get("nodes", data)
+    else:
+        nodes = data
+
+    if isinstance(nodes, dict):
+        nodes = list(nodes.values())
+
+    if not isinstance(nodes, list):
+        fail("invalid nodes database structure")
+
+    result: list[dict[str, Any]] = []
+
+    for item in nodes:
+        if not isinstance(item, dict):
+            continue
+
+        if not bool(item.get("enabled", True)):
+            continue
+
+        if bool(item.get("is_local", False)):
+            continue
+
+        if str(item.get("agent_url", "")).strip() == "local":
+            continue
+
+        if not str(item.get("id", "")).strip():
+            continue
+
+        result.append(item)
+
+    return result
+
+
+def redact_node(node: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(node)
+
+    for key in list(safe):
+        lowered = key.lower()
+
+        if any(
+            word in lowered
+            for word in (
+                "token",
+                "secret",
+                "password",
+                "key",
+            )
+        ):
+            safe[key] = "***"
+
+    return safe
+
+
+def choose_node(
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not nodes:
+        fail("no enabled remote nodes found")
+
+    requested = ""
+
+    args = sys.argv[1:]
+
+    if len(args) >= 2 and args[0] == "--node":
+        requested = args[1].strip()
+
+    if requested:
+        for node in nodes:
+            if str(node.get("id", "")).strip() == requested:
+                return node
+
+        fail(f"requested node not found: {requested}")
+
+    print()
+    print("Available remote nodes:")
+    print()
+
+    for index, node in enumerate(nodes, start=1):
+        node_id = str(node.get("id", "")).strip()
+        name = str(node.get("name", "")).strip()
+        public_ip = str(node.get("public_ip", "")).strip()
+        agent_url = str(node.get("agent_url", "")).strip()
+
+        print(
+            f" {index:2d}) {node_id} | {name} | "
+            f"{public_ip or '-'} | {agent_url}"
+        )
+
+    print()
+    raw = input("Select node: ").strip()
+
+    if not raw.isdigit():
+        fail("invalid node selection")
+
+    selection = int(raw)
+
+    if not 1 <= selection <= len(nodes):
+        fail("node selection is out of range")
+
+    return nodes[selection - 1]
+
+
+def safe_node_directory(node_id: str) -> str:
+    value = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        node_id.strip(),
+    ).strip("._-")
+
+    if not value:
+        fail("node id cannot be converted to directory name")
+
+    return value
+
+
+def parse_time(value: Any) -> float:
+    if not value:
+        return 0.0
+
+    try:
+        normalized = str(value).strip().replace(
+            "Z",
+            "+00:00",
+        )
+
+        return datetime.fromisoformat(
+            normalized
+        ).timestamp()
+    except Exception:
+        return 0.0
+
+
+def read_member_json(
+    archive: tarfile.TarFile,
+    member: tarfile.TarInfo,
+) -> dict[str, Any] | None:
+    handle = archive.extractfile(member)
+
+    if handle is None:
+        return None
+
+    try:
+        data = json.loads(
+            handle.read().decode("utf-8")
+        )
+    except Exception:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+def scan_tar_bytes(
+    raw: bytes,
+    *,
+    outer_archive: Path,
+    location: str,
+    node_id: str,
+    node_directory: str,
+    depth: int = 0,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+
+    try:
+        archive = tarfile.open(
+            fileobj=io.BytesIO(raw),
+            mode="r:*",
+        )
+    except tarfile.TarError:
+        return results
+
+    with archive:
+        members = [
+            member
+            for member in archive.getmembers()
+            if member.isfile()
+        ]
+
+        expected_suffix = (
+            f"nodes/{node_directory}/"
+            "snapshot.tar.gz.enc"
+        )
+
+        snapshot_members = [
+            member
+            for member in members
+            if member.name.endswith(expected_suffix)
+        ]
+
+        metadata_members = [
+            member
+            for member in members
+            if member.name.endswith(
+                f"nodes/{node_directory}/metadata.json"
+            )
+        ]
+
+        metadata: dict[str, Any] = {}
+
+        if metadata_members:
+            metadata = (
+                read_member_json(
+                    archive,
+                    metadata_members[0],
+                )
+                or {}
+            )
+
+        for member in snapshot_members:
+            handle = archive.extractfile(member)
+
+            if handle is None:
+                continue
+
+            snapshot = handle.read(
+                MAX_SNAPSHOT_BYTES + 1
+            )
+
+            if not snapshot:
+                continue
+
+            if len(snapshot) > MAX_SNAPSHOT_BYTES:
+                fail(
+                    "node snapshot exceeds allowed size"
+                )
+
+            actual_sha = hashlib.sha256(
+                snapshot
+            ).hexdigest()
+
+            expected_sha = str(
+                metadata.get("snapshot_sha256", "")
+            ).strip().lower()
+
+            if expected_sha and not hmac.compare_digest(
+                expected_sha,
+                actual_sha,
+            ):
+                fail(
+                    "snapshot checksum mismatch in archive: "
+                    + str(outer_archive)
+                )
+
+            captured_at = str(
+                metadata.get("captured_at")
+                or metadata.get("created_at")
+                or ""
+            ).strip()
+
+            results.append(
+                {
+                    "outer_archive": str(
+                        outer_archive
+                    ),
+                    "location": location,
+                    "snapshot_member": member.name,
+                    "source_agent_url": str(
+                        metadata.get(
+                            "source_agent_url",
+                            "",
+                        )
+                    ).strip(),
+                    "source_public_ip": str(
+                        metadata.get(
+                            "source_public_ip",
+                            "",
+                        )
+                    ).strip(),
+                    "captured_at": captured_at,
+                    "captured_epoch": parse_time(
+                        captured_at
+                    ),
+                    "outer_mtime": (
+                        outer_archive.stat().st_mtime
+                    ),
+                    "snapshot_size": len(snapshot),
+                    "snapshot_sha256": actual_sha,
+                    "snapshot_bytes": snapshot,
+                    "node_id": node_id,
+                }
+            )
+
+        if depth < 2:
+            nested_members = [
+                member
+                for member in members
+                if (
+                    member.size > 0
+                    and member.size <= MAX_NESTED_BYTES
+                    and member.name.lower().endswith(
+                        (".tar.gz", ".tgz")
+                    )
+                )
+            ]
+
+            for nested in nested_members:
+                handle = archive.extractfile(nested)
+
+                if handle is None:
+                    continue
+
+                nested_raw = handle.read(
+                    MAX_NESTED_BYTES + 1
+                )
+
+                if len(nested_raw) > MAX_NESTED_BYTES:
+                    continue
+
+                results.extend(
+                    scan_tar_bytes(
+                        nested_raw,
+                        outer_archive=outer_archive,
+                        location=(
+                            location
+                            + "!"
+                            + nested.name
+                        ),
+                        node_id=node_id,
+                        node_directory=node_directory,
+                        depth=depth + 1,
+                    )
+                )
+
+    return results
+
+
+def collect_candidates(
+    node_id: str,
+) -> list[dict[str, Any]]:
+    node_directory = safe_node_directory(node_id)
+    archives: list[Path] = []
+
+    for directory in BACKUP_DIRECTORIES:
+        if not directory.is_dir():
+            continue
+
+        archives.extend(
+            path
+            for path in directory.glob("*.tar.gz")
+            if path.is_file()
+        )
+
+    archives = sorted(
+        set(archives),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    results: list[dict[str, Any]] = []
+
+    for archive_path in archives:
+        size = archive_path.stat().st_size
+
+        if size <= 0 or size > MAX_ARCHIVE_BYTES:
+            continue
+
+        try:
+            raw = archive_path.read_bytes()
+        except Exception as exc:
+            print(
+                f"Warning: cannot read {archive_path}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        results.extend(
+            scan_tar_bytes(
+                raw,
+                outer_archive=archive_path,
+                location=archive_path.name,
+                node_id=node_id,
+                node_directory=node_directory,
+            )
+        )
+
+    unique: dict[
+        tuple[str, str, str],
+        dict[str, Any],
+    ] = {}
+
+    for item in results:
+        key = (
+            item["snapshot_sha256"],
+            item["source_agent_url"],
+            item["source_public_ip"],
+        )
+
+        existing = unique.get(key)
+
+        if existing is None:
+            unique[key] = item
+            continue
+
+        existing_sort = (
+            existing["captured_epoch"],
+            existing["outer_mtime"],
+        )
+
+        item_sort = (
+            item["captured_epoch"],
+            item["outer_mtime"],
+        )
+
+        if item_sort > existing_sort:
+            unique[key] = item
+
+    candidates = list(unique.values())
+
+    candidates.sort(
+        key=lambda item: (
+            item["captured_epoch"],
+            item["outer_mtime"],
+        ),
+        reverse=True,
+    )
+
+    return candidates[:MAX_CANDIDATES]
+
+
+def normalized_url(value: str) -> str:
+    raw = value.strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(raw)
+
+    if parsed.scheme not in {"http", "https"}:
+        fail("node agent URL must use HTTP or HTTPS")
+
+    if not parsed.hostname:
+        fail("node agent URL has no hostname")
+
+    return raw
+
+
+def candidate_is_current(
+    candidate: dict[str, Any],
+    current_node: dict[str, Any],
+) -> bool:
+    source_agent = str(
+        candidate.get("source_agent_url", "")
+    ).strip().rstrip("/")
+
+    source_ip = str(
+        candidate.get("source_public_ip", "")
+    ).strip()
+
+    current_agent = str(
+        current_node.get("agent_url", "")
+    ).strip().rstrip("/")
+
+    current_ip = str(
+        current_node.get("public_ip", "")
+    ).strip()
+
+    return bool(
+        (
+            source_agent
+            and current_agent
+            and source_agent == current_agent
+        )
+        or (
+            source_ip
+            and current_ip
+            and source_ip == current_ip
+        )
+    )
+
+
+def choose_candidate(
+    candidates: list[dict[str, Any]],
+    current_node: dict[str, Any],
+) -> dict[str, Any]:
+    if not candidates:
+        fail(
+            "no snapshots were found for selected node"
+        )
+
+    default_index = 0
+
+    for index, candidate in enumerate(candidates):
+        if not candidate_is_current(
+            candidate,
+            current_node,
+        ):
+            default_index = index
+            break
+
+    print()
+    print("Available snapshots:")
+    print()
+
+    for index, candidate in enumerate(
+        candidates,
+        start=1,
+    ):
+        label = (
+            "CURRENT SERVER"
+            if candidate_is_current(
+                candidate,
+                current_node,
+            )
+            else "OLD/OTHER SERVER"
+        )
+
+        captured = (
+            candidate["captured_at"]
+            or datetime.fromtimestamp(
+                candidate["outer_mtime"],
+                tz=timezone.utc,
+            ).isoformat()
+        )
+
+        print(
+            f" {index:2d}) [{label}] "
+            f"{captured}"
+        )
+        print(
+            "     Source: "
+            + (
+                candidate["source_public_ip"]
+                or "-"
+            )
+            + " | "
+            + (
+                candidate["source_agent_url"]
+                or "-"
+            )
+        )
+        print(
+            "     Archive: "
+            + candidate["outer_archive"]
+        )
+        print(
+            "     Snapshot SHA: "
+            + candidate["snapshot_sha256"][:16]
+            + "..."
+        )
+
+    print()
+    raw = input(
+        f"Select snapshot [{default_index + 1}]: "
+    ).strip()
+
+    if not raw:
+        selection = default_index + 1
+    elif raw.isdigit():
+        selection = int(raw)
+    else:
+        fail("invalid snapshot selection")
+
+    if not 1 <= selection <= len(candidates):
+        fail("snapshot selection is out of range")
+
+    return candidates[selection - 1]
+
+
+def node_status(
+    agent_url: str,
+    token: str,
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        agent_url + STATUS_PATH,
+        headers={
+            "Authorization": "Bearer " + token,
+            "User-Agent": (
+                "IranGate-Node-Migration"
+            ),
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=20,
+        ) as response:
+            data = json.loads(
+                response.read().decode("utf-8")
+            )
+    except urllib.error.HTTPError as exc:
+        body = exc.read(2048).decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        fail(
+            f"node status HTTP {exc.code}: {body}"
+        )
+    except Exception as exc:
+        fail(f"node status failed: {exc}")
+
+    if not isinstance(data, dict):
+        fail("invalid node status response")
+
+    if not data.get("success"):
+        fail("node status returned success=false")
+
+    return data
+
+
+def node_signature(
+    token: str,
+    timestamp: int,
+    content_sha: str,
+) -> str:
+    message = (
+        "POST\n"
+        f"{RESTORE_PATH}\n"
+        f"{timestamp}\n"
+        f"{content_sha}"
+    )
+
+    return hmac.new(
+        token.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def restore_request(
+    *,
+    agent_url: str,
+    token: str,
+    snapshot_path: Path,
+    validate_only: bool,
+) -> dict[str, Any]:
+    snapshot = snapshot_path.read_bytes()
+    snapshot_sha = hashlib.sha256(
+        snapshot
+    ).hexdigest()
+
+    timestamp = int(time.time())
+    signature = node_signature(
+        token,
+        timestamp,
+        snapshot_sha,
+    )
+
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "X-IranGate-Timestamp": str(timestamp),
+        "X-IranGate-Signature": signature,
+        "X-IranGate-Content-SHA256": snapshot_sha,
+        "User-Agent": "IranGate-Node-Migration",
+    }
+
+    if validate_only:
+        headers["X-IranGate-Restore-Mode"] = (
+            "validate"
+        )
+
+    request = urllib.request.Request(
+        agent_url + RESTORE_PATH,
+        data=snapshot,
+        method="POST",
+        headers=headers,
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=1200,
+        ) as response:
+            body = response.read().decode(
+                "utf-8"
+            )
+    except urllib.error.HTTPError as exc:
+        body = exc.read(4096).decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        fail(
+            f"node restore HTTP {exc.code}: {body}"
+        )
+    except Exception as exc:
+        fail(f"node restore request failed: {exc}")
+
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        fail(
+            "invalid node restore JSON response: "
+            + str(exc)
+            + " | "
+            + body[:1000]
+        )
+
+    if not isinstance(data, dict):
+        fail("invalid node restore response")
+
+    if not data.get("success"):
+        fail(
+            "node restore returned success=false: "
+            + json.dumps(
+                data,
+                ensure_ascii=False,
+            )
+        )
+
+    return data
+
+
+def run_exporter() -> Path:
+    if not EXPORTER.is_file():
+        fail(f"backup exporter not found: {EXPORTER}")
+
+    result = subprocess.run(
+        [str(EXPORTER)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    if result.stderr.strip():
+        print(
+            result.stderr.strip(),
+            file=sys.stderr,
+        )
+
+    if result.stdout.strip():
+        print(result.stdout.strip())
+
+    if result.returncode != 0:
+        fail(
+            "master safety backup failed with "
+            f"exit code {result.returncode}"
+        )
+
+    paths = [
+        Path(line.strip())
+        for line in result.stdout.splitlines()
+        if line.strip().startswith(
+            "/opt/irangate/backups/v2/"
+        )
+        and line.strip().endswith(".tar.gz")
+    ]
+
+    if not paths:
+        fail(
+            "backup exporter succeeded but output "
+            "archive path was not found"
+        )
+
+    archive = paths[-1]
+
+    if not archive.is_file() or archive.stat().st_size <= 0:
+        fail(
+            "created backup archive is missing or empty"
+        )
+
+    return archive
+
+
+def acquire_lock() -> None:
+    try:
+        LOCK_DIRECTORY.mkdir(
+            parents=False,
+            exist_ok=False,
+        )
+    except FileExistsError:
+        fail(
+            "another node migration restore appears "
+            "to be running"
+        )
+
+
+def release_lock() -> None:
+    shutil.rmtree(
+        LOCK_DIRECTORY,
+        ignore_errors=True,
+    )
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        fail("run this command as root")
+
+    acquire_lock()
+
+    try:
+        nodes = load_nodes()
+        node = choose_node(nodes)
+
+        node_id = str(node.get("id", "")).strip()
+        agent_url = normalized_url(
+            str(node.get("agent_url", ""))
+        )
+        token = str(node.get("token", "")).strip()
+
+        if len(token) < 16:
+            fail("selected node token is missing")
+
+        print()
+        print("Current target node:")
+        print(
+            json.dumps(
+                redact_node(node),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        candidates = collect_candidates(node_id)
+        candidate = choose_candidate(
+            candidates,
+            node,
+        )
+
+        stamp = datetime.now(
+            timezone.utc
+        ).strftime("%Y%m%dT%H%M%SZ")
+
+        work = Path(
+            f"/root/irangate-node-migration-{node_id}-{stamp}"
+        )
+
+        work.mkdir(
+            parents=True,
+            mode=0o700,
+        )
+
+        snapshot_path = (
+            work / "selected-snapshot.tar.gz.enc"
+        )
+
+        snapshot_bytes = candidate.pop(
+            "snapshot_bytes"
+        )
+
+        snapshot_path.write_bytes(
+            snapshot_bytes
+        )
+        snapshot_path.chmod(0o600)
+
+        selected_info = (
+            work / "selected-snapshot.json"
+        )
+
+        selected_info.write_text(
+            json.dumps(
+                candidate,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        selected_info.chmod(0o600)
+
+        print()
+        print("Selected snapshot:")
+        print(
+            json.dumps(
+                candidate,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print()
+        print("Checking new node...")
+        status_before = node_status(
+            agent_url,
+            token,
+        )
+        print(
+            json.dumps(
+                status_before,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        confirmation = input(
+            "\nType RESTORE "
+            + node_id
+            + " to continue: "
+        ).strip()
+
+        if confirmation != f"RESTORE {node_id}":
+            print("Restore cancelled.")
+            return 0
+
+        print()
+        print(
+            "Creating master safety backup before restore..."
+        )
+        safety_master = run_exporter()
+        print(
+            "Master safety backup:",
+            safety_master,
+        )
+
+        print()
+        print("Validating selected node snapshot...")
+        validation = restore_request(
+            agent_url=agent_url,
+            token=token,
+            snapshot_path=snapshot_path,
+            validate_only=True,
+        )
+
+        if not validation.get("validated_only"):
+            fail(
+                "restore endpoint did not validate only"
+            )
+
+        print(
+            json.dumps(
+                validation,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print()
+        print("Applying selected node snapshot...")
+        applied = restore_request(
+            agent_url=agent_url,
+            token=token,
+            snapshot_path=snapshot_path,
+            validate_only=False,
+        )
+
+        if not applied.get("restored"):
+            fail("node snapshot was not applied")
+
+        if not applied.get("openvpn_active"):
+            fail(
+                "OpenVPN is not active after node restore"
+            )
+
+        print(
+            json.dumps(
+                applied,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        time.sleep(3)
+
+        print()
+        print("Checking new node after restore...")
+        status_after = node_status(
+            agent_url,
+            token,
+        )
+        print(
+            json.dumps(
+                status_after,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        print()
+        print(
+            "Creating final master backup after restore..."
+        )
+        final_master = run_exporter()
+
+        result = {
+            "success": True,
+            "node_id": node_id,
+            "current_agent_url": agent_url,
+            "selected_archive": candidate[
+                "outer_archive"
+            ],
+            "selected_source_agent_url": candidate[
+                "source_agent_url"
+            ],
+            "selected_source_public_ip": candidate[
+                "source_public_ip"
+            ],
+            "selected_captured_at": candidate[
+                "captured_at"
+            ],
+            "safety_master_backup": str(
+                safety_master
+            ),
+            "node_safety_backup": applied.get(
+                "safety_backup"
+            ),
+            "final_master_backup": str(
+                final_master
+            ),
+            "work_directory": str(work),
+            "counts": applied.get("counts"),
+            "completed_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+
+        result_path = work / "result.json"
+        result_path.write_text(
+            json.dumps(
+                result,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result_path.chmod(0o600)
+
+        print()
+        print("=" * 50)
+        print(" NODE MIGRATION RESTORE COMPLETED ✅")
+        print("=" * 50)
+        print(
+            json.dumps(
+                result,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
+    finally:
+        release_lock()
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        raise SystemExit(130)
+    except Exception as exc:
+        print(
+            f"Node migration restore failed: {exc} ❌",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
