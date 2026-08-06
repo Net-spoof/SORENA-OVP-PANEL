@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+readonly IRANGATE_NODE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 set -euo pipefail
 
 ENV_FILE="/etc/irangate-node-agent.env"
@@ -2114,10 +2115,7 @@ install_vpn_direct_bypass() {
   local installer_url
   local temp_installer
 
-  script_dir="$(
-    cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
-    pwd
-  )"
+  script_dir="$IRANGATE_NODE_SCRIPT_DIR"
 
   repo_root="$(
     cd -- "$script_dir/.." &&
