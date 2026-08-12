@@ -1,0 +1,11 @@
+[Unit]
+Description=Run IranGate retention cleanup daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=10m
+Unit=irangate-retention-cleanup.service
+
+[Install]
+WantedBy=timers.target

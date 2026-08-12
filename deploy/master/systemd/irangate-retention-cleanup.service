@@ -1,0 +1,6 @@
+[Unit]
+Description=IranGate 3-day backup and journal retention
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-retention-cleanup

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+SCRIPT_DIR="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+    pwd
+)"
+
+SYSTEMD_DIR="$SCRIPT_DIR/../systemd"
+
+install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/irangate-retention-cleanup" \
+    /usr/local/sbin/irangate-retention-cleanup
+
+install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/irangate-syslog-guard" \
+    /usr/local/sbin/irangate-syslog-guard
+
+for UNIT in \
+    irangate-retention-cleanup.service \
+    irangate-retention-cleanup.timer \
+    irangate-syslog-guard.service \
+    irangate-syslog-guard.timer
+do
+    install \
+        -o root \
+        -g root \
+        -m 0644 \
+        "$SYSTEMD_DIR/$UNIT" \
+        "/etc/systemd/system/$UNIT"
+done
+
+mkdir -p /etc/systemd/journald.conf.d
+
+cat >/etc/systemd/journald.conf.d/90-irangate-retention.conf <<'CONF'
+[Journal]
+SystemMaxUse=300M
+RuntimeMaxUse=100M
+MaxRetentionSec=3day
+CONF
+
+systemctl daemon-reload
+
+systemctl enable \
+    irangate-retention-cleanup.timer \
+    irangate-syslog-guard.timer
+
+systemctl restart systemd-journald || true
+
+systemctl start \
+    irangate-retention-cleanup.timer \
+    irangate-syslog-guard.timer
+
+echo "IranGate maintenance guards installed ✅"

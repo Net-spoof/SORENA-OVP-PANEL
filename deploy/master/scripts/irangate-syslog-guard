@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SYSLOG="/var/log/syslog"
+MAX_BYTES=$((100 * 1024 * 1024))
+
+[ -f "$SYSLOG" ] || exit 0
+
+SIZE="$(stat -c '%s' "$SYSLOG" 2>/dev/null || echo 0)"
+
+if [ "$SIZE" -ge "$MAX_BYTES" ]; then
+
+    SAMPLE="/var/log/irangate-syslog-overflow-sample.log"
+
+    tail -n 10000 "$SYSLOG" \
+        >"${SAMPLE}.tmp" 2>/dev/null || true
+
+    mv -f \
+        "${SAMPLE}.tmp" \
+        "$SAMPLE" \
+        2>/dev/null || true
+
+    truncate -s 0 "$SYSLOG"
+
+    logger \
+        -t irangate-syslog-guard \
+        "syslog exceeded 100 MiB and was truncated"
+fi
+
+find /var/log \
+    -maxdepth 1 \
+    -type f \
+    \( \
+        -name 'syslog.*' -o \
+        -name 'btmp.*' \
+    \) \
+    -mtime +3 \
+    -delete \
+    2>/dev/null || true

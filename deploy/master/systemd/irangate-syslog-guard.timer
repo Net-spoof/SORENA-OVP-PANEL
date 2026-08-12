@@ -1,0 +1,11 @@
+[Unit]
+Description=Check IranGate syslog disk usage hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=2m
+Unit=irangate-syslog-guard.service
+
+[Install]
+WantedBy=timers.target

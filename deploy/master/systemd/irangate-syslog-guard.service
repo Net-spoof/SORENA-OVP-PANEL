@@ -1,0 +1,6 @@
+[Unit]
+Description=IranGate syslog disk protection
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-syslog-guard

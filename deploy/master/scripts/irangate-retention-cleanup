@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+RETENTION_MINUTES=4320
+
+for ROOT in \
+    /opt/irangate/backups/v2 \
+    /root
+do
+    [ -d "$ROOT" ] || continue
+
+    find "$ROOT" \
+        -maxdepth 2 \
+        -type f \
+        -name 'irangate-backup-v2-*.tar.gz' \
+        -mmin "+${RETENTION_MINUTES}" \
+        -print \
+        -delete
+done
+
+if [ -d /opt/irangate/database/backups ]; then
+    find /opt/irangate/database/backups \
+        -maxdepth 1 \
+        -type f \
+        -name 'backup_*.json' \
+        -mmin "+${RETENTION_MINUTES}" \
+        -print \
+        -delete
+fi
+
+find /root \
+    -mindepth 1 \
+    -maxdepth 1 \
+    \( \
+        -name 'irangate-*-backup-*' -o \
+        -name 'irangate-backup-*' -o \
+        -name 'irangate-*-before-*' -o \
+        -name 'irangate-*-rollback-*' -o \
+        -name 'irangate-*-safety-*' -o \
+        -name 'irangate-sub-usage-fix-*' -o \
+        -name 'irangate-case-sub-log-fix-*' \
+    \) \
+    -mmin "+${RETENTION_MINUTES}" \
+    -print0 \
+| while IFS= read -r -d '' P; do
+    rm -rf -- "$P"
+done
+
+journalctl --vacuum-time=3d >/dev/null 2>&1 || true
+journalctl --vacuum-size=300M >/dev/null 2>&1 || true
