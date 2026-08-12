@@ -2131,6 +2131,42 @@ show_final_summary() {
     echo ""
 }
 
+# IRANGATE_MAINTENANCE_GUARDS_INSTALL_V1
+install_maintenance_guards() {
+    local installer="$SCRIPT_DIR/deploy/master/scripts/irangate-install-maintenance-guards"
+
+    log_info "Installing IranGate backup/log maintenance guards..."
+
+    if [[ ! -x "$installer" ]]; then
+        log_error "Maintenance guard installer not found or not executable: $installer"
+        return 1
+    fi
+
+    if ! bash "$installer"; then
+        log_error "Failed to install IranGate maintenance guards"
+        return 1
+    fi
+
+    local timer=""
+
+    for timer in \
+        irangate-retention-cleanup.timer \
+        irangate-syslog-guard.timer
+    do
+        if ! systemctl is-enabled --quiet "$timer"; then
+            log_error "Maintenance timer is not enabled: $timer"
+            return 1
+        fi
+
+        if ! systemctl is-active --quiet "$timer"; then
+            log_error "Maintenance timer is not active: $timer"
+            return 1
+        fi
+    done
+
+    log_info "IranGate maintenance guards installed successfully"
+}
+
 apply_panel_extras_if_available() {
     if [[ -x "$SCRIPT_DIR/scripts/apply-panel-extras.sh" ]]; then
         log_info "Applying panel extras: Outbounds, Proxy, Backup wrappers..."
@@ -2163,6 +2199,7 @@ main() {
     install_webpanel
     configure_webpanel_access
     install_master_postgres_stack
+    install_maintenance_guards
 
     # IRANGATE_UNIFIED_EXTRAS_INSTALL
     log_info "Installing IKEv2, outbound routing and unified Backup v2 extras..."
