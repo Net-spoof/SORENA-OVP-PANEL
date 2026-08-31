@@ -49,6 +49,10 @@ PIPELINE_TIMERS = [
     "irangate-pg-usage-tick.timer",
     "irangate-pg-enforcer.timer",
     "irangate-pg-sync-clients.timer",
+    # IRANGATE_L2TP_RESTORE_PIPELINE_V1
+    "irangate-pg-l2tp-sync.timer",
+    "irangate-l2tp-stats.timer",
+    "irangate-ikev2-stats.timer",
 ]
 
 
@@ -57,6 +61,9 @@ PIPELINE_SERVICES = [
     "irangate-pg-usage-tick.service",
     "irangate-pg-enforcer.service",
     "irangate-pg-sync-clients.service",
+    "irangate-pg-l2tp-sync.service",
+    "irangate-l2tp-stats.service",
+    "irangate-ikev2-stats.service",
 ]
 
 
@@ -2434,6 +2441,220 @@ def reconcile_restored_openvpn_port_locations() -> dict:
     }
 
 
+
+# IRANGATE_RUNTIME_EXTRAS_RESTORE_V1
+def verify_runtime_extras_checksums(root: Path) -> int:
+    extras = root / "extras" / "runtime"
+
+    if not extras.is_dir():
+        return 0
+
+    checksum_path = extras / "SHA256SUMS"
+
+    if not checksum_path.is_file():
+        fail("runtime extras checksum file is missing")
+
+    checked = 0
+
+    for raw in checksum_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        try:
+            expected, relative = line.split("  ", 1)
+        except ValueError:
+            fail("invalid runtime extras checksum entry")
+
+        rel = PurePosixPath(relative)
+        if rel.is_absolute() or ".." in rel.parts:
+            fail("unsafe runtime extras checksum path: " + relative)
+
+        target = extras / relative
+        ensure_inside(extras, target)
+
+        if not target.is_file():
+            fail("runtime extras checksum target missing: " + relative)
+
+        actual = sha256_file(target)
+        if not hmac.compare_digest(actual, expected):
+            fail("runtime extras checksum mismatch: " + relative)
+
+        checked += 1
+
+    if checked == 0:
+        fail("runtime extras checksum list is empty")
+
+    return checked
+
+
+def restore_integrated_runtime_extras(root: Path) -> dict:
+    extras = root / "extras" / "runtime"
+
+    if not extras.is_dir():
+        return {
+            "runtime_extras_present": False,
+            "runtime_extras_restored": 0,
+            "runtime_extras_checksums": 0,
+        }
+
+    checked = verify_runtime_extras_checksums(root)
+
+    # Only explicitly allow IranGate-owned paths. Never recursively copy the
+    # arbitrary filesystem tree represented by extras/runtime.
+    tree_paths = (
+        "opt/irangate/ikev2",
+        "opt/irangate/l2tp",
+        "opt/irangate/routing",
+    )
+
+    file_paths = (
+        "etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf",
+        "etc/swanctl/conf.d/irangate-ikev2-users.conf",
+        "etc/swanctl/private/irangate-ca-key.pem",
+        "etc/swanctl/private/irangate-server-key.pem",
+        "etc/swanctl/x509ca/irangate-ca-cert.pem",
+        "etc/swanctl/x509/irangate-server-cert.pem",
+        "etc/sysctl.d/99-irangate-ikev2.conf",
+        "usr/local/sbin/irangate-ikev2",
+        "usr/local/sbin/irangate-ikev2-stats-snapshot",
+        "usr/local/sbin/irangate-ikev2-firewall.sh",
+        "etc/systemd/system/irangate-ikev2-firewall.service",
+        "etc/systemd/system/irangate-ikev2-stats.service",
+        "etc/systemd/system/irangate-ikev2-stats.timer",
+        "etc/swanctl/conf.d/irangate-l2tp.conf",
+        "etc/sysctl.d/99-irangate-l2tp.conf",
+        "etc/xl2tpd/xl2tpd.conf",
+        "etc/ppp/options.xl2tpd",
+        "usr/local/sbin/irangate-l2tp",
+        "usr/local/sbin/irangate-l2tp-stats-snapshot",
+        "usr/local/sbin/irangate-l2tp-firewall.sh",
+        "etc/ppp/ip-up.d/90-irangate-l2tp",
+        "etc/ppp/ip-down.d/90-irangate-l2tp",
+        "etc/systemd/system/irangate-l2tp-firewall.service",
+        "etc/systemd/system/irangate-l2tp-stats.service",
+        "etc/systemd/system/irangate-l2tp-stats.timer",
+        "usr/local/bin/irangate-pg-l2tp-sync.py",
+        "etc/systemd/system/irangate-pg-l2tp-sync.service",
+        "etc/systemd/system/irangate-pg-l2tp-sync.timer",
+        "etc/sing-box/irangate-routing.json",
+        "usr/local/bin/irangate-routing",
+        "usr/local/sbin/irangate-openvpn-port-locations",
+        "etc/systemd/system/irangate-routing.service",
+        "etc/systemd/system/irangate-routing-rules.service",
+        "etc/systemd/system/irangate-openvpn-port-locations.service",
+        "opt/irangate/panel-proxy.env",
+        "etc/systemd/system/irangate-webpanel.service.d/proxy.conf",
+    )
+
+    restored: list[str] = []
+
+    for relative in tree_paths:
+        source = extras / relative
+        if not source.is_dir():
+            continue
+        destination = Path("/") / relative
+        atomic_restore_tree(source, destination)
+        restored.append("/" + relative)
+
+    for relative in file_paths:
+        source = extras / relative
+        if not source.is_file():
+            continue
+        destination = Path("/") / relative
+        atomic_restore_file(source, destination)
+        restored.append("/" + relative)
+
+    for sensitive in (
+        Path("/opt/irangate/ikev2/users.tsv"),
+        Path("/etc/swanctl/private/irangate-ca-key.pem"),
+        Path("/etc/swanctl/private/irangate-server-key.pem"),
+        Path("/opt/irangate/l2tp/users.tsv"),
+        Path("/opt/irangate/l2tp/ipsec-psk"),
+        Path("/opt/irangate/l2tp/stats_state.json"),
+        Path("/etc/swanctl/conf.d/irangate-l2tp.conf"),
+        Path("/etc/ppp/options.xl2tpd"),
+    ):
+        if sensitive.is_file():
+            sensitive.chmod(0o600)
+
+    for executable in (
+        Path("/usr/local/sbin/irangate-ikev2"),
+        Path("/usr/local/sbin/irangate-ikev2-stats-snapshot"),
+        Path("/usr/local/sbin/irangate-ikev2-firewall.sh"),
+        Path("/usr/local/sbin/irangate-l2tp"),
+        Path("/usr/local/sbin/irangate-l2tp-stats-snapshot"),
+        Path("/usr/local/sbin/irangate-l2tp-firewall.sh"),
+        Path("/etc/ppp/ip-up.d/90-irangate-l2tp"),
+        Path("/etc/ppp/ip-down.d/90-irangate-l2tp"),
+        Path("/usr/local/bin/irangate-pg-l2tp-sync.py"),
+        Path("/usr/local/bin/irangate-routing"),
+        Path("/usr/local/sbin/irangate-openvpn-port-locations"),
+    ):
+        if executable.is_file():
+            executable.chmod(0o755)
+
+    subprocess.run(
+        ["systemctl", "daemon-reload"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+    if command_exists("sysctl"):
+        subprocess.run(
+            ["sysctl", "--system"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    if command_exists("swanctl"):
+        result = subprocess.run(
+            ["swanctl", "--load-all", "--noprompt"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            log("warning: swanctl reload after extras restore failed: " + result.stdout.strip())
+
+    l2tp_manager = Path("/usr/local/sbin/irangate-l2tp")
+    if l2tp_manager.is_file():
+        result = subprocess.run(
+            [str(l2tp_manager), "reload"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("failed to regenerate restored L2TP credentials: " + result.stdout.strip())
+
+    for unit in (
+        "xl2tpd.service",
+        "irangate-l2tp-firewall.service",
+        "irangate-ikev2-firewall.service",
+    ):
+        subprocess.run(
+            ["systemctl", "try-restart", unit],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    return {
+        "runtime_extras_present": True,
+        "runtime_extras_restored": len(restored),
+        "runtime_extras_checksums": checked,
+        "runtime_extras_paths": restored,
+    }
+
+
+def command_exists(name: str) -> bool:
+    return shutil.which(name) is not None
+
 def post_restore_check() -> dict:
     db = db_settings()
 
@@ -2589,6 +2810,10 @@ def restore_from_archive_root(
         root
     )
 
+    extras_result = restore_integrated_runtime_extras(
+        root
+    )
+
     port_location_result = (
         reconcile_restored_openvpn_port_locations()
     )
@@ -2608,6 +2833,7 @@ def restore_from_archive_root(
 
     result = post_restore_check()
     result.update(connection_result)
+    result.update(extras_result)
     result.update(port_location_result)
 
     return result

@@ -884,6 +884,84 @@ log_info \
     "Let's Encrypt certificates were intentionally preserved."
 
 
+# IRANGATE_L2TP_UNINSTALL_V1
+log_info "Removing IranGate-managed L2TP/IPSec runtime..."
+
+if [ -x /usr/local/sbin/irangate-l2tp-firewall.sh ]; then
+    /usr/local/sbin/irangate-l2tp-firewall.sh stop \
+        >/dev/null 2>&1 || true
+fi
+
+systemctl stop \
+    irangate-l2tp-stats.timer \
+    irangate-l2tp-stats.service \
+    irangate-l2tp-firewall.service \
+    irangate-pg-l2tp-sync.timer \
+    irangate-pg-l2tp-sync.service \
+    >/dev/null 2>&1 || true
+
+# Remove only IranGate's managed chap-secrets block. Preserve unrelated PPP
+# credentials that may belong to other software on the same host.
+if [ -f /etc/ppp/chap-secrets ]; then
+    python3 - <<'IRANGATE_L2TP_CHAP_CLEAN'
+from pathlib import Path
+
+path = Path("/etc/ppp/chap-secrets")
+begin = "# BEGIN IRANGATE L2TP USERS"
+end = "# END IRANGATE L2TP USERS"
+lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+out = []
+in_managed = False
+for line in lines:
+    if line.strip() == begin:
+        in_managed = True
+        continue
+    if line.strip() == end:
+        in_managed = False
+        continue
+    if not in_managed:
+        out.append(line)
+path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+path.chmod(0o600)
+IRANGATE_L2TP_CHAP_CLEAN
+fi
+
+# Restore a pre-IranGate xl2tpd configuration when one was preserved by the
+# installer. Otherwise remove only the configuration known to be IranGate's.
+if [ -f /etc/xl2tpd/xl2tpd.conf.irangate-before-l2tp ]; then
+    systemctl stop xl2tpd.service >/dev/null 2>&1 || true
+    mv -f \
+        /etc/xl2tpd/xl2tpd.conf.irangate-before-l2tp \
+        /etc/xl2tpd/xl2tpd.conf
+elif [ -f /etc/xl2tpd/xl2tpd.conf ] \
+    && grep -qF 'ip range = 10.20.0.10-10.20.0.250' /etc/xl2tpd/xl2tpd.conf
+then
+    systemctl stop xl2tpd.service >/dev/null 2>&1 || true
+    rm -f /etc/xl2tpd/xl2tpd.conf
+fi
+
+rm -f \
+    /etc/swanctl/conf.d/irangate-l2tp.conf \
+    /etc/sysctl.d/99-irangate-l2tp.conf \
+    /etc/ppp/options.xl2tpd \
+    /etc/ppp/ip-up.d/90-irangate-l2tp \
+    /etc/ppp/ip-down.d/90-irangate-l2tp \
+    /usr/local/sbin/irangate-l2tp \
+    /usr/local/sbin/irangate-l2tp-stats-snapshot \
+    /usr/local/sbin/irangate-l2tp-firewall.sh \
+    /usr/local/bin/irangate-pg-l2tp-sync.py
+
+rm -rf /run/irangate-l2tp
+
+if command -v swanctl >/dev/null 2>&1; then
+    swanctl --load-all --noprompt >/dev/null 2>&1 || true
+fi
+
+sysctl --system >/dev/null 2>&1 || true
+
+log_ok "IranGate L2TP/IPSec runtime removed."
+
+
 echo
 echo '========================================'
 echo '===== REMOVE SYSTEMD UNIT FILES ====='

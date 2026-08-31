@@ -261,6 +261,10 @@ def copy_traffic_state(stage: Path) -> bool:
         "openvpn_multiport_state.json": "{}",
         "ikev2_current_stats.json": "[]",
         "ikev2_last_seen.json": "{}",
+        # IRANGATE_L2TP_BACKUP_STATE_V1
+        "l2tp_current_stats.json": "[]",
+        "l2tp_sessions.json": "[]",
+        "l2tp_last_seen.json": "{}",
     }
 
     copied = False
@@ -357,6 +361,26 @@ def copy_runtime_extras(stage: Path) -> int:
         "/etc/systemd/system/irangate-ikev2-firewall.service",
         "/etc/systemd/system/irangate-ikev2-stats.service",
         "/etc/systemd/system/irangate-ikev2-stats.timer",
+        # IRANGATE_L2TP_BACKUP_EXTRAS_V1
+        "/etc/swanctl/conf.d/irangate-l2tp.conf",
+        "/etc/sysctl.d/99-irangate-l2tp.conf",
+        "/etc/xl2tpd/xl2tpd.conf",
+        "/etc/ppp/options.xl2tpd",
+        "/opt/irangate/l2tp",
+        "/opt/irangate/traffic/l2tp_current_stats.json",
+        "/opt/irangate/traffic/l2tp_sessions.json",
+        "/opt/irangate/traffic/l2tp_last_seen.json",
+        "/usr/local/sbin/irangate-l2tp",
+        "/usr/local/sbin/irangate-l2tp-stats-snapshot",
+        "/usr/local/sbin/irangate-l2tp-firewall.sh",
+        "/etc/ppp/ip-up.d/90-irangate-l2tp",
+        "/etc/ppp/ip-down.d/90-irangate-l2tp",
+        "/etc/systemd/system/irangate-l2tp-firewall.service",
+        "/etc/systemd/system/irangate-l2tp-stats.service",
+        "/etc/systemd/system/irangate-l2tp-stats.timer",
+        "/usr/local/bin/irangate-pg-l2tp-sync.py",
+        "/etc/systemd/system/irangate-pg-l2tp-sync.service",
+        "/etc/systemd/system/irangate-pg-l2tp-sync.timer",
         "/opt/irangate/routing",
         "/etc/sing-box/irangate-routing.json",
         "/usr/local/bin/irangate-routing",
@@ -391,6 +415,7 @@ def copy_runtime_extras(stage: Path) -> int:
         + socket.gethostname()
         + "\n"
         + "contains=ikev2\n"
+        + "contains=l2tp\n"
         + "contains=outbound-routing\n"
         + "contains=openvpn-port-locations\n"
         + "contains=panel-proxy\n"
@@ -403,6 +428,9 @@ def copy_runtime_extras(stage: Path) -> int:
         root / "opt/irangate/ikev2/users.tsv",
         root / "etc/swanctl/private/irangate-ca-key.pem",
         root / "etc/swanctl/private/irangate-server-key.pem",
+        root / "opt/irangate/l2tp/users.tsv",
+        root / "opt/irangate/l2tp/ipsec-psk",
+        root / "opt/irangate/l2tp/stats_state.json",
     )
 
     for path in sensitive_files:

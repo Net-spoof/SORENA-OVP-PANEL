@@ -150,6 +150,17 @@ main() {
     bash "$REPO_DIR/scripts/install-ikev2.sh" \
         "${ike_args[@]}"
 
+    # IRANGATE_L2TP_PANEL_EXTRAS_V1
+    l2tp_args=()
+
+    [[ "$NO_PACKAGES" -eq 0 ]] ||
+        l2tp_args+=(--no-packages)
+
+    bash "$REPO_DIR/scripts/install-l2tp.sh" \
+        "${l2tp_args[@]}"
+
+    bash "$REPO_DIR/scripts/install-l2tp-pg-integration.sh"
+
     routing_args=()
 
     [[ "$NO_SING_BOX_DOWNLOAD" -eq 0 ]] ||
