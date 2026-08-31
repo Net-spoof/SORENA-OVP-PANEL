@@ -1,0 +1,84 @@
+name: L2TP integration validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/l2tp-shared-accounting
+    paths:
+      - scripts/apply-l2tp-source-integration.py
+      - .github/workflows/l2tp-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/l2tp-shared-accounting
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: webpanel/backend/go.mod
+          cache-dependency-path: |
+            go.sum
+            webpanel/backend/go.sum
+
+      - name: Apply idempotent L2TP patches
+        run: python3 scripts/apply-l2tp-source-integration.py
+
+      - name: Format Go
+        run: |
+          gofmt -w webpanel/backend/api.go webpanel/backend/l2tp.go
+
+      - name: Validate shell syntax
+        run: |
+          bash -n deploy/master/l2tp/irangate-l2tp
+          bash -n deploy/master/l2tp/irangate-l2tp-session-up
+          bash -n deploy/master/l2tp/irangate-l2tp-session-down
+          bash -n deploy/master/l2tp/irangate-l2tp-firewall.sh
+          bash -n deploy/master/ikev2/irangate-ikev2
+          bash -n scripts/install-l2tp.sh
+          bash -n scripts/install-l2tp-pg-integration.sh
+
+      - name: Validate Python syntax
+        run: |
+          python3 -m py_compile \
+            deploy/master/l2tp/irangate-l2tp-stats-snapshot.py \
+            deploy/master/scripts/irangate-pg-l2tp-sync.py \
+            deploy/master/scripts/irangate-pg-enforcer.py \
+            deploy/master/scripts/irangate-pg-reset-client.py \
+            scripts/apply-l2tp-source-integration.py
+
+      - name: Validate repository Go module
+        run: go test ./...
+
+      - name: Validate WebPanel Go module
+        working-directory: webpanel/backend
+        run: go test ./...
+
+      - name: Validate patch whitespace
+        run: git diff --check
+
+      - name: Commit validated integration
+        run: |
+          if git diff --quiet; then
+            echo "No generated integration changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            deploy/master/ikev2/irangate-ikev2 \
+            deploy/master/scripts/irangate-pg-enforcer.py \
+            deploy/master/scripts/irangate-pg-reset-client.py \
+            webpanel/backend/api.go \
+            webpanel/backend/l2tp.go
+          git commit -m "Integrate L2TP with shared client lifecycle and limits"
+          git push origin HEAD:feature/l2tp-shared-accounting
