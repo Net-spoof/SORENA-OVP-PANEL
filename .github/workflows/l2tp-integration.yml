@@ -7,6 +7,7 @@ on:
       - feature/l2tp-shared-accounting
     paths:
       - scripts/apply-l2tp-source-integration.py
+      - scripts/finalize-l2tp-integration.py
       - .github/workflows/l2tp-integration.yml
 
 permissions:
@@ -30,12 +31,18 @@ jobs:
             go.sum
             webpanel/backend/go.sum
 
-      - name: Apply idempotent L2TP patches
+      - name: Apply core L2TP source integration
         run: python3 scripts/apply-l2tp-source-integration.py
+
+      - name: Apply complete lifecycle integration
+        run: python3 scripts/finalize-l2tp-integration.py
 
       - name: Format Go
         run: |
-          gofmt -w webpanel/backend/api.go webpanel/backend/l2tp.go
+          gofmt -w \
+            webpanel/backend/api.go \
+            webpanel/backend/l2tp.go \
+            webpanel/backend/client_rework.go
 
       - name: Validate shell syntax
         run: |
@@ -46,6 +53,8 @@ jobs:
           bash -n deploy/master/ikev2/irangate-ikev2
           bash -n scripts/install-l2tp.sh
           bash -n scripts/install-l2tp-pg-integration.sh
+          bash -n scripts/apply-panel-extras.sh
+          bash -n uninstall.sh
 
       - name: Validate Python syntax
         run: |
@@ -54,7 +63,10 @@ jobs:
             deploy/master/scripts/irangate-pg-l2tp-sync.py \
             deploy/master/scripts/irangate-pg-enforcer.py \
             deploy/master/scripts/irangate-pg-reset-client.py \
-            scripts/apply-l2tp-source-integration.py
+            deploy/master/scripts/irangate-backup-v2-export.py \
+            deploy/master/scripts/irangate-backup-v2-import.py \
+            scripts/apply-l2tp-source-integration.py \
+            scripts/finalize-l2tp-integration.py
 
       - name: Validate repository Go module
         run: go test ./...
@@ -82,7 +94,12 @@ jobs:
             deploy/master/ikev2/irangate-ikev2 \
             deploy/master/scripts/irangate-pg-enforcer.py \
             deploy/master/scripts/irangate-pg-reset-client.py \
+            deploy/master/scripts/irangate-backup-v2-export.py \
+            deploy/master/scripts/irangate-backup-v2-import.py \
+            scripts/apply-panel-extras.sh \
+            uninstall.sh \
             webpanel/backend/api.go \
-            webpanel/backend/l2tp.go
-          git commit -m "Integrate L2TP with shared client lifecycle and limits"
+            webpanel/backend/l2tp.go \
+            webpanel/backend/client_rework.go
+          git commit -m "Complete L2TP lifecycle backup and deployment integration"
           git push origin HEAD:feature/l2tp-shared-accounting
