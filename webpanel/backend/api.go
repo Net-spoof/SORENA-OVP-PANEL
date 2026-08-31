@@ -3653,17 +3653,38 @@ func subGlobalUsageTotal(clientName string) int64 {
 		return 0
 	}
 
-	raw, ok := totals[clientName]
-	if !ok {
-		return 0
+	wanted := strings.TrimSpace(clientName)
+	used := int64(0)
+
+	// Client/Common-Name casing may differ between OpenVPN,
+	// PostgreSQL and the JSON metadata filename.
+	//
+	// Example:
+	//   metadata: mehdi
+	//   OpenVPN CN: Mehdi
+	//
+	// Sum all case-insensitive buckets so historical traffic is
+	// preserved even if the casing changed over time.
+	for storedName, raw := range totals {
+		if !strings.EqualFold(
+			strings.TrimSpace(storedName),
+			wanted,
+		) {
+			continue
+		}
+
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		value := subInt64(m["total"])
+		if value > 0 {
+			used += value
+		}
 	}
 
-	m, ok := raw.(map[string]interface{})
-	if !ok {
-		return 0
-	}
-
-	return subInt64(m["total"])
+	return used
 }
 
 func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
