@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+IFACE="${1:-${IFNAME:-}}"
+VIRTUAL_IP="${5:-${IPREMOTE:-}}"
+USER="${PEERNAME:-}"
+PID="${PPPD_PID:-${PPID:-0}}"
+SESSION_DIR="/run/irangate-l2tp/sessions"
+
+[[ "$IFACE" =~ ^ppp[0-9]+$ ]] || exit 0
+[[ "$USER" =~ ^[a-zA-Z0-9._-]{3,64}$ ]] || exit 0
+[[ "$PID" =~ ^[0-9]+$ ]] || PID=0
+
+mkdir -p "$SESSION_DIR"
+chmod 0700 "$SESSION_DIR"
+
+CONNECTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+FINGERPRINT="l2tp:${USER}:${IFACE}:${PID}"
+TARGET="$SESSION_DIR/${IFACE}.json"
+TMP="$TARGET.tmp.$$"
+
+python3 - "$TMP" "$USER" "$IFACE" "$PID" "$VIRTUAL_IP" "$CONNECTED_AT" "$FINGERPRINT" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+row = {
+    "source_id": "l2tp",
+    "client_name": sys.argv[2],
+    "interface": sys.argv[3],
+    "pid": int(sys.argv[4] or 0),
+    "virtual_ip": sys.argv[5],
+    "connected_since": sys.argv[6],
+    "session_fingerprint": sys.argv[7],
+    "connected": True,
+}
+path.write_text(json.dumps(row, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+os.chmod(path, 0o600)
+PY
+
+mv -f "$TMP" "$TARGET"
+chmod 0600 "$TARGET"
+
+/usr/local/sbin/irangate-l2tp-stats-snapshot --quiet >/dev/null 2>&1 || true
+exit 0
