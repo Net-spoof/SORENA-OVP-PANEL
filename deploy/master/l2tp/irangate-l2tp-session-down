@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+IFACE="${1:-${IFNAME:-}}"
+SESSION_DIR="/run/irangate-l2tp/sessions"
+
+[[ "$IFACE" =~ ^ppp[0-9]+$ ]] || exit 0
+
+# Capture the final interface counters while pppd still executes ip-down.
+/usr/local/sbin/irangate-l2tp-stats-snapshot --quiet >/dev/null 2>&1 || true
+
+rm -f "$SESSION_DIR/${IFACE}.json"
+
+# Publish the disconnected state immediately. The cumulative counters remain
+# in stats_state.json and are therefore still visible to PostgreSQL accounting.
+/usr/local/sbin/irangate-l2tp-stats-snapshot --quiet >/dev/null 2>&1 || true
+exit 0
