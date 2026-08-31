@@ -1,0 +1,7 @@
+[Unit]
+Description=IranGate PostgreSQL L2TP traffic/session sync
+After=postgresql.service irangate-l2tp-stats.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/irangate-pg-l2tp-sync.py
