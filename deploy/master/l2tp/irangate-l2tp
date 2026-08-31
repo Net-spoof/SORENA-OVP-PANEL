@@ -1,0 +1,480 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+BASE_DIR="/opt/irangate/l2tp"
+USERS_DB="$BASE_DIR/users.tsv"
+IKEV2_USERS_DB="/opt/irangate/ikev2/users.tsv"
+PSK_FILE="$BASE_DIR/ipsec-psk"
+CHAP_SECRETS="/etc/ppp/chap-secrets"
+SESSION_DIR="/run/irangate-l2tp/sessions"
+CHAP_BEGIN="# BEGIN IRANGATE L2TP USERS"
+CHAP_END="# END IRANGATE L2TP USERS"
+
+mkdir -p "$BASE_DIR"
+touch "$USERS_DB"
+chmod 600 "$USERS_DB"
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+valid_user() {
+    [[ "${1:-}" =~ ^[a-zA-Z0-9._-]{3,64}$ ]]
+}
+
+valid_pass() {
+    [[ "${1:-}" =~ ^[a-zA-Z0-9._@%+=:-]{8,128}$ ]]
+}
+
+gen_pass() {
+    openssl rand -base64 24 | tr -d '=+/' | cut -c1-22
+}
+
+preferred_host() {
+    python3 - <<'PY_HOST'
+import json
+import re
+import subprocess
+from pathlib import Path
+from urllib.parse import urlparse
+
+paths = [
+    Path("/opt/irangate/webpanel/server.json"),
+    Path("/opt/irangate/server_config.json"),
+    Path("/opt/irangate/database/settings.json"),
+]
+keys = (
+    "l2tp_server_host",
+    "ikev2_server_host",
+    "server_domain",
+    "server_ip",
+    "public_ip",
+)
+
+def normalize(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if "://" in value:
+        value = urlparse(value).hostname or ""
+    value = value.strip().strip("[]")
+    if value.count(":") == 1:
+        host, port = value.rsplit(":", 1)
+        if port.isdigit():
+            value = host
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+        return ""
+    return value
+
+for path in paths:
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    for key in keys:
+        value = normalize(data.get(key))
+        if value:
+            print(value)
+            raise SystemExit
+
+try:
+    output = subprocess.check_output(
+        ["ip", "-4", "route", "get", "1.1.1.1"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+    fields = output.split()
+    if "src" in fields:
+        value = normalize(fields[fields.index("src") + 1])
+        if value:
+            print(value)
+            raise SystemExit
+except Exception:
+    pass
+
+print("127.0.0.1")
+PY_HOST
+}
+
+password_from_ikev2() {
+    local user="${1:-}"
+    [ -s "$IKEV2_USERS_DB" ] || return 1
+    awk -F'\t' -v u="$user" '$1==u {print $2; exit}' "$IKEV2_USERS_DB"
+}
+
+render_chap_secrets() {
+    mkdir -p "$(dirname "$CHAP_SECRETS")"
+    touch "$CHAP_SECRETS"
+    chmod 600 "$CHAP_SECRETS"
+
+    USERS_DB="$USERS_DB" \
+    CHAP_SECRETS="$CHAP_SECRETS" \
+    CHAP_BEGIN="$CHAP_BEGIN" \
+    CHAP_END="$CHAP_END" \
+    python3 - <<'PY_CHAP'
+import os
+from pathlib import Path
+
+users_db = Path(os.environ["USERS_DB"])
+chap = Path(os.environ["CHAP_SECRETS"])
+begin = os.environ["CHAP_BEGIN"]
+end = os.environ["CHAP_END"]
+
+try:
+    original = chap.read_text(encoding="utf-8")
+except Exception:
+    original = ""
+
+lines = original.splitlines()
+clean = []
+in_managed = False
+for line in lines:
+    if line.strip() == begin:
+        in_managed = True
+        continue
+    if line.strip() == end:
+        in_managed = False
+        continue
+    if not in_managed:
+        clean.append(line)
+
+managed = [begin]
+try:
+    rows = users_db.read_text(encoding="utf-8").splitlines()
+except Exception:
+    rows = []
+
+for raw in rows:
+    parts = raw.split("\t")
+    if len(parts) < 4:
+        continue
+    user, password, _created, status = parts[:4]
+    if status != "active":
+        continue
+    # Input validation in the manager excludes quotes and whitespace.
+    managed.append(f'"{user}" l2tpd "{password}" *')
+managed.append(end)
+
+while clean and clean[-1] == "":
+    clean.pop()
+
+output = "\n".join(clean + ([""] if clean else []) + managed) + "\n"
+tmp = chap.with_name(chap.name + ".irangate.tmp")
+tmp.write_text(output, encoding="utf-8")
+os.chmod(tmp, 0o600)
+os.replace(tmp, chap)
+PY_CHAP
+}
+
+row_for_user() {
+    local user="${1:-}"
+    awk -F'\t' -v u="$user" '$1==u {print; exit}' "$USERS_DB"
+}
+
+upsert_user() {
+    local user="${1:-}"
+    local pass="${2:-}"
+
+    [ -n "$user" ] || die "usage: irangate-l2tp add USER [PASSWORD]"
+    valid_user "$user" || die "invalid username. allowed: a-z A-Z 0-9 . _ - length 3-64"
+
+    if [ -z "$pass" ]; then
+        pass="$(password_from_ikev2 "$user" 2>/dev/null || true)"
+    fi
+    if [ -z "$pass" ]; then
+        pass="$(gen_pass)"
+    fi
+    valid_pass "$pass" || die "invalid password. min 8, no spaces or quotes"
+
+    local old created status
+    old="$(row_for_user "$user")"
+    if [ -n "$old" ]; then
+        created="$(printf '%s\n' "$old" | awk -F'\t' '{print $3}')"
+        status="$(printf '%s\n' "$old" | awk -F'\t' '{print $4}')"
+        [ "$status" = "active" ] || [ "$status" = "blocked" ] || status="active"
+    else
+        created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        status="active"
+    fi
+
+    awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+    mv "$USERS_DB.tmp" "$USERS_DB"
+    printf "%s\t%s\t%s\t%s\n" "$user" "$pass" "$created" "$status" >> "$USERS_DB"
+    chmod 600 "$USERS_DB"
+
+    render_chap_secrets
+
+    echo "L2TP user synchronized ✅"
+    echo
+    show_config "$user"
+}
+
+set_status() {
+    local user="${1:-}"
+    local status="${2:-}"
+
+    [ -n "$user" ] || die "usage: irangate-l2tp status USER active|blocked"
+    valid_user "$user" || die "invalid username"
+    [[ "$status" == "active" || "$status" == "blocked" ]] || die "invalid status"
+
+    local row pass created old_status
+    row="$(row_for_user "$user")"
+    if [ -z "$row" ]; then
+        echo "L2TP user not found; nothing to change: $user"
+        return 0
+    fi
+
+    pass="$(printf '%s\n' "$row" | awk -F'\t' '{print $2}')"
+    created="$(printf '%s\n' "$row" | awk -F'\t' '{print $3}')"
+    old_status="$(printf '%s\n' "$row" | awk -F'\t' '{print $4}')"
+
+    awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+    mv "$USERS_DB.tmp" "$USERS_DB"
+    printf "%s\t%s\t%s\t%s\n" "$user" "$pass" "$created" "$status" >> "$USERS_DB"
+    chmod 600 "$USERS_DB"
+
+    render_chap_secrets
+
+    if [ "$status" = "blocked" ]; then
+        terminate_user "$user" >/dev/null 2>&1 || true
+    fi
+
+    echo "L2TP user status changed ✅ user=$user old=$old_status new=$status"
+}
+
+delete_user() {
+    local user="${1:-}"
+    [ -n "$user" ] || die "usage: irangate-l2tp del USER"
+    valid_user "$user" || die "invalid username"
+
+    terminate_user "$user" >/dev/null 2>&1 || true
+    awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
+    mv "$USERS_DB.tmp" "$USERS_DB"
+    chmod 600 "$USERS_DB"
+    render_chap_secrets
+
+    echo "L2TP user deleted ✅ $user"
+}
+
+list_users() {
+    echo "===== L2TP USERS ====="
+    if [ ! -s "$USERS_DB" ]; then
+        echo "no users"
+        return 0
+    fi
+    awk -F'\t' 'BEGIN {
+        printf "%-24s %-10s %-22s\n", "USERNAME", "STATUS", "CREATED"
+    }
+    {
+        printf "%-24s %-10s %-22s\n", $1, $4, $3
+    }' "$USERS_DB"
+}
+
+sessions() {
+    SESSION_DIR="$SESSION_DIR" python3 - <<'PY_SESS'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["SESSION_DIR"])
+rows = []
+if root.is_dir():
+    for path in sorted(root.glob("*.json")):
+        try:
+            row = json.loads(path.read_text())
+        except Exception:
+            continue
+        if not isinstance(row, dict):
+            continue
+        rows.append(row)
+
+if not rows:
+    print("no active L2TP sessions")
+else:
+    for row in rows:
+        print(
+            "session={session} user={user} iface={iface} pid={pid} virtual_ip={vip} since={since}".format(
+                session=row.get("session_fingerprint", ""),
+                user=row.get("client_name", ""),
+                iface=row.get("interface", ""),
+                pid=row.get("pid", ""),
+                vip=row.get("virtual_ip", ""),
+                since=row.get("connected_since", ""),
+            )
+        )
+PY_SESS
+}
+
+kill_pids_for_match() {
+    local match_type="$1"
+    local match_value="$2"
+
+    SESSION_DIR="$SESSION_DIR" MATCH_TYPE="$match_type" MATCH_VALUE="$match_value" \
+    python3 - <<'PY_KILL'
+import json
+import os
+import signal
+from pathlib import Path
+
+root = Path(os.environ["SESSION_DIR"])
+kind = os.environ["MATCH_TYPE"]
+value = os.environ["MATCH_VALUE"]
+matched = 0
+killed = 0
+
+if root.is_dir():
+    for path in root.glob("*.json"):
+        try:
+            row = json.loads(path.read_text())
+        except Exception:
+            continue
+        if not isinstance(row, dict):
+            continue
+        candidate = str(row.get("client_name" if kind == "user" else "session_fingerprint", ""))
+        if candidate != value:
+            continue
+        matched += 1
+        try:
+            pid = int(row.get("pid") or 0)
+        except Exception:
+            pid = 0
+        if pid > 1:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed += 1
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                print(f"warning: failed to terminate pid={pid}: {exc}")
+
+print(f"matched={matched} terminated={killed}")
+PY_KILL
+}
+
+terminate_user() {
+    local user="${1:-}"
+    [ -n "$user" ] || die "usage: irangate-l2tp terminate USER"
+    valid_user "$user" || die "invalid username"
+    kill_pids_for_match user "$user"
+}
+
+terminate_session() {
+    local fingerprint="${1:-}"
+    [ -n "$fingerprint" ] || die "usage: irangate-l2tp terminate-session SESSION_FINGERPRINT"
+    [[ "$fingerprint" =~ ^l2tp:[a-zA-Z0-9._-]{3,64}:[a-zA-Z0-9._-]+:[0-9]+$ ]] || die "invalid session fingerprint"
+    kill_pids_for_match session "$fingerprint"
+}
+
+terminate_all() {
+    SESSION_DIR="$SESSION_DIR" python3 - <<'PY_ALL'
+import json
+import os
+import signal
+from pathlib import Path
+root = Path(os.environ["SESSION_DIR"])
+count = 0
+if root.is_dir():
+    for path in root.glob("*.json"):
+        try:
+            row = json.loads(path.read_text())
+            pid = int(row.get("pid") or 0)
+        except Exception:
+            continue
+        if pid > 1:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                count += 1
+            except Exception:
+                pass
+print(f"terminated={count}")
+PY_ALL
+}
+
+show_config() {
+    local user="${1:-}"
+    [ -n "$user" ] || die "usage: irangate-l2tp show USER"
+    valid_user "$user" || die "invalid username"
+
+    local row pass status psk host
+    row="$(row_for_user "$user")"
+    [ -n "$row" ] || die "user not found"
+    [ -s "$PSK_FILE" ] || die "L2TP IPSec PSK is missing"
+
+    pass="$(printf '%s\n' "$row" | awk -F'\t' '{print $2}')"
+    status="$(printf '%s\n' "$row" | awk -F'\t' '{print $4}')"
+    psk="$(cat "$PSK_FILE")"
+    host="$(preferred_host)"
+
+    echo "Status: $status"
+    echo "Type: L2TP/IPSec PSK"
+    echo "Server: $host"
+    echo "IPSec PSK: $psk"
+    echo "Username: $user"
+    echo "Password: $pass"
+}
+
+reload_runtime() {
+    render_chap_secrets
+    if command -v swanctl >/dev/null 2>&1; then
+        swanctl --load-conns >/dev/null 2>&1 || true
+        swanctl --load-creds >/dev/null 2>&1 || true
+    fi
+    echo "L2TP users reloaded ✅"
+}
+
+case "${1:-}" in
+    add|sync)
+        upsert_user "${2:-}" "${3:-}"
+        ;;
+    del|delete|remove)
+        delete_user "${2:-}"
+        ;;
+    block)
+        set_status "${2:-}" blocked
+        ;;
+    unblock)
+        set_status "${2:-}" active
+        ;;
+    list)
+        list_users
+        ;;
+    sessions|online)
+        sessions
+        ;;
+    terminate|kill)
+        terminate_user "${2:-}"
+        ;;
+    terminate-session|kill-session)
+        terminate_session "${2:-}"
+        ;;
+    terminate-all|kill-all)
+        terminate_all
+        ;;
+    show|config)
+        show_config "${2:-}"
+        ;;
+    reload)
+        reload_runtime
+        ;;
+    *)
+        cat <<'USAGE'
+IranGate L2TP/IPSec user manager
+
+Usage:
+  irangate-l2tp add USER [PASSWORD]
+  irangate-l2tp del USER
+  irangate-l2tp block USER
+  irangate-l2tp unblock USER
+  irangate-l2tp list
+  irangate-l2tp sessions
+  irangate-l2tp terminate USER
+  irangate-l2tp terminate-session SESSION_FINGERPRINT
+  irangate-l2tp terminate-all
+  irangate-l2tp show USER
+  irangate-l2tp reload
+USAGE
+        ;;
+esac

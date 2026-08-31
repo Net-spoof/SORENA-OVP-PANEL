@@ -1,0 +1,7 @@
+[Unit]
+Description=IranGate L2TP traffic/session snapshot
+After=xl2tpd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-l2tp-stats-snapshot --quiet

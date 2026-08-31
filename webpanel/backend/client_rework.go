@@ -513,6 +513,15 @@ func clientReworkRestoreIKEv2(safetyDir string) error {
 			filepath.Join(safetyDir, "users.conf"),
 			"/etc/swanctl/conf.d/irangate-ikev2-users.conf",
 		},
+		// IRANGATE_L2TP_REWORK_ROLLBACK_V1
+		{
+			filepath.Join(safetyDir, "l2tp-users.tsv"),
+			"/opt/irangate/l2tp/users.tsv",
+		},
+		{
+			filepath.Join(safetyDir, "chap-secrets"),
+			"/etc/ppp/chap-secrets",
+		},
 	}
 	for _, mapping := range mappings {
 		if _, err := os.Stat(mapping.Backup); err == nil {
@@ -523,6 +532,11 @@ func clientReworkRestoreIKEv2(safetyDir string) error {
 	}
 	if output, err := exec.Command("swanctl", "--load-creds").CombinedOutput(); err != nil {
 		errors = append(errors, strings.TrimSpace(string(output)))
+	}
+	if _, err := os.Stat("/usr/local/sbin/irangate-l2tp"); err == nil {
+		if output, reloadErr := exec.Command("/usr/local/sbin/irangate-l2tp", "reload").CombinedOutput(); reloadErr != nil {
+			errors = append(errors, "L2TP reload: "+strings.TrimSpace(string(output)))
+		}
 	}
 	if len(errors) > 0 {
 		return fmt.Errorf("IKEv2 rollback failed: %s", strings.Join(errors, "; "))
@@ -542,6 +556,8 @@ func clientReworkIKEv2(
 	for source, destination := range map[string]string{
 		"/opt/irangate/ikev2/users.tsv":                 filepath.Join(ikeSafety, "users.tsv"),
 		"/etc/swanctl/conf.d/irangate-ikev2-users.conf": filepath.Join(ikeSafety, "users.conf"),
+		"/opt/irangate/l2tp/users.tsv":                  filepath.Join(ikeSafety, "l2tp-users.tsv"),
+		"/etc/ppp/chap-secrets":                         filepath.Join(ikeSafety, "chap-secrets"),
 	} {
 		if _, err := os.Stat(source); err == nil {
 			if err := clientReworkCopy(source, destination); err != nil {
@@ -560,11 +576,27 @@ func clientReworkIKEv2(
 		}
 	}
 	newInfo, err := ensureIKEv2Account(name, true)
-	if err != nil || (oldInfo.Available && oldInfo.Password == newInfo.Password) {
-		cause := err
-		if cause == nil {
-			cause = fmt.Errorf("IKEv2 password did not rotate")
+	var cause error
+	if err != nil {
+		cause = err
+	} else if oldInfo.Available && oldInfo.Password == newInfo.Password {
+		cause = fmt.Errorf("IKEv2 password did not rotate")
+	}
+
+	// When the L2TP runtime is installed, successful rework is only complete
+	// after the shared IKEv2/L2TP password is verified on both protocols.
+	if cause == nil {
+		if _, statErr := os.Stat("/usr/local/sbin/irangate-l2tp"); statErr == nil {
+			l2tpInfo, l2tpErr := ensureL2TPAccount(name, newInfo.Password, true)
+			if l2tpErr != nil {
+				cause = fmt.Errorf("L2TP password synchronization failed: %w", l2tpErr)
+			} else if !l2tpInfo.Available || l2tpInfo.Password != newInfo.Password {
+				cause = fmt.Errorf("L2TP password synchronization verification failed")
+			}
 		}
+	}
+
+	if cause != nil {
 		rollbackErr := clientReworkRestoreIKEv2(ikeSafety)
 		return newInfo, fmt.Errorf(
 			"%w; rollback=%v; safety=%s",

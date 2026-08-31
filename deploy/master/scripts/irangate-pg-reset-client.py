@@ -80,6 +80,28 @@ subprocess.run(
     check=False
 )
 
+# IRANGATE_L2TP_RESET_BASELINE_V1
+# Snapshot and charge any bytes seen immediately before the reset so the
+# L2TP cumulative source counter becomes the post-reset baseline rather than
+# resurrecting pre-reset traffic on the next PostgreSQL sync.
+for command_line in (
+    ["/usr/local/sbin/irangate-l2tp-stats-snapshot", "--quiet"],
+    ["/usr/local/bin/irangate-pg-l2tp-sync.py"],
+):
+    if not Path(command_line[0]).exists():
+        continue
+    try:
+        subprocess.run(
+            command_line,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+        )
+    except Exception as exc:
+        print("L2TP BASELINE WARN", command_line[0], exc)
+
 conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
 conn.autocommit = False
 
@@ -147,6 +169,23 @@ conn.close()
 
 local_unblock(name)
 node_unblock(name)
+
+# IRANGATE_L2TP_RESET_UNBLOCK_V1
+for manager in (
+    "/usr/local/sbin/irangate-ikev2",
+    "/usr/local/sbin/irangate-l2tp",
+):
+    try:
+        subprocess.run(
+            [manager, "unblock", name],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+        )
+    except Exception as exc:
+        print("VPN UNBLOCK WARN", manager, name, exc)
 
 print("===== refresh mirror after reset =====")
 subprocess.run(

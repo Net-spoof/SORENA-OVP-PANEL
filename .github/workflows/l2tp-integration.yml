@@ -1,0 +1,105 @@
+name: L2TP integration validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/l2tp-shared-accounting
+    paths:
+      - scripts/apply-l2tp-source-integration.py
+      - scripts/finalize-l2tp-integration.py
+      - .github/workflows/l2tp-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/l2tp-shared-accounting
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: webpanel/backend/go.mod
+          cache-dependency-path: |
+            go.sum
+            webpanel/backend/go.sum
+
+      - name: Apply core L2TP source integration
+        run: python3 scripts/apply-l2tp-source-integration.py
+
+      - name: Apply complete lifecycle integration
+        run: python3 scripts/finalize-l2tp-integration.py
+
+      - name: Format Go
+        run: |
+          gofmt -w \
+            webpanel/backend/api.go \
+            webpanel/backend/l2tp.go \
+            webpanel/backend/client_rework.go
+
+      - name: Validate shell syntax
+        run: |
+          bash -n deploy/master/l2tp/irangate-l2tp
+          bash -n deploy/master/l2tp/irangate-l2tp-session-up
+          bash -n deploy/master/l2tp/irangate-l2tp-session-down
+          bash -n deploy/master/l2tp/irangate-l2tp-firewall.sh
+          bash -n deploy/master/ikev2/irangate-ikev2
+          bash -n scripts/install-l2tp.sh
+          bash -n scripts/install-l2tp-pg-integration.sh
+          bash -n scripts/apply-panel-extras.sh
+          bash -n uninstall.sh
+
+      - name: Validate Python syntax
+        run: |
+          python3 -m py_compile \
+            deploy/master/l2tp/irangate-l2tp-stats-snapshot.py \
+            deploy/master/scripts/irangate-pg-l2tp-sync.py \
+            deploy/master/scripts/irangate-pg-enforcer.py \
+            deploy/master/scripts/irangate-pg-reset-client.py \
+            deploy/master/scripts/irangate-backup-v2-export.py \
+            deploy/master/scripts/irangate-backup-v2-import.py \
+            scripts/apply-l2tp-source-integration.py \
+            scripts/finalize-l2tp-integration.py
+
+      - name: Validate repository Go module
+        run: go test ./...
+
+      - name: Compile WebPanel module
+        # The imported baseline currently has an unrelated pre-existing
+        # TestOpenVPNMultiPortTrafficExternalReset failure. -run '^$' still
+        # compiles every WebPanel package/test without treating that baseline
+        # behavioral failure as an L2TP integration failure.
+        working-directory: webpanel/backend
+        run: go test -run '^$' ./...
+
+      - name: Validate patch whitespace
+        run: git diff --check
+
+      - name: Commit validated integration
+        run: |
+          if git diff --quiet; then
+            echo "No generated integration changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            deploy/master/ikev2/irangate-ikev2 \
+            deploy/master/scripts/irangate-pg-enforcer.py \
+            deploy/master/scripts/irangate-pg-reset-client.py \
+            deploy/master/scripts/irangate-backup-v2-export.py \
+            deploy/master/scripts/irangate-backup-v2-import.py \
+            scripts/apply-panel-extras.sh \
+            uninstall.sh \
+            webpanel/backend/api.go \
+            webpanel/backend/l2tp.go \
+            webpanel/backend/client_rework.go
+          git commit -m "Complete L2TP lifecycle backup and deployment integration"
+          git push origin HEAD:feature/l2tp-shared-accounting

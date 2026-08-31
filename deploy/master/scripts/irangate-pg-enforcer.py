@@ -187,6 +187,50 @@ def ikev2_terminate(name):
     return ok, msg
 
 
+# IRANGATE_L2TP_ENFORCER_V1
+def l2tp_cmd(*args):
+    cmd = ["/usr/local/sbin/irangate-l2tp"] + list(args)
+
+    if not Path(cmd[0]).exists():
+        return False, "L2TP runtime not installed"
+
+    try:
+        r = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+        )
+    except Exception as e:
+        msg = f"L2TP CMD EXCEPTION {' '.join(cmd)}: {e}"
+        print(msg)
+        return False, msg
+
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if out:
+        print(out[:1000])
+    return r.returncode == 0, out[:1000]
+
+
+def l2tp_block(name):
+    ok, msg = l2tp_cmd("block", name)
+    print(f"L2TP BLOCK {name}: {ok}")
+    return ok, msg
+
+
+def l2tp_unblock(name):
+    ok, msg = l2tp_cmd("unblock", name)
+    print(f"L2TP UNBLOCK {name}: {ok}")
+    return ok, msg
+
+
+def l2tp_terminate_session(session_fingerprint):
+    ok, msg = l2tp_cmd("terminate-session", session_fingerprint)
+    print(f"L2TP TERMINATE SESSION {session_fingerprint}: {ok}")
+    return ok, msg
+
+
 def local_unblock(name):
     try:
         (BLOCK_DIR / name).unlink()
@@ -197,7 +241,7 @@ def local_unblock(name):
     return True
 
 def unblock_everywhere(name):
-    results = {"local": None, "ikev2": None, "nodes": []}
+    results = {"local": None, "ikev2": None, "l2tp": None, "nodes": []}
 
     try:
         results["local"] = local_unblock(name)
@@ -211,6 +255,13 @@ def unblock_everywhere(name):
     except Exception as e:
         print(f"IKEV2 UNBLOCK FAIL {name}: {e}")
         results["ikev2"] = {"ok": False, "message": str(e)}
+
+    try:
+        ok, msg = l2tp_unblock(name)
+        results["l2tp"] = {"ok": ok, "message": msg}
+    except Exception as e:
+        print(f"L2TP UNBLOCK FAIL {name}: {e}")
+        results["l2tp"] = {"ok": False, "message": str(e)}
 
     for node in get_nodes():
         if node.get("is_local"):
@@ -226,7 +277,7 @@ def unblock_everywhere(name):
     return results
 
 def block_everywhere(name):
-    results = {"local": None, "ikev2": None, "nodes": []}
+    results = {"local": None, "ikev2": None, "l2tp": None, "nodes": []}
 
     try:
         results["local"] = local_block(name)
@@ -240,6 +291,13 @@ def block_everywhere(name):
     except Exception as e:
         print(f"IKEV2 BLOCK FAIL {name}: {e}")
         results["ikev2"] = {"ok": False, "message": str(e)}
+
+    try:
+        ok, msg = l2tp_block(name)
+        results["l2tp"] = {"ok": ok, "message": msg}
+    except Exception as e:
+        print(f"L2TP BLOCK FAIL {name}: {e}")
+        results["l2tp"] = {"ok": False, "message": str(e)}
 
     for node in get_nodes():
         if node.get("is_local"):
@@ -462,6 +520,20 @@ with conn.cursor() as cur:
                 elif str(source_id) == "ikev2":
                     ok, msg = ikev2_terminate(client_name)
                     result["action"] = "ikev2_terminate"
+                    result["ok"] = bool(ok)
+                    result["message"] = msg
+
+                    if ok:
+                        cur.execute("""
+                            DELETE FROM active_sessions
+                            WHERE source_id = %s
+                              AND client_name = %s
+                              AND session_fingerprint = %s
+                        """, (source_id, client_name, session_fp))
+
+                elif str(source_id) == "l2tp":
+                    ok, msg = l2tp_terminate_session(session_fp)
+                    result["action"] = "l2tp_terminate_session"
                     result["ok"] = bool(ok)
                     result["message"] = msg
 

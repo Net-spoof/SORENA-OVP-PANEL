@@ -1,0 +1,11 @@
+[Unit]
+Description=Run IranGate L2TP PostgreSQL sync every 5 seconds
+
+[Timer]
+OnBootSec=7s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=irangate-pg-l2tp-sync.service
+
+[Install]
+WantedBy=timers.target

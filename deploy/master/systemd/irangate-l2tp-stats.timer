@@ -1,0 +1,11 @@
+[Unit]
+Description=Run IranGate L2TP traffic/session snapshot every 5 seconds
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=irangate-l2tp-stats.service
+
+[Install]
+WantedBy=timers.target

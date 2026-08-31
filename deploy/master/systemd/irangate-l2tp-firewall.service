@@ -1,0 +1,13 @@
+[Unit]
+Description=IranGate L2TP/IPSec firewall rules
+After=network-online.target strongswan.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irangate-l2tp-firewall.sh start
+ExecStop=/usr/local/sbin/irangate-l2tp-firewall.sh stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
