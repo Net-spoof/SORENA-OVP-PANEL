@@ -5,12 +5,41 @@ umask 077
 IFACE="${1:-${IFNAME:-}}"
 VIRTUAL_IP="${5:-${IPREMOTE:-}}"
 USER="${PEERNAME:-}"
-PID="${PPPD_PID:-${PPID:-0}}"
 SESSION_DIR="/run/irangate-l2tp/sessions"
 
 [[ "$IFACE" =~ ^ppp[0-9]+$ ]] || exit 0
 [[ "$USER" =~ ^[a-zA-Z0-9._-]{3,64}$ ]] || exit 0
-[[ "$PID" =~ ^[0-9]+$ ]] || PID=0
+
+pppd_pid_for_interface() {
+    local unit="${IFACE#ppp}"
+    local candidate=""
+
+    for candidate in \
+        "${PPPD_PID:-}" \
+        "$(cat "/run/ppp${unit}.pid" 2>/dev/null || true)" \
+        "$(cat "/var/run/ppp${unit}.pid" 2>/dev/null || true)"
+    do
+        [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+        [ "$candidate" -gt 1 ] || continue
+        [ -r "/proc/$candidate/comm" ] || continue
+
+        if [ "$(cat "/proc/$candidate/comm" 2>/dev/null || true)" = "pppd" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+PID="$(pppd_pid_for_interface || true)"
+if [[ ! "$PID" =~ ^[0-9]+$ ]] || [ "$PID" -le 1 ]; then
+    # Without a verified pppd PID we deliberately do not publish an active
+    # session. This prevents the connection limiter from later terminating an
+    # unrelated process. The next successful session hook will repopulate it.
+    logger -t irangate-l2tp "unable to resolve pppd pid user=$USER iface=$IFACE"
+    exit 0
+fi
 
 mkdir -p "$SESSION_DIR"
 chmod 0700 "$SESSION_DIR"
@@ -31,7 +60,7 @@ row = {
     "source_id": "l2tp",
     "client_name": sys.argv[2],
     "interface": sys.argv[3],
-    "pid": int(sys.argv[4] or 0),
+    "pid": int(sys.argv[4]),
     "virtual_ip": sys.argv[5],
     "connected_since": sys.argv[6],
     "session_fingerprint": sys.argv[7],
