@@ -816,6 +816,29 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// IRANGATE_L2TP_CREATE_RESPONSE_V1
+	l2tpResult := map[string]interface{}{
+		"enabled": false,
+	}
+	if ikev2Err == nil && ikev2Cfg.Available {
+		l2tpCfg, l2tpErr := ensureL2TPAccount(req.Name, ikev2Cfg.Password, true)
+		if l2tpErr != nil {
+			log.Printf("L2TP create failed for %s: %v", req.Name, l2tpErr)
+			l2tpResult["error"] = l2tpErr.Error()
+		} else {
+			l2tpResult = map[string]interface{}{
+				"enabled":   true,
+				"type":      "L2TP/IPSec PSK",
+				"server":    l2tpCfg.Server,
+				"ipsec_psk": l2tpCfg.IPSecPSK,
+				"username":  l2tpCfg.Username,
+				"password":  l2tpCfg.Password,
+			}
+		}
+	} else {
+		l2tpResult["error"] = "shared IKEv2 credential is unavailable"
+	}
+
 	nodeResults := []map[string]interface{}{}
 	for _, node := range activeRemoteNodesByIDs(req.Nodes) {
 		err := createClientOnNode(node, req.Name)
@@ -841,6 +864,7 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		"nodes":                  nodeResults,
 		"openvpn_port_locations": selectedPortLocationIDs,
 		"ikev2":                  ikev2Result,
+		"l2tp":                   l2tpResult,
 	})
 }
 func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
@@ -855,6 +879,10 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 
 	if output, err := exec.Command("/usr/local/sbin/irangate-ikev2", "del", name).CombinedOutput(); err != nil {
 		log.Printf("IKEv2 delete failed for %s: %v output=%s", name, err, string(output))
+	}
+
+	if output, err := exec.Command("/usr/local/sbin/irangate-l2tp", "del", name).CombinedOutput(); err != nil {
+		log.Printf("L2TP delete failed for %s: %v output=%s", name, err, string(output))
 	}
 
 	if err :=
@@ -3776,7 +3804,7 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	isOnline := presence.Online
-	if subIKEv2Online(clientName) {
+	if subIKEv2Online(clientName) || subL2TPOnline(clientName) {
 		isOnline = true
 	}
 
@@ -3851,6 +3879,19 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"/ikev2.txt?v=" +
 		downloadCacheVersion
 
+	// IRANGATE_L2TP_SUBSCRIPTION_V1
+	l2tpCfg := L2TPSubscriptionInfo{}
+	if masterAllowed && ikev2Cfg.Available {
+		l2tpCfg, _ = ensureL2TPAccount(clientName, ikev2Cfg.Password, true)
+	}
+	if !masterAllowed {
+		l2tpCfg.Available = false
+	}
+	l2tpDownloadURL := "/sub/" +
+		template.URLQueryEscaper(token) +
+		"/l2tp.txt?v=" +
+		downloadCacheVersion
+
 	masterName := "Germany Master"
 	masterFlag := "🇩🇪"
 
@@ -3917,6 +3958,8 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"SubscriptionURL":       subURL,
 		"IKEv2":                 ikev2Cfg,
 		"IKEv2DownloadURL":      ikev2DownloadURL,
+		"L2TP":                  l2tpCfg,
+		"L2TPDownloadURL":       l2tpDownloadURL,
 	}
 
 	tpl := template.Must(template.New("sub").Parse(`<!doctype html>
@@ -4083,6 +4126,52 @@ body{margin:0;font-family:Tahoma,Arial,sans-serif;background:radial-gradient(cir
         </div>
 
         <div class="ike-note">در تنظیمات VPN گوشی، نوع اتصال را روی <b>IKEv2/IPSec MSCHAPv2</b> بگذارید. مقدار CA را روی <b>Do not validate</b> و Server certificate را روی <b>Received from server</b> قرار دهید.</div>
+      </div>
+    </div>
+{{end}}
+
+{{if .L2TP.Available}}
+    <div class="ike-card">
+      <div class="ike-head">
+        <div>
+          <div class="ike-title"><span class="badge">L2TP</span> L2TP/IPSec</div>
+          <div class="ike-sub">اتصال داخلی سیستم‌عامل با همان نام کاربری و رمز IKEv2</div>
+        </div>
+        <a class="ike-btn primary fresh-download" href="{{.L2TPDownloadURL}}">⬇️ دانلود اطلاعات L2TP</a>
+      </div>
+
+      <div class="ike-body">
+        <div class="ike-grid">
+          <div class="ike-item">
+            <div class="ike-label">نوع اتصال</div>
+            <div class="ike-value fa">L2TP/IPSec PSK</div>
+          </div>
+          <div class="ike-item">
+            <div class="ike-label">Server</div>
+            <div class="ike-value">{{.L2TP.Server}}</div>
+          </div>
+          <div class="ike-item">
+            <div class="ike-label">IPSec PSK</div>
+            <div class="ike-value ike-password">{{.L2TP.IPSecPSK}}</div>
+          </div>
+          <div class="ike-item">
+            <div class="ike-label">Username</div>
+            <div class="ike-value">{{.L2TP.Username}}</div>
+          </div>
+          <div class="ike-item">
+            <div class="ike-label">Password</div>
+            <div class="ike-value ike-password">{{.L2TP.Password}}</div>
+          </div>
+        </div>
+
+        <div class="ike-actions">
+          <button class="ike-btn" type="button" data-copy="{{.L2TP.Server}}" onclick="copyIKEValue(this)">کپی Server</button>
+          <button class="ike-btn" type="button" data-copy="{{.L2TP.IPSecPSK}}" onclick="copyIKEValue(this)">کپی PSK</button>
+          <button class="ike-btn" type="button" data-copy="{{.L2TP.Username}}" onclick="copyIKEValue(this)">کپی Username</button>
+          <button class="ike-btn" type="button" data-copy="{{.L2TP.Password}}" onclick="copyIKEValue(this)">کپی Password</button>
+        </div>
+
+        <div class="ike-note">حجم و محدودیت تعداد اتصال بین OpenVPN، IKEv2 و L2TP مشترک است.</div>
       </div>
     </div>
 {{end}}
@@ -4423,6 +4512,7 @@ func main() {
 	r.HandleFunc("/ws", wsHandler)
 	r.HandleFunc("/sub/{token}", subscriptionPageHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/ikev2.txt", subscriptionIKEv2DownloadHandler).Methods("GET")
+	r.HandleFunc("/sub/{token}/l2tp.txt", subscriptionL2TPDownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/download", subscriptionDownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/node/{node}/download", subscriptionNodeDownloadHandler).Methods("GET")
 	r.HandleFunc("/sub/{token}/port/{location}/download", subscriptionPortLocationDownloadHandler).Methods("GET")

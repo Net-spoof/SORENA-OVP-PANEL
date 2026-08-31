@@ -148,6 +148,23 @@ conn.close()
 local_unblock(name)
 node_unblock(name)
 
+# IRANGATE_L2TP_RESET_UNBLOCK_V1
+for manager in (
+    "/usr/local/sbin/irangate-ikev2",
+    "/usr/local/sbin/irangate-l2tp",
+):
+    try:
+        subprocess.run(
+            [manager, "unblock", name],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+        )
+    except Exception as exc:
+        print("VPN UNBLOCK WARN", manager, name, exc)
+
 print("===== refresh mirror after reset =====")
 subprocess.run(
     ["/usr/local/bin/irangate-pg-usage-tick.py", "--apply"],

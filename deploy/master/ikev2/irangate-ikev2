@@ -110,6 +110,20 @@ gen_pass() {
   openssl rand -base64 24 | tr -d '=+/' | cut -c1-22
 }
 
+# IRANGATE_L2TP_SHARED_CREDENTIAL_SYNC_V1
+l2tp_sync() {
+  if [ ! -x /usr/local/sbin/irangate-l2tp ]; then
+    return 0
+  fi
+
+  if ! /usr/local/sbin/irangate-l2tp "$@" >/dev/null 2>&1; then
+    echo "WARNING: L2TP sync failed: $*" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 render_users_conf() {
   {
     echo "secrets {"
@@ -196,6 +210,9 @@ set_status() {
 
   if [ "$status" = "blocked" ]; then
     terminate_user "$user" >/dev/null 2>&1 || true
+    l2tp_sync block "$user" || true
+  else
+    l2tp_sync unblock "$user" || true
   fi
 
   echo "IKEv2 user status changed ✅ user=$user old=$old_status new=$status"
@@ -226,6 +243,9 @@ add_user() {
   render_users_conf
   reload_swanctl
 
+  # Keep IKEv2 and L2TP on exactly the same username/password.
+  l2tp_sync add "$user" "$pass" || true
+
   echo "IKEv2 user created ✅"
   echo
   show_config "$user"
@@ -244,6 +264,7 @@ delete_user() {
 
   render_users_conf
   reload_swanctl
+  l2tp_sync del "$user" || true
 
   echo "IKEv2 user deleted ✅ $user"
 }
