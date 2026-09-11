@@ -1,0 +1,36 @@
+name: Verify Settings Analytics UI
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: ['.github/workflows/verify-settings-analytics-ui.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+      - name: Verify HTML and JavaScript syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+          for page in ('webpanel/frontend/analytics.html','webpanel/frontend/settings.html'):
+              text = Path(page).read_text(encoding='utf-8')
+              blocks = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', text, flags=re.S|re.I)
+              print(page, 'inline scripts:', len(blocks))
+              for i, block in enumerate(blocks):
+                  Path(f'/tmp/{Path(page).stem}-{i}.js').write_text(block, encoding='utf-8')
+          PY
+          for f in /tmp/analytics-*.js /tmp/settings-*.js; do
+            [ -f "$f" ] || continue
+            node --check "$f"
+          done
+          grep -Fq 'analytics-ui-20260912-v1' webpanel/frontend/analytics.html
+          grep -Fq 'settings-ui-20260912-v2' webpanel/frontend/settings.html
+          grep -Fq 'No demo or randomly generated metrics are used.' webpanel/frontend/analytics.html
+          ! grep -Eq 'generateSample|Math\.random' webpanel/frontend/analytics.html
+          git diff --check
