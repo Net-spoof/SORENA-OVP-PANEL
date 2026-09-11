@@ -400,3 +400,40 @@ body.page-analytics #particleCanvas {
 @media (prefers-reduced-motion: reduce) {
   .analytics-actions button { transition: none !important; }
 }
+
+/* NET SPOOF Analytics isolated contrast fix */
+
+body.page-analytics .bg-white {
+    background: var(--an-surface) !important;
+    backdrop-filter: none !important;
+}
+
+body.page-analytics .text-gray-900,
+body.page-analytics .text-gray-800 {
+    color: var(--an-text) !important;
+}
+
+body.page-analytics .text-gray-700,
+body.page-analytics .text-gray-600,
+body.page-analytics .text-gray-500 {
+    color: var(--an-muted) !important;
+}
+
+body.page-analytics .analytics-card,
+body.page-analytics .analytics-metric,
+body.page-analytics .analytics-table-card {
+    background: #112240 !important;
+    opacity: 1 !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+}
+
+body.page-analytics .analytics-table {
+    color: #e6f1ff !important;
+}
+
+body.page-analytics .analytics-table td,
+body.page-analytics .analytics-table th {
+    color: #e6f1ff !important;
+}
+
