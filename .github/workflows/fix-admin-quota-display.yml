@@ -1,0 +1,110 @@
+name: Fix delegated admin quota display
+
+on:
+  push:
+    branches:
+      - l2tp-dev
+    paths:
+      - .github/workflows/fix-admin-quota-display.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch delegated admin decimal quota display
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('webpanel/frontend/admins.html')
+          text = p.read_text(encoding='utf-8')
+
+          anchor = """        function quotaMultiplier(unit) {
+            if (unit === 'TB') return 1000 * 1000 * 1000 * 1000;
+            if (unit === 'GB') return 1000 * 1000 * 1000;
+            return 1000 * 1000;
+        }
+"""
+
+          helper = anchor + """
+        // Delegated-admin quotas are entered/stored with decimal SI units:
+        // 1 GB = 1,000,000,000 bytes and 1 TB = 1,000,000,000,000 bytes.
+        // Keep admin pool display on the same unit system so 100 GB stays 100 GB.
+        function formatAdminQuotaBytes(bytes) {
+            const value = Math.max(0, asNumber(bytes));
+            if (value === 0) return '0 Bytes';
+
+            const units = [
+                ['TB', 1000 * 1000 * 1000 * 1000],
+                ['GB', 1000 * 1000 * 1000],
+                ['MB', 1000 * 1000],
+                ['KB', 1000],
+                ['Bytes', 1]
+            ];
+
+            const [unit, size] = units.find(([, size]) => value >= size) || units[units.length - 1];
+            const amount = value / size;
+            const rounded = amount >= 100 ? amount.toFixed(0) : amount >= 10 ? amount.toFixed(1) : amount.toFixed(2);
+            return `${Number(rounded)} ${unit}`;
+        }
+"""
+
+          if 'function formatAdminQuotaBytes(bytes)' not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit(f'quotaMultiplier anchor count={text.count(anchor)}')
+              text = text.replace(anchor, helper, 1)
+
+          replacements = {
+              "${formatBytes(used)}</span><span class=\"text-gray-400\">/ ${formatBytes(limit)}": "${formatAdminQuotaBytes(used)}</span><span class=\"text-gray-400\">/ ${formatAdminQuotaBytes(limit)}",
+              "${formatBytes(asNumber(admin.traffic_remaining_bytes))} remaining": "${formatAdminQuotaBytes(asNumber(admin.traffic_remaining_bytes))} remaining",
+              "`${formatBytes(totalUsed)} / ${formatBytes(totalLimit)}`": "`${formatAdminQuotaBytes(totalUsed)} / ${formatAdminQuotaBytes(totalLimit)}`",
+              "${formatBytes(used)}</div></div>\n                    <div class=\"rounded-xl border border-gray-100 p-4\"><div class=\"text-xs text-gray-400\">Total traffic</div><div class=\"mt-1 text-lg font-bold text-gray-900\">${formatBytes(limit)}</div></div>\n                    <div class=\"rounded-xl border border-gray-100 p-4\"><div class=\"text-xs text-gray-400\">Remaining</div><div class=\"mt-1 text-lg font-bold text-gray-900\">${formatBytes(remaining)}": "${formatAdminQuotaBytes(used)}</div></div>\n                    <div class=\"rounded-xl border border-gray-100 p-4\"><div class=\"text-xs text-gray-400\">Total traffic</div><div class=\"mt-1 text-lg font-bold text-gray-900\">${formatAdminQuotaBytes(limit)}</div></div>\n                    <div class=\"rounded-xl border border-gray-100 p-4\"><div class=\"text-xs text-gray-400\">Remaining</div><div class=\"mt-1 text-lg font-bold text-gray-900\">${formatAdminQuotaBytes(remaining)}"
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit('expected quota display pattern not found: ' + old[:100])
+              text = text.replace(old, new, 1)
+
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify inline JavaScript
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path('webpanel/frontend/admins.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', text, re.S | re.I)
+          Path('/tmp/admins-inline.js').write_text('\n'.join(s for s in scripts if s.strip()), encoding='utf-8')
+          PY
+          node --check /tmp/admins-inline.js
+
+      - name: Verify quota semantics
+        shell: bash
+        run: |
+          grep -q 'function formatAdminQuotaBytes(bytes)' webpanel/frontend/admins.html
+          grep -q 'formatAdminQuotaBytes(totalUsed)' webpanel/frontend/admins.html
+          grep -q 'formatAdminQuotaBytes(admin.traffic_remaining_bytes)' webpanel/frontend/admins.html || grep -q 'formatAdminQuotaBytes(asNumber(admin.traffic_remaining_bytes))' webpanel/frontend/admins.html
+          grep -q 'formatAdminQuotaBytes(limit)' webpanel/frontend/admins.html
+          git diff --check
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add webpanel/frontend/admins.html
+          git commit -m 'fix(ui): display delegated admin quotas in decimal units'
+          git push origin HEAD:l2tp-dev
