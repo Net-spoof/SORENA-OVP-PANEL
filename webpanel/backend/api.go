@@ -419,6 +419,7 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 	trafficDB := NewTrafficDatabase()
 	trafficStats, err := trafficDB.GetCurrentClientStats()
 	cumulativeTotals := trafficDB.loadCumulativeTotalsMap()
+	globalUsageTotals := delegatedGlobalUsageMap()
 	parser := NewOpenVPNStatusParser()
 	currentlyConnected := make(map[string]bool)
 	connectedSince := make(map[string]time.Time)
@@ -448,6 +449,9 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 		for i, client := range clients {
 			if clientMap, ok := client.(map[string]interface{}); ok {
 				if name, ok := clientMap["name"].(string); ok {
+					if authoritativeUsed, exists := globalUsageTotals[strings.ToLower(strings.TrimSpace(name))]; exists {
+						clientMap["traffic_used_bytes"] = authoritativeUsed
+					}
 					if token, err := ensureClientSubscriptionToken(name); err == nil {
 						clientMap["subscription_token"] = token
 						clientMap["subscription_url"] = buildSubscriptionURL(r, token)
