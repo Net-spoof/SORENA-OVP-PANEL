@@ -1,0 +1,192 @@
+name: One-shot full transport enforcement
+
+on:
+  push:
+    branches:
+      - l2tp-dev
+    paths:
+      - .github/workflows/one-shot-full-transport-enforcement.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout l2tp-dev
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch lifecycle transport enforcement
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('webpanel/backend/client_lifecycle.go')
+          text = path.read_text()
+
+          old_stop = '''\t// روی هر نود: block + kill
+\tgo blockRemoteNodes(clientName)
+
+\t// پاک‌کردن cache صفحه کاربران
+'''
+
+          new_stop = '''\t// روی هر نود: block + kill
+\t// Keep this synchronous: lifecycle stop must not return before all
+\t// configured remote nodes have received the block/kill request.
+\tblockRemoteNodes(clientName)
+
+\t// IKEv2 uses its own credential store, so OpenVPN block files are
+\t// not sufficient. Block the account and terminate any active SA.
+\tif out, err := ikev2Run("block", clientName); err != nil {
+\t\tlog.Printf(
+\t\t\t"Client %s IKEv2 block/terminate failed: %v (%s)",
+\t\t\tclientName,
+\t\t\terr,
+\t\t\tstrings.TrimSpace(out),
+\t\t)
+\t}
+
+\t// پاک‌کردن cache صفحه کاربران
+'''
+
+          if text.count(old_stop) != 1:
+              raise SystemExit(f'expected exactly one lifecycle stop block, found {text.count(old_stop)}')
+
+          text = text.replace(old_stop, new_stop, 1)
+
+          marker = '''func StartBlockedClientRemoteSync(
+'''
+
+          helper = r'''func syncBlockedIKEv2Clients(blockedNames []string) {
+	if len(blockedNames) == 0 {
+		return
+	}
+
+	const usersDB = "/opt/irangate/ikev2/users.tsv"
+
+	data, err := os.ReadFile(usersDB)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("IKEv2 blocked-client sync: read users database failed: %v", err)
+		}
+		return
+	}
+
+	active := make(map[string]bool)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "\t")
+		if len(parts) < 4 {
+			continue
+		}
+
+		name := strings.TrimSpace(parts[0])
+		status := strings.TrimSpace(parts[3])
+
+		if name != "" && strings.EqualFold(status, "active") {
+			active[strings.ToLower(name)] = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("IKEv2 blocked-client sync: parse users database failed: %v", err)
+		return
+	}
+
+	for _, blockedName := range blockedNames {
+		blockedName = strings.TrimSpace(blockedName)
+		if blockedName == "" || !active[strings.ToLower(blockedName)] {
+			continue
+		}
+
+		out, err := ikev2Run("block", blockedName)
+		if err != nil {
+			log.Printf(
+				"IKEv2 blocked-client sync failed for %s: %v (%s)",
+				blockedName,
+				err,
+				strings.TrimSpace(out),
+			)
+			continue
+		}
+
+		log.Printf("Synced blocked client to IKEv2: %s", blockedName)
+	}
+}
+
+'''
+
+          if text.count(marker) != 1:
+              raise SystemExit(f'expected exactly one StartBlockedClientRemoteSync marker, found {text.count(marker)}')
+
+          text = text.replace(marker, helper + marker, 1)
+
+          old_sync = '''\t\tif len(blockedNames) == 0 {
+\t\t\treturn
+\t\t}
+
+\t\tfor _, node := range loadResetNodes() {
+'''
+
+          new_sync = '''\t\tif len(blockedNames) == 0 {
+\t\t\treturn
+\t\t}
+
+\t\t// Keep IKEv2 access in parity with the same durable block set used
+\t\t// by the master and remote OpenVPN nodes. This also repairs drift
+\t\t// after restarts/restores or a transient IKEv2 block failure.
+\t\tsyncBlockedIKEv2Clients(blockedNames)
+
+\t\tfor _, node := range loadResetNodes() {
+'''
+
+          if text.count(old_sync) != 1:
+              raise SystemExit(f'expected exactly one blocked sync insertion point, found {text.count(old_sync)}')
+
+          text = text.replace(old_sync, new_sync, 1)
+          path.write_text(text)
+          PY
+
+          gofmt -w webpanel/backend/client_lifecycle.go
+
+      - name: Verify source invariants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='webpanel/backend/client_lifecycle.go'
+
+          grep -Fq 'blockRemoteNodes(clientName)' "$FILE"
+          ! grep -Fq 'go blockRemoteNodes(clientName)' "$FILE"
+          grep -Fq 'ikev2Run("block", clientName)' "$FILE"
+          grep -Fq 'func syncBlockedIKEv2Clients(blockedNames []string)' "$FILE"
+          grep -Fq 'syncBlockedIKEv2Clients(blockedNames)' "$FILE"
+          git diff --check
+
+      - name: Run backend tests
+        shell: bash
+        run: |
+          cd webpanel/backend
+          go test ./...
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if git diff --quiet -- webpanel/backend/client_lifecycle.go; then
+            echo 'No lifecycle changes to commit.'
+            exit 0
+          fi
+
+          git add webpanel/backend/client_lifecycle.go
+          git commit -m 'fix(lifecycle): enforce expiry and quota on every VPN transport'
+          git push origin HEAD:l2tp-dev
