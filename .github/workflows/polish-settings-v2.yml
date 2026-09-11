@@ -1,0 +1,65 @@
+name: Polish Settings V2
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: ['.github/workflows/polish-settings-v2.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+      - name: Patch settings UI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('webpanel/frontend/settings.html')
+          s = p.read_text(encoding='utf-8')
+
+          def once(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {n}')
+              s = s.replace(old, new, 1)
+
+          once(
+              '<link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">',
+              '<link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">\n    <link rel="stylesheet" href="css/settings-ui.css?v=settings-ui-20260912-v2">',
+              'settings css link'
+          )
+
+          once(
+              '    <div class="max-w-4xl mx-auto px-4 py-8">\n        <h1 class="text-3xl font-bold text-gray-800 mb-8">Settings</h1>',
+              '''    <div class="max-w-4xl mx-auto px-4 py-8">\n        <div class="settings-hero">\n            <div>\n                <h1 class="text-3xl font-bold text-gray-800">Settings</h1>\n                <p>Manage panel security, server identity, appearance, Telegram automation, backups and proxy/server behavior from one control center.</p>\n                <span class="settings-scope-badge">Root control center</span>\n            </div>\n        </div>''',
+              'settings hero'
+          )
+
+          once(
+              '<div class="mb-6 border-b border-gray-200">\n            <nav class="-mb-px flex flex-wrap gap-x-8 gap-y-2">',
+              '<div class="settings-tab-wrap mb-6 border-b border-gray-200">\n            <nav class="-mb-px flex flex-wrap gap-x-8 gap-y-2">',
+              'settings tabs'
+          )
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+          grep -Fq 'settings-ui-20260912-v2' webpanel/frontend/settings.html
+          grep -Fq 'class="settings-hero"' webpanel/frontend/settings.html
+          grep -Fq 'class="settings-tab-wrap' webpanel/frontend/settings.html
+          git diff --check
+      - name: Commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add webpanel/frontend/settings.html
+          git commit -m 'feat(ui): polish settings control center v2'
+          git push origin HEAD:l2tp-dev
