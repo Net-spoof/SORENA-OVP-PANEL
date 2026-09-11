@@ -1,0 +1,46 @@
+name: Bump Sidebar Brand Cache V3
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: ['.github/workflows/bump-sidebar-brand-cache-v3.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+      - name: Bump sidebar cache key
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('webpanel/frontend')
+          version = 'panel-ui-20260911-v3'
+          changed = []
+          for page in root.glob('*.html'):
+              text = page.read_text(encoding='utf-8')
+              new = re.sub(r'js/sidebar\.js(?:\?v=[^"\']*)?', f'js/sidebar.js?v={version}', text)
+              if new != text:
+                  page.write_text(new, encoding='utf-8')
+                  changed.append(str(page))
+          if not changed:
+              raise SystemExit('no HTML sidebar references changed')
+          for page in root.glob('*.html'):
+              text = page.read_text(encoding='utf-8')
+              if 'js/sidebar.js' in text and f'js/sidebar.js?v={version}' not in text:
+                  raise SystemExit(f'stale sidebar reference in {page}')
+          print('\n'.join(changed))
+          PY
+      - run: node --check webpanel/frontend/js/sidebar.js
+      - run: git diff --check
+      - name: Commit
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add webpanel/frontend/*.html
+          git commit -m "fix(ui): force fresh NET SPOOF sidebar asset"
+          git push origin HEAD:l2tp-dev
