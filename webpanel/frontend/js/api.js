@@ -360,9 +360,12 @@ function checkAuth() {
 
     const role = localStorage.getItem('role') || 'root';
     const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
-    if (role === 'delegated_admin' && currentPage !== 'clients.html') {
-        window.location.replace('clients.html');
-        return false;
+    if (role === 'delegated_admin') {
+        const allowedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
+        if (!allowedPages.has(currentPage)) {
+            window.location.replace('dealer-dashboard.html');
+            return false;
+        }
     }
 
     return true;
