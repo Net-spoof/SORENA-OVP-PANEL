@@ -472,6 +472,18 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 							if connLimit, ok := diskData["connection_limit"]; ok {
 								clientMap["connection_limit"] = connLimit
 							}
+							if ownerAdmin, ok := diskData["owner_admin"]; ok {
+								clientMap["owner_admin"] = ownerAdmin
+							}
+							if adminSuspended, ok := diskData["admin_suspended"]; ok {
+								clientMap["admin_suspended"] = adminSuspended
+							}
+							if suspendReason, ok := diskData["admin_suspend_reason"]; ok {
+								clientMap["admin_suspend_reason"] = suspendReason
+							}
+							if persistedStatus, ok := diskData["status"]; ok {
+								clientMap["persisted_status"] = persistedStatus
+							}
 						}
 					}
 
