@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Usage - IranGate</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -13,7 +16,7 @@
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
     <script src="js/particles.js"></script>
-    <script src="js/sidebar.js?v=delegated-portal-20260911-v1"></script>
+    <script src="js/sidebar.js?v=delegated-portal-20260911-v2"></script>
     <script src="js/delegated-portal.js?v=delegated-portal-20260911-v1"></script>
     <script src="js/theme-loader.js"></script>
     <style>
@@ -107,7 +110,7 @@
         </div>
     </main>
 
-    <script src="js/api.js?v=delegated-portal-20260911-v1"></script>
+    <script src="js/api.js?v=delegated-portal-20260911-v2"></script>
     <script>
         if (!checkAuth()) throw new Error('Authentication required');
         if ((localStorage.getItem('role') || 'root') !== 'delegated_admin') window.location.replace('dashboard.html');
