@@ -149,11 +149,11 @@ open_anchor = '''            const admin = admins.find(a => String(a.username).t
 open_replacement = '''            const admin = admins.find(a => String(a.username).toLowerCase() === username.toLowerCase());
             if (!admin) return;
 
-            const modal = document.getElementById('detailsModal');
+            const detailsModalEl = document.getElementById('detailsModal');
             document.getElementById('detailsTitle').textContent = `${username} · Admin Details`;
             document.getElementById('detailsContent').innerHTML = `<div class="py-14 text-center"><div class="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-purple-500"></div><div class="font-semibold text-gray-700">Loading client details…</div><div class="mt-1 text-xs text-gray-400">The admin list stays fast; full client data loads only here.</div></div>`;
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
+            detailsModalEl.classList.remove('hidden');
+            detailsModalEl.classList.add('flex');
 
             try {
                 await ensureClientsLoaded();

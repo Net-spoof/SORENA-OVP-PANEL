@@ -62,7 +62,7 @@
                 <div class="sidebar-header">
                     <div class="sidebar-logo">
                         <div class="sidebar-logo-icon">
-                            <img src="logo/logo.ico" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg">
+                            <img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg">
                         </div>
                         <span class="sidebar-logo-text">NET SPOOF</span>
                     </div>

@@ -6,13 +6,14 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Admins - IranGate</title>
+    <title>Admins - NET SPOOF</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
     <link rel="stylesheet" href="css/sidebar.css">
     <link rel="stylesheet" href="css/mobile.css">
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
+    <link rel="stylesheet" href="css/admins-ui.css?v=admins-ui-20260911-v1">
     <style>
         .soft-ring { box-shadow: 0 0 0 1px rgba(148,163,184,.12); }
         .admin-row { cursor: pointer; }
@@ -22,11 +23,11 @@
     <div id="sidebar-container"></div>
 
     <main class="main-content">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-7">
+        <div class="admins-shell max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
+            <div class="admins-hero flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-7">
                 <div>
-                    <h1 class="text-3xl font-bold text-gray-900">Delegated Admins</h1>
-                    <p class="text-gray-500 mt-2">Manage reseller access, traffic pools, validity and owned users from one place.</p>
+                    <h1 class="text-3xl font-bold text-gray-900">Reseller Admins</h1>
+                    <p class="text-gray-500 mt-2">Manage reseller accounts, quotas, validity and owned users from one fast workspace.</p>
                 </div>
                 <div class="flex gap-2">
                     <button onclick="loadAdmins(true)" class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Refresh</button>
@@ -35,30 +36,31 @@
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                <div class="admin-stat-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
                     <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Total Admins</p>
                     <p id="statTotal" class="mt-2 text-3xl font-bold text-gray-900">0</p>
                 </div>
-                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                <div class="admin-stat-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
                     <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Active Admins</p>
                     <p id="statActive" class="mt-2 text-3xl font-bold text-emerald-600">0</p>
                 </div>
-                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                <div class="admin-stat-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
                     <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Managed Users</p>
                     <p id="statClients" class="mt-2 text-3xl font-bold text-blue-600">0</p>
                 </div>
-                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                <div class="admin-stat-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
                     <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Traffic Pools</p>
                     <p id="statTraffic" class="mt-2 text-lg font-bold text-gray-900">0 B / 0 B</p>
                     <p class="mt-1 text-xs text-gray-500">Used / total assigned</p>
                 </div>
             </div>
 
-            <section class="soft-ring rounded-2xl bg-white shadow-sm overflow-hidden">
-                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-gray-100 px-5 py-4">
+            <section class="admin-list-card soft-ring rounded-2xl bg-white shadow-sm overflow-hidden">
+                <div class="admin-list-toolbar flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-gray-100 px-5 py-4">
                     <div>
                         <h2 class="font-semibold text-gray-900">Admin List</h2>
-                        <p class="text-xs text-gray-500 mt-1">Click an admin to inspect its users, usage and connection state.</p>
+                        <p class="text-xs text-gray-500 mt-1">The list loads immediately; detailed client data is fetched only when you open an admin.</p>
+                        <span id="adminsUpdated" class="admins-updated mt-2">Loading accounts…</span>
                     </div>
                     <input id="adminSearch" oninput="renderAdmins()" class="w-full md:w-64 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-purple-400" placeholder="Search admin...">
                 </div>
@@ -137,7 +139,7 @@
     </div>
 
     <script src="js/api.js?v=delegated-portal-20260911-v2"></script>
-    <script src="js/sidebar.js?v=panel-ui-20260911-v3"></script>
+    <script src="js/sidebar.js?v=panel-ui-20260911-v4"></script>
     <script>
         if (!checkAuth()) throw new Error('Authentication required');
         if ((localStorage.getItem('role') || 'root') === 'delegated_admin') window.location.replace('clients.html');
@@ -145,6 +147,8 @@
 
         let admins = [];
         let allClients = [];
+        let clientsLoaded = false;
+        let clientsLoadingPromise = null;
 
         const authHeaders = () => ({'Content-Type':'application/json','Authorization':'Bearer ' + (localStorage.getItem('token') || '')});
         const asNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -249,16 +253,27 @@
 
         async function loadAdmins(force = false) {
             const table = document.getElementById('adminsTable');
-            table.innerHTML = '<tr><td colspan="6" class="px-5 py-10 text-center text-gray-400">Loading...</td></tr>';
+            table.setAttribute('aria-busy', 'true');
+            table.innerHTML = Array.from({length: 3}, () => `<tr><td colspan="6" class="px-5 py-4"><div class="grid grid-cols-6 gap-4 items-center"><div class="admin-skeleton h-5 col-span-1"></div><div class="admin-skeleton h-5"></div><div class="admin-skeleton h-5"></div><div class="admin-skeleton h-5 col-span-2"></div><div class="admin-skeleton h-5"></div></div></td></tr>`).join('');
             try {
-                if (force && api.invalidateCache) api.invalidateCache('/clients');
-                const [adminResult, clientResult] = await Promise.all([apiCall('/delegated-admins'), api.getClients()]);
+                if (force) {
+                    if (api.invalidateCache) api.invalidateCache('/clients');
+                    allClients = [];
+                    clientsLoaded = false;
+                    clientsLoadingPromise = null;
+                }
+                // Fast path: /delegated-admins already includes client_count and quota totals.
+                // Do not block the page on the much heavier root /clients endpoint.
+                const adminResult = await apiCall('/delegated-admins');
                 admins = Array.isArray(adminResult.data) ? adminResult.data : [];
-                allClients = clientResult?.success && Array.isArray(clientResult.data) ? clientResult.data : [];
                 renderAdmins();
+                const updated = document.getElementById('adminsUpdated');
+                if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
             } catch (error) {
                 table.innerHTML = `<tr><td colspan="6" class="px-5 py-10 text-center text-red-500">${escapeHtml(error.message)}</td></tr>`;
                 showToast(error.message, 'error');
+            } finally {
+                table.removeAttribute('aria-busy');
             }
         }
 
@@ -296,6 +311,27 @@
                 </tr>`).join('');
         }
 
+        async function ensureClientsLoaded() {
+            if (clientsLoaded) return allClients;
+            if (clientsLoadingPromise) return clientsLoadingPromise;
+
+            clientsLoadingPromise = (async () => {
+                const result = await api.getClients();
+                if (!result?.success || !Array.isArray(result.data)) {
+                    throw new Error(result?.message || 'Failed to load client details');
+                }
+                allClients = result.data;
+                clientsLoaded = true;
+                return allClients;
+            })();
+
+            try {
+                return await clientsLoadingPromise;
+            } finally {
+                clientsLoadingPromise = null;
+            }
+        }
+
         function getOwnedClients(username) {
             const target = String(username || '').toLowerCase();
             return allClients.filter(client => String(client.owner_admin || '').toLowerCase() === target);
@@ -312,10 +348,24 @@
             return `<span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">${label}</span>`;
         }
 
-        function openAdminDetails(encoded) {
+        async function openAdminDetails(encoded) {
             const username = decodeURIComponent(encoded);
             const admin = admins.find(a => String(a.username).toLowerCase() === username.toLowerCase());
             if (!admin) return;
+
+            const detailsModalEl = document.getElementById('detailsModal');
+            document.getElementById('detailsTitle').textContent = `${username} · Admin Details`;
+            document.getElementById('detailsContent').innerHTML = `<div class="py-14 text-center"><div class="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-purple-500"></div><div class="font-semibold text-gray-700">Loading client details…</div><div class="mt-1 text-xs text-gray-400">The admin list stays fast; full client data loads only here.</div></div>`;
+            detailsModalEl.classList.remove('hidden');
+            detailsModalEl.classList.add('flex');
+
+            try {
+                await ensureClientsLoaded();
+            } catch (error) {
+                document.getElementById('detailsContent').innerHTML = `<div class="rounded-xl border border-red-200 bg-red-50 p-5 text-red-700">${escapeHtml(error.message)}</div>`;
+                return;
+            }
+
             const clients = getOwnedClients(username);
             const activeUsers = clients.filter(isClientActive).length;
             const onlineUsers = clients.filter(isClientOnline).length;

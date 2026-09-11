@@ -95,7 +95,7 @@ function createSidebar(activePage) {
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-logo">
-                        <div class="sidebar-logo-icon"><img src="logo/logo.ico" alt="IranGate Logo" class="w-10 h-10 rounded-lg"></div>
+                        <div class="sidebar-logo-icon"><img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg"></div>
                         <span class="sidebar-logo-text">NET SPOOF</span>
                     </div>
                     <div class="sidebar-user">
@@ -144,7 +144,7 @@ function createSidebar(activePage) {
             <div class="sidebar-header">
                 <div class="sidebar-logo">
                     <div class="sidebar-logo-icon">
-                        <img src="logo/logo.ico" alt="IranGate Logo" class="w-10 h-10 rounded-lg">
+                        <img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg">
                     </div>
                     <span class="sidebar-logo-text">NET SPOOF</span>
                 </div>
