@@ -1,16 +1,75 @@
 // Sidebar Component for IranGate Web Panel
 
-// Delegated route guard v2
-(function enforceDelegatedRoute() {
-    const role = localStorage.getItem('role') || 'root';
+// Authoritative auth-role bootstrap v3
+(function bootstrapAuthoritativeRole() {
     const token = localStorage.getItem('token');
-    if (role !== 'delegated_admin' || !token) return;
+    const cachedRole = localStorage.getItem('role') || 'root';
 
-    const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
-    const allowed = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
-    if (!allowed.has(page)) {
-        window.location.replace('dealer-dashboard.html');
+    // Hide protected pages briefly while /api/me resolves so a stale cached role
+    // cannot render root navigation for a delegated admin.
+    if (token) {
+        const style = document.createElement('style');
+        style.id = 'irangate-auth-guard-style';
+        style.textContent = 'html.irangate-auth-resolving body{visibility:hidden!important}';
+        document.head.appendChild(style);
+        document.documentElement.classList.add('irangate-auth-resolving');
     }
+
+    const allowedDelegatedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
+
+    window.irangateAuthState = (async () => {
+        if (!token) {
+            document.documentElement.classList.remove('irangate-auth-resolving');
+            return { role: cachedRole, redirected: false };
+        }
+
+        try {
+            const response = await fetch('/api/me', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${token}` },
+                cache: 'no-store'
+            });
+
+            if (response.status === 401) {
+                localStorage.clear();
+                window.location.replace('index.html');
+                return { role: null, redirected: true };
+            }
+
+            if (!response.ok) {
+                throw new Error(`Role check failed with HTTP ${response.status}`);
+            }
+
+            const payload = await response.json();
+            if (!payload || payload.success !== true || !payload.data || !payload.data.role) {
+                throw new Error('Role check returned an invalid payload');
+            }
+
+            const role = String(payload.data.role);
+            const username = payload.data.username ? String(payload.data.username) : '';
+            localStorage.setItem('role', role);
+            if (username) localStorage.setItem('username', username);
+
+            const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
+            if (role === 'delegated_admin' && !allowedDelegatedPages.has(page)) {
+                window.location.replace('dealer-dashboard.html');
+                return { role, redirected: true };
+            }
+
+            return { role, redirected: false };
+        } catch (error) {
+            console.error('IranGate authoritative role check failed:', error);
+            // Fail closed for a session that is already known to be delegated.
+            const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
+            if (cachedRole === 'delegated_admin' && !allowedDelegatedPages.has(page)) {
+                window.location.replace('dealer-dashboard.html');
+                return { role: cachedRole, redirected: true };
+            }
+            return { role: cachedRole, redirected: false, error: true };
+        } finally {
+            document.documentElement.classList.remove('irangate-auth-resolving');
+        }
+    })();
 })();
 
 function createSidebar(activePage) {
@@ -214,11 +273,25 @@ function closeSidebar() {
     overlay.classList.remove('active');
 }
 
-// Initialize sidebar
-function initSidebar(activePage) {
+// Initialize sidebar only after the backend-authoritative role has resolved.
+async function initSidebar(activePage) {
+    const authState = window.irangateAuthState
+        ? await window.irangateAuthState
+        : { role: localStorage.getItem('role') || 'root', redirected: false };
+
+    if (authState && authState.redirected) return;
+
+    // Remove an already-rendered stale sidebar if a page script called init twice.
+    const oldSidebar = document.getElementById('sidebar');
+    if (oldSidebar) oldSidebar.remove();
+    const oldToggle = document.querySelector('.sidebar-toggle');
+    if (oldToggle) oldToggle.remove();
+    const oldOverlay = document.querySelector('.sidebar-overlay');
+    if (oldOverlay) oldOverlay.remove();
+
     const sidebarHTML = createSidebar(activePage);
     document.body.insertAdjacentHTML('afterbegin', sidebarHTML);
-    
+
     // Close sidebar when clicking menu item on mobile
     if (window.innerWidth <= 1024) {
         document.querySelectorAll('.menu-item').forEach(item => {
