@@ -77,8 +77,76 @@ body {
 .admin-skeleton::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(148,163,184,.16), transparent); animation: admin-shimmer 1.2s infinite; }
 @keyframes admin-shimmer { 100% { transform: translateX(100%); } }
 
-#detailsModal > div { border: 1px solid color-mix(in srgb, var(--accent-color, #64ffda) 16%, transparent); }
-#detailsContent table tbody tr { transition: background-color .14s ease; }
+/* Admin details modal: keep every summary surface inside the active dark theme. */
+#detailsModal {
+  padding: 1.25rem !important;
+  backdrop-filter: blur(7px);
+  background: rgba(2, 8, 23, .72) !important;
+}
+
+#detailsModal > div {
+  border: 1px solid color-mix(in srgb, var(--accent-color, #64ffda) 22%, var(--border-color, #1e3a5f)) !important;
+  background: color-mix(in srgb, var(--secondary-bg, #112240) 97%, #020617) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .46) !important;
+  overflow: hidden;
+}
+
+#detailsModal > div > .sticky {
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 94%, #020617) !important;
+  border-bottom-color: color-mix(in srgb, var(--border-color, #1e3a5f) 88%, transparent) !important;
+}
+
+#detailsContent {
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent-color, #64ffda) 5%, transparent), transparent 17rem),
+    transparent;
+}
+
+#detailsContent > .grid:first-child > div,
+#detailsContent > .grid:nth-child(2) > div {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 78%, var(--secondary-bg, #112240)) !important;
+  border: 1px solid color-mix(in srgb, var(--border-color, #1e3a5f) 92%, transparent) !important;
+  border-radius: 14px !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+}
+
+#detailsContent > .grid:first-child > div::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--accent-color, #64ffda) 72%, transparent);
+}
+
+#detailsContent .bg-gray-50 {
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 82%, var(--secondary-bg, #112240)) !important;
+}
+
+#detailsContent .border-gray-100,
+#detailsContent .border-gray-200 {
+  border-color: color-mix(in srgb, var(--border-color, #1e3a5f) 90%, transparent) !important;
+}
+
+#detailsContent .overflow-x-auto {
+  background: color-mix(in srgb, var(--secondary-bg, #112240) 92%, transparent);
+  border-color: color-mix(in srgb, var(--border-color, #1e3a5f) 92%, transparent) !important;
+}
+
+#detailsContent table thead {
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 92%, transparent) !important;
+}
+
+#detailsContent table tbody tr {
+  transition: background-color .14s ease;
+  border-color: color-mix(in srgb, var(--border-color, #1e3a5f) 72%, transparent) !important;
+}
+
+#detailsContent table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent-color, #64ffda) 5%, transparent) !important;
+}
 
 @media (max-width: 1024px) {
   .main-content::before { inset-left: 0; inset: 0; }
@@ -93,6 +161,8 @@ body {
   #adminsTable th:nth-child(2), #adminsTable td:nth-child(2), #adminsTable th:nth-child(4), #adminsTable td:nth-child(4) { display: none; }
   #adminsTable td, #adminsTable th { padding-left: .9rem !important; padding-right: .9rem !important; }
   #adminsTable .admin-row td:last-child > div { justify-content: flex-start !important; }
+  #detailsModal { padding: .6rem !important; }
+  #detailsModal > div { max-height: 94vh !important; border-radius: 16px !important; }
 }
 
 @media (prefers-reduced-motion: reduce) { .admin-stat-card, #adminsTable .admin-row, .admin-skeleton::after { transition: none !important; animation: none !important; } }
