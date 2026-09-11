@@ -3,541 +3,389 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - adsvpn</title>
+    <title>Dashboard - IranGate</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
     <link rel="stylesheet" href="css/loading.css">
     <link rel="stylesheet" href="css/mobile.css">
     <link rel="stylesheet" href="css/sidebar.css">
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
-    <script src="js/particles.js"></script>
     <script src="js/sidebar.js?v=delegated-admin-clean-20260911-v3"></script>
     <script src="js/theme-loader.js"></script>
+    <style>
+        .metric-card { transition: transform .18s ease, box-shadow .18s ease; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .soft-ring { box-shadow: 0 0 0 1px rgba(148,163,184,.12); }
+    </style>
 </head>
 <body>
-    <!-- Sidebar will be inserted here by sidebar.js -->
-
-    <!-- Main Content -->
     <div class="main-content">
-    <div class="max-w-7xl mx-auto px-4 py-8">
-        <!-- Welcome -->
-        <div class="mb-8">
-            <h1 class="text-3xl font-bold text-gray-800">Welcome, <span id="username"></span>!</h1>
-            <p class="text-gray-600 mt-2">Overview of your OpenVPN server</p>
-        </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-7">
+                <div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <h1 class="text-3xl font-bold text-gray-900">Dashboard</h1>
+                        <span id="serverStatusBadge" class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-gray-600">
+                            <span class="h-2 w-2 rounded-full bg-gray-400"></span>
+                            Checking server
+                        </span>
+                    </div>
+                    <p class="text-gray-500 mt-2">Welcome, <span id="username" class="font-semibold text-gray-700"></span>. Live OpenVPN overview.</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button onclick="refreshDashboard(true)" class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Refresh</button>
+                    <button onclick="window.location.href='clients.html'" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-700">Manage Clients</button>
+                </div>
+            </div>
 
-        <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <!-- Server Status -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="flex items-center justify-between">
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+                <div class="metric-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Total Users</p>
+                    <div class="mt-2 flex items-end justify-between gap-3">
+                        <p id="totalClients" class="text-3xl font-bold text-gray-900">—</p>
+                        <span class="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">All records</span>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">Every OpenVPN client record.</p>
+                </div>
+
+                <div class="metric-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Active Users</p>
+                    <div class="mt-2 flex items-end justify-between gap-3">
+                        <p id="activeClients" class="text-3xl font-bold text-emerald-600">—</p>
+                        <span class="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Usable</span>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">Has remaining traffic and valid time.</p>
+                </div>
+
+                <div class="metric-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Online Now</p>
+                    <div class="mt-2 flex items-end justify-between gap-3">
+                        <p id="onlineClients" class="text-3xl font-bold text-violet-600">—</p>
+                        <span class="rounded-lg bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700">Live</span>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">Connected to OpenVPN right now.</p>
+                </div>
+
+                <div class="metric-card soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Needs Attention</p>
+                    <div class="mt-2 flex items-end justify-between gap-3">
+                        <p id="inactiveClients" class="text-3xl font-bold text-amber-600">—</p>
+                        <span class="rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Review</span>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">Expired, depleted, suspended or missing quota.</p>
+                </div>
+            </div>
+
+            <div id="orphanedAlert" class="hidden mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div>
-                        <p class="text-gray-500 text-sm">Server Status</p>
-                        <p id="serverStatus" class="text-2xl font-bold text-gray-800 mt-2">Loading...</p>
+                        <p class="font-semibold text-amber-900">Orphaned certificates detected</p>
+                        <p class="text-sm text-amber-700 mt-1"><span id="orphanedCount">0</span> certificate(s) can still connect without a matching client record.</p>
                     </div>
-                    <div class="p-3 bg-green-100 rounded-full">
-                        <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                        </svg>
-                    </div>
-                </div>
-                <!-- Server Control Buttons -->
-                <div class="mt-4 pt-4 border-t border-gray-200">
-                    <div class="flex space-x-2">
-                        <button onclick="startServer()" class="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 px-3 rounded-lg text-sm font-medium transition-colors">
-                            <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h.01M19 10a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
-                            Start
-                        </button>
-                        <button onclick="stopServer()" class="flex-1 bg-red-500 hover:bg-red-600 text-white py-2 px-3 rounded-lg text-sm font-medium transition-colors">
-                            <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"/>
-                            </svg>
-                            Stop
-                        </button>
-                        <button onclick="restartServer()" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-2 px-3 rounded-lg text-sm font-medium transition-colors">
-                            <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                            </svg>
-                            Restart
-                        </button>
-                    </div>
+                    <button onclick="cleanupOrphaned()" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Cleanup</button>
                 </div>
             </div>
 
-            <!-- Total Clients -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="flex items-center justify-between">
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+                <section class="xl:col-span-2 soft-ring rounded-2xl bg-white shadow-sm">
+                    <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                        <div>
+                            <h2 class="font-semibold text-gray-900">Usage Overview</h2>
+                            <p class="text-xs text-gray-500 mt-1">Real values calculated from the current client dataset.</p>
+                        </div>
+                        <span id="lastUpdated" class="text-xs text-gray-400">—</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 p-5">
+                        <div class="rounded-xl bg-gray-50 p-4">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-400">Total Traffic Used</p>
+                            <p id="totalTraffic" class="mt-2 text-xl font-bold text-gray-900">—</p>
+                        </div>
+                        <div class="rounded-xl bg-gray-50 p-4">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-400">Active Rate</p>
+                            <p id="activeRate" class="mt-2 text-xl font-bold text-gray-900">—</p>
+                        </div>
+                        <div class="rounded-xl bg-gray-50 p-4">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-400">Online Rate</p>
+                            <p id="onlineRate" class="mt-2 text-xl font-bold text-gray-900">—</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="soft-ring rounded-2xl bg-white shadow-sm">
+                    <div class="border-b border-gray-100 px-5 py-4">
+                        <h2 class="font-semibold text-gray-900">Server Health</h2>
+                        <p class="text-xs text-gray-500 mt-1">Backend-reported live metrics.</p>
+                    </div>
+                    <div class="space-y-4 p-5">
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-gray-500">CPU usage</span>
+                            <span id="cpuUsage" class="font-semibold text-gray-900">—</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-gray-500">Memory used</span>
+                            <span id="memoryUsage" class="font-semibold text-gray-900">—</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-gray-500">Uptime</span>
+                            <span id="uptime" class="font-semibold text-gray-900">—</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 border-t border-gray-100 pt-4">
+                            <button onclick="startServer()" class="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">Start</button>
+                            <button onclick="restartServer()" class="rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100">Restart</button>
+                            <button onclick="stopServer()" class="rounded-lg border border-red-200 bg-red-50 px-2 py-2 text-xs font-semibold text-red-700 hover:bg-red-100">Stop</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <section class="soft-ring rounded-2xl bg-white shadow-sm overflow-hidden">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-100 px-5 py-4">
                     <div>
-                        <p class="text-gray-500 text-sm">Total Clients</p>
-                        <p id="totalClients" class="text-2xl font-bold text-gray-800 mt-2">0</p>
+                        <h2 class="font-semibold text-gray-900">Recent Users</h2>
+                        <p class="text-xs text-gray-500 mt-1">Quota validity and live connection are intentionally shown separately.</p>
                     </div>
-                    <div class="p-3 bg-blue-100 rounded-full">
-                        <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
-                        </svg>
-                    </div>
+                    <a href="clients.html" class="text-sm font-semibold text-purple-600 hover:text-purple-700">View all users →</a>
                 </div>
-            </div>
-
-            <!-- Connected Clients -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-gray-500 text-sm">Connected</p>
-                        <p id="connectedClients" class="text-2xl font-bold text-gray-800 mt-2">0</p>
-                    </div>
-                    <div class="p-3 bg-purple-100 rounded-full">
-                        <svg class="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-400">
+                            <tr>
+                                <th class="px-5 py-3 text-left">User</th>
+                                <th class="px-5 py-3 text-left">Quota</th>
+                                <th class="px-5 py-3 text-left">Connection</th>
+                                <th class="px-5 py-3 text-left">Traffic</th>
+                                <th class="px-5 py-3 text-left">Expires</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentClientsTable" class="divide-y divide-gray-100">
+                            <tr><td colspan="5" class="px-5 py-10 text-center text-gray-400">Loading...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
-            </div>
-
-            <!-- Orphaned Certs -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-gray-500 text-sm">Orphaned Certs</p>
-                        <p id="orphanedCount" class="text-2xl font-bold text-gray-800 mt-2">0</p>
-                    </div>
-                    <div class="p-3 bg-yellow-100 rounded-full">
-                        <svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                        </svg>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Alert for Orphaned Certificates -->
-        <div id="orphanedAlert" class="hidden bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-8">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center">
-                    <svg class="w-6 h-6 text-yellow-400 mr-3" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                    </svg>
-                    <div>
-                        <p class="font-medium text-yellow-800">Security Warning!</p>
-                        <p class="text-sm text-yellow-700 mt-1">You have orphaned certificates that can still connect to your VPN!</p>
-                    </div>
-                </div>
-                <button onclick="cleanupOrphaned()" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
-                    Cleanup Now
-                </button>
-            </div>
-        </div>
-
-        <!-- System Stats -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- CPU & Memory -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-lg font-semibold text-gray-800">System Resources</h3>
-                    <div class="flex space-x-2">
-                        <button onclick="exportSystemData()" class="text-sm bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded">
-                            Export Data
-                        </button>
-                        <button onclick="clearSystemData()" class="text-sm bg-gray-500 hover:bg-gray-600 text-white px-3 py-1 rounded">
-                            Clear
-                        </button>
-                    </div>
-                </div>
-                
-                <!-- Real-time Metrics -->
-                <div class="grid grid-cols-2 gap-4 mb-6">
-                    <!-- CPU -->
-                    <div class="bg-gray-50 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-gray-600">CPU Usage</span>
-                            <span id="cpuUsage" class="text-sm font-bold text-blue-600">0%</span>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div id="cpuBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    
-                    <!-- Memory -->
-                    <div class="bg-gray-50 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-gray-600">Memory</span>
-                            <span id="memoryUsage" class="text-sm font-bold text-green-600">0 GB</span>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div id="memoryBar" class="bg-green-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    
-                    <!-- Disk -->
-                    <div class="bg-gray-50 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-gray-600">Disk Usage</span>
-                            <span id="diskUsage" class="text-sm font-bold text-orange-600">0 GB</span>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div id="diskBar" class="bg-orange-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    
-                    <!-- Network -->
-                    <div class="bg-gray-50 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-gray-600">Network</span>
-                            <span id="networkTraffic" class="text-sm font-bold text-purple-600">0 KB/s</span>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div id="networkBar" class="bg-purple-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Live Chart -->
-                <div class="mt-6">
-                    <canvas id="systemResourcesChart" style="height: 300px;"></canvas>
-                </div>
-            </div>
-
-            <!-- Traffic -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-4">Traffic Statistics</h3>
-                <div class="space-y-4">
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-600">Total Traffic</span>
-                        <span id="totalTraffic" class="text-lg font-semibold text-gray-800">0 MB</span>
-                    </div>
-                    <div class="border-t pt-4">
-                        <p class="text-sm text-gray-600 mb-2">Quick Actions</p>
-                        <div class="space-y-2">
-                            <button onclick="window.location.href='clients.html'" class="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium">
-                                Manage Clients
-                            </button>
-                            <button onclick="restartServer()" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-2 rounded-lg text-sm font-medium">
-                                Restart Server
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Recent Clients -->
-        <div class="bg-white rounded-lg shadow p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold text-gray-800">Recent Clients</h3>
-                <a href="clients.html" class="text-purple-600 hover:text-purple-700 text-sm font-medium">View All →</a>
-            </div>
-            <div class="overflow-x-auto">
-                <table class="w-full">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="recentClientsTable" class="divide-y divide-gray-200">
-                        <tr>
-                            <td colspan="4" class="px-4 py-8 text-center text-gray-500">Loading...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+            </section>
         </div>
     </div>
 
-    <script src="js/api.js"></script>
+    <script src="js/api.js?v=dashboard-clean-20260911-v1"></script>
     <script src="js/notifications.js"></script>
-    <script src="js/charts.js"></script>
     <script src="js/websocket.js"></script>
-    <script src="js/system-resources.js"></script>
     <script>
-        // Check authentication
-        checkAuth();
+        if (!checkAuth()) throw new Error('Authentication required');
 
-        // Set username
         document.getElementById('username').textContent = localStorage.getItem('username') || 'Admin';
+        const byId = id => document.getElementById(id);
+        let dashboardLoading = false;
 
+        function asNumber(value) {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        }
 
-        function getDashboardClientsArray(clientsData) {
-            if (!clientsData || !clientsData.success) return [];
-
-            const data = clientsData.data;
-
-            if (Array.isArray(data)) return data;
-            if (Array.isArray(data?.clients)) return data.clients;
-            if (Array.isArray(data?.data)) return data.data;
-
+        function getClientsArray(result) {
+            if (!result || result.success !== true) return [];
+            if (Array.isArray(result.data)) return result.data;
+            if (Array.isArray(result.data?.clients)) return result.data.clients;
             return [];
         }
 
-        function getDashboardUsedBytes(client) {
-            const trafficUsed = Number(client.traffic_used_bytes || 0);
-            if (trafficUsed > 0) return trafficUsed;
-
-            const upload = Number(client.upload || client.bytes_sent || 0);
-            const download = Number(client.download || client.bytes_received || 0);
-            const sum = upload + download;
-            if (sum > 0) return sum;
-
-            return Number(client.total_bytes || client.current_total || 0);
+        function getUsedBytes(client) {
+            const explicit = asNumber(client.traffic_used_bytes);
+            if (explicit > 0) return explicit;
+            const total = asNumber(client.total_bytes);
+            if (total > 0) return total;
+            const rxTx = asNumber(client.bytes_received) + asNumber(client.bytes_sent);
+            if (rxTx > 0) return rxTx;
+            return Math.max(asNumber(client.current_total), asNumber(client.monthly_usage), asNumber(client.daily_usage));
         }
 
-        function isDashboardClientOnline(client) {
-            const truthy = (v) =>
-                v === true ||
-                v === 'true' ||
-                v === 1 ||
-                v === '1' ||
-                String(v || '').toLowerCase() === 'online' ||
-                String(v || '').toLowerCase() === 'connected';
-
-            const activeConnections = Math.max(
-                Number(client.active_connections || 0),
-                Number(client.connection_count || 0),
-                Number(client.current_connections || 0),
-                Number(client.online_connections || 0),
-                Number(client.session_count || 0),
-                Array.isArray(client.sessions) ? client.sessions.length : 0
-            );
-
-            return (
-                truthy(client.connected) ||
-                truthy(client.online) ||
-                truthy(client.is_online) ||
-                truthy(client.connection_status) ||
-                activeConnections > 0
-            );
+        function getLimitBytes(client) {
+            return asNumber(client.traffic_limit_bytes ?? client.data_limit ?? client.limit_bytes ?? client.traffic_limit);
         }
 
-        function applyDashboardRealStats(clientsData, statsData) {
-            const clients = getDashboardClientsArray(clientsData);
-
-            const totalClients = clients.length;
-            const connectedClients = clients.filter(isDashboardClientOnline).length;
-
-            const totalTrafficBytes = clients.reduce((sum, client) => {
-                return sum + getDashboardUsedBytes(client);
-            }, 0);
-
-            const totalClientsEl = document.getElementById('totalClients');
-            if (totalClientsEl) {
-                totalClientsEl.textContent = totalClients;
-            }
-
-            const connectedEl = document.getElementById('connectedClients');
-            if (connectedEl) {
-                const statsConnected = Number(statsData?.data?.connected_clients || 0);
-                connectedEl.textContent = connectedClients > 0 ? connectedClients : statsConnected;
-            }
-
-            const totalTrafficEl = document.getElementById('totalTraffic');
-            if (totalTrafficEl) {
-                totalTrafficEl.textContent = formatBytes(totalTrafficBytes);
-            }
+        function getExpiryMs(client) {
+            const raw = client.expires_at || client.expire_at || client.expiry_date || client.expiration_date;
+            if (!raw) return NaN;
+            const value = Date.parse(raw);
+            return Number.isFinite(value) ? value : NaN;
         }
 
+        function hasUsableQuota(client) {
+            const limit = getLimitBytes(client);
+            const used = getUsedBytes(client);
+            const expiry = getExpiryMs(client);
+            const status = String(client.persisted_status || client.status || '').toLowerCase();
+            const blockedByStatus = status.includes('expired') || status.includes('traffic_limit') || status.includes('limit_exceeded') || status.includes('admin_disabled') || status.includes('admin_expired') || status.includes('admin_traffic');
 
-        // Load dashboard data
-        async function loadDashboard() {
+            return limit > 0 && used < limit && Number.isFinite(expiry) && expiry > Date.now() && !Boolean(client.admin_suspended) && !blockedByStatus;
+        }
+
+        function isOnline(client) {
+            const truthy = value => value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true' || String(value || '').toLowerCase() === 'online' || String(value || '').toLowerCase() === 'connected';
+            return truthy(client.connected) || truthy(client.online) || truthy(client.is_online) || truthy(client.connection_status) || asNumber(client.active_connections) > 0 || asNumber(client.connection_count) > 0;
+        }
+
+        function formatDateTime(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+        }
+
+        function formatUptimeNs(value) {
+            const seconds = Math.max(0, Math.floor(asNumber(value) / 1e9));
+            if (!seconds) return '—';
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            if (days > 0) return `${days}d ${hours}h`;
+            if (hours > 0) return `${hours}h ${minutes}m`;
+            return `${minutes}m`;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+        }
+
+        function quotaBadge(client) {
+            if (hasUsableQuota(client)) return '<span class="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">Active</span>';
+            const limit = getLimitBytes(client);
+            const used = getUsedBytes(client);
+            const expiry = getExpiryMs(client);
+            let label = 'Needs attention';
+            if (limit <= 0) label = 'No quota';
+            else if (used >= limit) label = 'Traffic finished';
+            else if (!Number.isFinite(expiry)) label = 'No expiry';
+            else if (expiry <= Date.now()) label = 'Expired';
+            return `<span class="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">${label}</span>`;
+        }
+
+        function connectionBadge(client) {
+            return isOnline(client)
+                ? '<span class="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700"><span class="h-1.5 w-1.5 rounded-full bg-violet-500"></span>Online</span>'
+                : '<span class="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600"><span class="h-1.5 w-1.5 rounded-full bg-gray-400"></span>Offline</span>';
+        }
+
+        function renderRecentClients(clients) {
+            const tbody = byId('recentClientsTable');
+            const rows = [...clients].sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0)).slice(0, 6);
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-10 text-center text-gray-400">No users found.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = rows.map(client => {
+                const used = getUsedBytes(client);
+                const limit = getLimitBytes(client);
+                const traffic = limit > 0 ? `${formatBytes(used)} / ${formatBytes(limit)}` : `${formatBytes(used)} / —`;
+                return `<tr class="hover:bg-gray-50/80">
+                    <td class="px-5 py-4"><div class="font-semibold text-gray-900">${escapeHtml(client.name || '—')}</div>${client.owner_admin ? `<div class="mt-1 text-xs text-gray-400">Admin: ${escapeHtml(client.owner_admin)}</div>` : ''}</td>
+                    <td class="px-5 py-4">${quotaBadge(client)}</td>
+                    <td class="px-5 py-4">${connectionBadge(client)}</td>
+                    <td class="px-5 py-4 text-gray-600">${traffic}</td>
+                    <td class="px-5 py-4 text-gray-600">${formatDateTime(client.expires_at)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function updateServerStatus(result) {
+            const badge = byId('serverStatusBadge');
+            const running = Boolean(result?.success && result?.data?.is_running);
+            badge.className = running
+                ? 'inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700'
+                : 'inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700';
+            badge.innerHTML = `<span class="h-2 w-2 rounded-full ${running ? 'bg-emerald-500' : 'bg-red-500'}"></span>${running ? 'Server running' : 'Server stopped'}`;
+        }
+
+        async function refreshDashboard(force = false) {
+            if (dashboardLoading) return;
+            dashboardLoading = true;
             try {
-                // Load all data in parallel
-                const [statsData, clientsData, orphanedData, statusData] = await Promise.all([
-                    api.getStats(),
-                    api.getClients(),
-                    api.getOrphanedClients(),
-                    api.getServerStatus()
-                ]);
+                if (force && api.invalidateCache) api.invalidateCache('/clients');
+                const [statsData, clientsData, orphanedData, statusData] = await Promise.all([api.getStats(), api.getClients(), api.getOrphanedClients(), api.getServerStatus()]);
+                const clients = getClientsArray(clientsData);
+                if (clientsData?.success !== true) throw new Error(clientsData?.message || 'Failed to load clients');
 
-                setTimeout(() => applyDashboardRealStats(clientsData, statsData), 0);
+                const total = clients.length;
+                const active = clients.filter(hasUsableQuota).length;
+                const onlineFromClients = clients.filter(isOnline).length;
+                const online = statsData?.success === true ? asNumber(statsData?.data?.connected_clients) : onlineFromClients;
+                const attention = Math.max(0, total - active);
+                const totalTraffic = clients.reduce((sum, client) => sum + getUsedBytes(client), 0);
 
-                // Update server status
-                if (statusData.success) {
-                    const isRunning = statusData.data.is_running;
-                    document.getElementById('serverStatus').textContent = isRunning ? 'Running' : 'Stopped';
-                    document.getElementById('serverStatus').className = isRunning ? 
-                        'text-2xl font-bold text-green-600 mt-2' : 
-                        'text-2xl font-bold text-red-600 mt-2';
+                byId('totalClients').textContent = total;
+                byId('activeClients').textContent = active;
+                byId('onlineClients').textContent = online;
+                byId('inactiveClients').textContent = attention;
+                byId('totalTraffic').textContent = formatBytes(totalTraffic);
+                byId('activeRate').textContent = total ? `${Math.round(active * 100 / total)}%` : '0%';
+                byId('onlineRate').textContent = total ? `${Math.round(online * 100 / total)}%` : '0%';
+                byId('lastUpdated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+                if (statsData?.success === true && statsData.data) {
+                    byId('cpuUsage').textContent = `${asNumber(statsData.data.cpu_usage).toFixed(1)}%`;
+                    byId('memoryUsage').textContent = `${asNumber(statsData.data.memory_usage_mb).toFixed(0)} MB`;
+                    byId('uptime').textContent = formatUptimeNs(statsData.data.uptime);
                 }
 
-                // Update stats
-                if (statsData.success) {
-                    const stats = statsData.data;
-                    document.getElementById('connectedClients').textContent = stats.connected_clients || 0;
-                    document.getElementById('cpuUsage').textContent = `${stats.cpu_usage?.toFixed(1) || 0}%`;
-                    document.getElementById('cpuBar').style.width = `${stats.cpu_usage || 0}%`;
-                    document.getElementById('memoryUsage').textContent = `${stats.memory_usage_mb?.toFixed(0) || 0} MB`;
-                    document.getElementById('totalTraffic').textContent = formatBytes(stats.total_traffic_mb * 1024 * 1024 || 0);
-                    
-                    if (stats.uptime) {
-                        const uptimeEl = document.getElementById('uptime'); if (uptimeEl) uptimeEl.textContent = formatUptime(stats.uptime / 1000000000);
-                    }
-                }
+                updateServerStatus(statusData);
+                renderRecentClients(clients);
 
-                // Update clients
-                if (clientsData.success) {
-                    const clients = clientsData.data || [];
-                    document.getElementById('totalClients').textContent = clients.length;
-                    
-                    // Show recent 5 clients
-                    const recentClients = clients.slice(0, 5);
-                    const tbody = document.getElementById('recentClientsTable');
-                    
-                    if (recentClients.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-gray-500">No clients yet</td></tr>';
-                    } else {
-                        tbody.innerHTML = recentClients.map(client => `
-                            <tr class="hover:bg-gray-50">
-                                <td class="px-4 py-3 text-sm font-medium text-gray-900">${client.name}</td>
-                                <td class="px-4 py-3 text-sm text-gray-600">${formatDate(client.created_at)}</td>
-                                <td class="px-4 py-3 text-sm text-gray-600">${formatDate(client.expires_at)}</td>
-                                <td class="px-4 py-3">
-                                    <span class="px-2 py-1 text-xs font-semibold rounded-full ${
-                                        client.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                                    }">
-                                        ${client.active ? 'Active' : 'Inactive'}
-                                    </span>
-                                </td>
-                            </tr>
-                        `).join('');
-                    }
-                }
+                const orphaned = asNumber(orphanedData?.data?.count);
+                byId('orphanedCount').textContent = orphaned;
+                byId('orphanedAlert').classList.toggle('hidden', orphaned <= 0);
 
-                // Check orphaned certificates
-                if (orphanedData.success && orphanedData.data) {
-                    const count = orphanedData.data.count || 0;
-                    document.getElementById('orphanedCount').textContent = count;
-                    
-                    if (count > 0) {
-                        document.getElementById('orphanedAlert').classList.remove('hidden');
-                    }
+                const failures = [
+                    statsData?.success === true ? null : statsData?.message || 'statistics',
+                    orphanedData?.success === true ? null : orphanedData?.message || 'orphaned certificates',
+                    statusData?.success === true ? null : statusData?.message || 'server status'
+                ].filter(Boolean);
+                if (failures.length) {
+                    console.warn('Dashboard partial load:', failures);
+                    showToast('Some dashboard metrics could not be refreshed', 'warning');
                 }
             } catch (error) {
-                console.error('Failed to load dashboard:', error);
-                showToast('Failed to load dashboard data', 'error');
+                console.error('Dashboard load failed:', error);
+                showToast(error.message || 'Failed to load dashboard', 'error');
+            } finally {
+                dashboardLoading = false;
             }
         }
 
         async function cleanupOrphaned() {
-            if (!confirm('This will revoke all orphaned certificates. Continue?')) return;
-            
-            try {
-                const result = await api.cleanupOrphaned();
-                if (result.success) {
-                    showToast('Orphaned certificates cleaned up successfully!', 'success');
-                    loadDashboard();
-                }
-            } catch (error) {
-                showToast('Failed to cleanup orphaned certificates', 'error');
+            if (!confirm('Revoke all orphaned certificates?')) return;
+            const result = await api.cleanupOrphaned();
+            if (result?.success) {
+                showToast('Orphaned certificates cleaned up', 'success');
+                refreshDashboard(true);
+            } else {
+                showToast(result?.message || 'Cleanup failed', 'error');
             }
         }
 
-        async function restartServer() {
-            if (!confirm('Are you sure you want to restart the OpenVPN server?')) return;
-            
-            try {
-                const result = await api.restartServer();
-                if (result.success) {
-                    showToast('Server restarted successfully!', 'success');
-                    setTimeout(loadDashboard, 2000);
-                }
-            } catch (error) {
-                showToast('Failed to restart server', 'error');
+        async function runServerAction(action) {
+            if (!confirm(`Are you sure you want to ${action} the OpenVPN server?`)) return;
+            const result = action === 'start' ? await api.startServer() : action === 'restart' ? await api.restartServer() : await api.stopServer();
+            if (result?.success) {
+                showToast(`Server ${action} command completed`, 'success');
+                setTimeout(() => refreshDashboard(true), 1500);
+            } else {
+                showToast(result?.message || `Failed to ${action} server`, 'error');
             }
         }
 
-        async function startServer() {
-            if (!confirm('Are you sure you want to start the OpenVPN server?')) return;
-            
-            try {
-                const result = await api.startServer();
-                if (result.success) {
-                    showToast('Server started successfully!', 'success');
-                    setTimeout(loadDashboard, 2000);
-                }
-            } catch (error) {
-                showToast('Failed to start server', 'error');
-            }
+        const startServer = () => runServerAction('start');
+        const restartServer = () => runServerAction('restart');
+        const stopServer = () => runServerAction('stop');
+
+        refreshDashboard(true);
+        setInterval(() => refreshDashboard(false), 30000);
+        if (window.wsClient) {
+            wsClient.on('client_created', () => refreshDashboard(true));
+            wsClient.on('client_removed', () => refreshDashboard(true));
+            wsClient.on('stats_update', data => {
+                if (data && data.connected_clients !== undefined) byId('onlineClients').textContent = asNumber(data.connected_clients);
+            });
         }
-
-        async function stopServer() {
-            if (!confirm('Are you sure you want to stop the OpenVPN server?')) return;
-            
-            try {
-                const result = await api.stopServer();
-                if (result.success) {
-                    showToast('Server stopped successfully!', 'success');
-                    setTimeout(loadDashboard, 2000);
-                }
-            } catch (error) {
-                showToast('Failed to stop server', 'error');
-            }
-        }
-
-        // Initialize charts
-        function initCharts() {
-            // Traffic chart
-            const trafficData = chartManager.generateSampleTrafficData(7);
-            chartManager.createTrafficChart('miniTrafficChart', trafficData);
-
-            // Growth chart
-            const growthData = chartManager.generateSampleGrowthData(30);
-            chartManager.createClientGrowthChart('miniGrowthChart', growthData);
-        }
-
-        // Initial load
-        loadDashboard();
-        initCharts();
-
-        // Auto-refresh every 30 seconds
-        setInterval(loadDashboard, 30000);
-
-        // WebSocket event handlers for real-time updates
-        wsClient.on('client_created', (data) => {
-            notificationManager.success(`New client created: ${data.name}`);
-            loadDashboard();
-        });
-
-        wsClient.on('client_removed', (data) => {
-            notificationManager.info(`Client removed: ${data.name}`);
-            loadDashboard();
-        });
-
-        wsClient.on('stats_update', (data) => {
-            // Update stats in real-time via WebSocket
-            if (data.connected_clients !== undefined) {
-                document.getElementById('connectedClients').textContent = data.connected_clients;
-            }
-        });
-
-        // Initialize sidebar
         initSidebar('dashboard');
-
-        // System Resources Functions
-        function exportSystemData() {
-            if (window.systemResourcesMonitor) {
-                window.systemResourcesMonitor.exportData();
-                showToast('System data exported successfully!', 'success');
-            } else {
-                showToast('System resources monitor not available', 'error');
-            }
-        }
-
-        function clearSystemData() {
-            if (window.systemResourcesMonitor) {
-                window.systemResourcesMonitor.clearHistoricalData();
-                showToast('System data cleared successfully!', 'success');
-            } else {
-                showToast('System resources monitor not available', 'error');
-            }
-        }
     </script>
-    </div>
 </body>
 </html>
-
