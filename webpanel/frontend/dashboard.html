@@ -375,7 +375,7 @@
                     document.getElementById('totalTraffic').textContent = formatBytes(stats.total_traffic_mb * 1024 * 1024 || 0);
                     
                     if (stats.uptime) {
-                        document.getElementById('uptime').textContent = formatUptime(stats.uptime / 1000000000);
+                        const uptimeEl = document.getElementById('uptime'); if (uptimeEl) uptimeEl.textContent = formatUptime(stats.uptime / 1000000000);
                     }
                 }
 
