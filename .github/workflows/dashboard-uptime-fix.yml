@@ -20,37 +20,15 @@ jobs:
           ref: l2tp-dev
           fetch-depth: 0
 
-      - name: Fix dashboard uptime element guard
+      - name: Guard missing uptime element
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('webpanel/frontend/dashboard.html')
-          text = p.read_text(encoding='utf-8')
-
-          old = """                    if (stats.uptime) {
-                        document.getElementById('uptime').textContent = formatUptime(stats.uptime / 1000000000);
-                    }
-"""
-          new = """                    const uptimeEl = document.getElementById('uptime');
-                    if (stats.uptime && uptimeEl) {
-                        uptimeEl.textContent = formatUptime(stats.uptime / 1000000000);
-                    }
-"""
-
-          if text.count(old) != 1:
-              raise SystemExit(f'Expected exactly one uptime block, found {text.count(old)}')
-
-          text = text.replace(old, new, 1)
-          p.write_text(text, encoding='utf-8')
-          print('Dashboard uptime guard applied')
-          PY
-
-      - name: Verify patch
-        shell: bash
-        run: |
-          grep -n -A3 -B1 "const uptimeEl" webpanel/frontend/dashboard.html
+          FILE='webpanel/frontend/dashboard.html'
+          OLD="document.getElementById('uptime').textContent = formatUptime(stats.uptime / 1000000000);"
+          NEW="const uptimeEl = document.getElementById('uptime'); if (uptimeEl) uptimeEl.textContent = formatUptime(stats.uptime / 1000000000);"
+          grep -Fq "$OLD" "$FILE"
+          sed -i "s#${OLD}#${NEW}#" "$FILE"
+          grep -Fq "const uptimeEl = document.getElementById('uptime')" "$FILE"
           git diff --check
 
       - name: Commit dashboard fix
