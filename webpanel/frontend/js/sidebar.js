@@ -105,42 +105,11 @@ function createSidebar(activePage) {
                         </svg>
                         <span>Admins</span>
                     </a>
-
-                    <a href="#" class="menu-item coming-soon" title="V2ray" onclick="showComingSoon('V2ray')">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
-                        </svg>
-                        <span>V2ray</span>
-                        <span class="badge beta">💫 Coming Soon</span>
-                    </a>
-
-                    <a href="#" class="menu-item coming-soon" title="SSH" onclick="showComingSoon('SSH')">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
-                        </svg>
-                        <span>SSH</span>
-                        <span class="badge beta">💫 Coming Soon</span>
-                    </a>
-
-                    <a href="ai-core.html" class="menu-item ${activePage === 'ai-core' ? 'active' : ''}" title="AI Core">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                        </svg>
-                        <span>AI Core</span>
-                    </a>
                 </div>
 
                 <!-- Configuration Section -->
                 <div class="menu-section">
                     <div class="menu-section-title">Configuration</div>
-                    
-                    <a href="#" class="menu-item coming-soon" title="Inbound" onclick="showComingSoon('Inbound')">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
-                        </svg>
-                        <span>Inbound</span>
-                        <span class="badge beta">💫 Coming Soon</span>
-                    </a>
                     <a href="routing.html" class="menu-item ${activePage === 'routing' ? 'active' : ''}" title="Routing / Outbounds">
                         <svg class="sidebar-menu-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h11m0 0l-3-3m3 3l-3 3M20 17H9m0 0l3-3m-3 3l3 3"></path>
@@ -172,19 +141,6 @@ function createSidebar(activePage) {
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                         </svg>
                         <span>Settings</span>
-                    </a>
-                </div>
-
-                <!-- Advanced Features Section -->
-                <div class="menu-section">
-                    <div class="menu-section-title">Advanced</div>
-                    
-                    <a href="#" class="menu-item coming-soon" title="Auto Tunnel" onclick="showComingSoon('Auto Tunnel')">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                        </svg>
-                        <span>Auto Tunnel</span>
-                        <span class="badge beta">💫 Wait for the surprise</span>
                     </a>
                 </div>
 
