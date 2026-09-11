@@ -167,7 +167,7 @@
             const unit = entry[0];
             const size = entry[1];
             const amount = value / size;
-            const rounded = amount >= 100 ? amount.toFixed(0) : amount >= 10 ? amount.toFixed(1) : amount.toFixed(2);
+            const rounded = amount.toFixed(2);
             return `${Number(rounded)} ${unit}`;
         }
         function escapeHtml(value) {
