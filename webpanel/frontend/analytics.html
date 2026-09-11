@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Analytics - IranGate</title>
+    <title>Analytics - NET SPOOF</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
@@ -15,332 +15,591 @@
     <link rel="stylesheet" href="css/sidebar.css">
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
+    <link rel="stylesheet" href="css/analytics-ui.css?v=analytics-ui-20260912-v1">
     <script src="js/particles.js"></script>
     <script src="js/sidebar.js?v=panel-ui-20260911-v4"></script>
     <script src="js/theme-loader.js"></script>
 </head>
-<body>
+<body class="page-analytics">
     <div class="main-content">
-    <div class="max-w-7xl mx-auto px-4 py-8">
-        <!-- Header -->
-        <div class="flex justify-between items-center mb-8">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-800">Analytics Dashboard</h1>
-                <p class="text-gray-600 mt-2">Detailed insights into your VPN server</p>
-            </div>
-            <div class="flex gap-2">
-                <select id="timePeriod" onchange="changePeriod()" 
-                        class="px-4 py-2 border rounded-lg bg-navy-800 text-white">
-                    <option value="24h">Last 24 Hours</option>
-                    <option value="7d" selected>Last 7 Days</option>
-                    <option value="30d">Last 30 Days</option>
-                    <option value="90d">Last 90 Days</option>
-                    <option value="all">All Time</option>
-                </select>
-                <button onclick="exportReport()"
-                        class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
-                    Export Report
-                </button>
-            </div>
-        </div>
-
-        <!-- Key Metrics Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white rounded-lg shadow p-6">
-                <p class="text-gray-500 text-sm">Total Traffic</p>
-                <p id="totalTrafficStat" class="text-3xl font-bold text-cyan-400 mt-2">0 GB</p>
-                <p class="text-xs text-gray-600 mt-2">↑ 12% from last period</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <p class="text-gray-500 text-sm">Avg. Session Duration</p>
-                <p id="avgDuration" class="text-3xl font-bold text-blue-400 mt-2">45m</p>
-                <p class="text-xs text-gray-600 mt-2">↓ 5% from last period</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <p class="text-gray-500 text-sm">Peak Connections</p>
-                <p id="peakConnections" class="text-3xl font-bold text-purple-400 mt-2">23</p>
-                <p class="text-xs text-gray-600 mt-2">At 19:00 yesterday</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <p class="text-gray-500 text-sm">Client Growth</p>
-                <p id="clientGrowth" class="text-3xl font-bold text-green-400 mt-2">+8</p>
-                <p class="text-xs text-gray-600 mt-2">New clients this period</p>
-            </div>
-        </div>
-
-        <!-- Traffic Analysis -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Bandwidth Chart -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-4">Bandwidth Usage</h3>
-                <div style="height: 300px;">
-                    <canvas id="trafficChart"></canvas>
+        <div class="analytics-shell">
+            <header class="analytics-header">
+                <div class="analytics-title">
+                    <h1>Analytics</h1>
+                    <p>Live operational snapshot of client access, cumulative traffic and account lifecycle. No demo or randomly generated metrics are used.</p>
+                    <span class="analytics-live-badge">Live panel data</span>
                 </div>
-            </div>
-
-            <!-- Client Growth Chart -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-4">Client Growth</h3>
-                <div style="height: 300px;">
-                    <canvas id="growthChart"></canvas>
+                <div class="analytics-actions">
+                    <select id="timePeriod" onchange="renderCreationChart()" title="Creation timeline window">
+                        <option value="24h">Creation: 24 Hours</option>
+                        <option value="7d" selected>Creation: 7 Days</option>
+                        <option value="30d">Creation: 30 Days</option>
+                        <option value="90d">Creation: 90 Days</option>
+                        <option value="all">Creation: All Time</option>
+                    </select>
+                    <button type="button" onclick="loadAnalytics()">Refresh</button>
+                    <button type="button" onclick="exportReport()">Export CSV</button>
                 </div>
-            </div>
-        </div>
+            </header>
 
-        <!-- Connection Analysis -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Peak Hours -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-4">Peak Usage Hours</h3>
-                <div style="height: 300px;">
-                    <canvas id="peakHoursChart"></canvas>
+            <section class="analytics-metrics" aria-label="Analytics summary">
+                <article class="analytics-metric">
+                    <span class="metric-label">Cumulative Traffic</span>
+                    <strong id="totalTrafficStat" class="metric-value">0 B</strong>
+                    <span class="metric-note">Current persisted usage across visible clients</span>
+                </article>
+                <article class="analytics-metric metric-online">
+                    <span class="metric-label">Online Now</span>
+                    <strong id="onlineStat" class="metric-value">0</strong>
+                    <span class="metric-note">Clients with a current connection/session signal</span>
+                </article>
+                <article class="analytics-metric metric-ready">
+                    <span class="metric-label">Access Ready</span>
+                    <strong id="readyStat" class="metric-value">0</strong>
+                    <span class="metric-note">Enabled accounts with quota and validity remaining</span>
+                </article>
+                <article class="analytics-metric metric-ended">
+                    <span class="metric-label">Ended / Blocked</span>
+                    <strong id="endedStat" class="metric-value">0</strong>
+                    <span class="metric-note">Expired, quota exhausted or disabled access</span>
+                </article>
+            </section>
+
+            <section class="analytics-grid-2">
+                <article class="analytics-card">
+                    <div class="analytics-card-head">
+                        <div>
+                            <h2>Top Client Traffic</h2>
+                            <p>Cumulative persisted usage; highest consumers first.</p>
+                        </div>
+                        <span class="analytics-chip">Top 10</span>
+                    </div>
+                    <div class="analytics-chart-wrap"><canvas id="topTrafficChart"></canvas></div>
+                </article>
+
+                <article class="analytics-card">
+                    <div class="analytics-card-head">
+                        <div>
+                            <h2>Client Creation Timeline</h2>
+                            <p>Real client creation timestamps for the selected window.</p>
+                        </div>
+                        <span id="creationWindowChip" class="analytics-chip">7 days</span>
+                    </div>
+                    <div class="analytics-chart-wrap"><canvas id="creationChart"></canvas></div>
+                </article>
+            </section>
+
+            <section class="analytics-grid-2">
+                <article class="analytics-card">
+                    <div class="analytics-card-head">
+                        <div>
+                            <h2>Traffic Direction</h2>
+                            <p>Upload/download split derived from current persisted counters.</p>
+                        </div>
+                        <span class="analytics-chip">Snapshot</span>
+                    </div>
+                    <div class="analytics-chart-wrap small"><canvas id="trafficSplitChart"></canvas></div>
+                </article>
+
+                <article class="analytics-card">
+                    <div class="analytics-card-head">
+                        <div>
+                            <h2>Access Distribution</h2>
+                            <p>Online, ready, disabled and ended client states.</p>
+                        </div>
+                        <span class="analytics-chip">Current</span>
+                    </div>
+                    <div class="analytics-chart-wrap small"><canvas id="statusChart"></canvas></div>
+                </article>
+            </section>
+
+            <section class="analytics-card analytics-table-card">
+                <div class="analytics-card-head">
+                    <div>
+                        <h2>Top Clients by Traffic</h2>
+                        <p>Quota position and cumulative traffic for the busiest visible clients.</p>
+                    </div>
+                    <span id="analyticsUpdated" class="analytics-chip">Loading…</span>
                 </div>
-            </div>
-
-            <!-- Client Status Distribution -->
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-4">Client Status Distribution</h3>
-                <div style="height: 300px;">
-                    <canvas id="statusChart"></canvas>
+                <div class="analytics-table-scroll">
+                    <table class="analytics-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Client</th>
+                                <th>Access</th>
+                                <th>Used</th>
+                                <th>Limit</th>
+                                <th>Remaining</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topClientsTable">
+                            <tr><td colspan="6" class="analytics-empty">Loading analytics…</td></tr>
+                        </tbody>
+                    </table>
                 </div>
-            </div>
-        </div>
+            </section>
 
-        <!-- Top Clients Table -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">Top 10 Clients by Traffic</h3>
-            <div class="overflow-x-auto">
-                <table class="w-full">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rank</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Uploaded</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Downloaded</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody id="topClientsTable" class="divide-y divide-gray-200">
-                        <tr>
-                            <td colspan="5" class="px-4 py-8 text-center text-gray-500">Loading...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Statistics Summary -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div class="bg-white rounded-lg shadow p-6">
-                <h4 class="font-semibold text-gray-800 mb-3">Connection Stats</h4>
-                <div class="space-y-2 text-sm">
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Total Connections:</span>
-                        <span id="totalConnections" class="font-semibold">0</span>
+            <section class="analytics-summary-grid" style="margin-top:.9rem">
+                <article class="analytics-card">
+                    <h3>Client Access</h3>
+                    <div class="analytics-summary-list">
+                        <div class="analytics-summary-row"><span>Total visible clients</span><strong id="summaryTotal">0</strong></div>
+                        <div class="analytics-summary-row"><span>Enabled access</span><strong id="summaryEnabled">0</strong></div>
+                        <div class="analytics-summary-row"><span>Manually disabled</span><strong id="summaryDisabled">0</strong></div>
                     </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Avg. Concurrent:</span>
-                        <span id="avgConcurrent" class="font-semibold">0</span>
+                </article>
+                <article class="analytics-card">
+                    <h3>Quota Health</h3>
+                    <div class="analytics-summary-list">
+                        <div class="analytics-summary-row"><span>Expired by time</span><strong id="summaryExpired">0</strong></div>
+                        <div class="analytics-summary-row"><span>Traffic exhausted</span><strong id="summaryTrafficEnded">0</strong></div>
+                        <div class="analytics-summary-row"><span>≥ 85% traffic used</span><strong id="summaryNearQuota">0</strong></div>
                     </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Success Rate:</span>
-                        <span id="successRate" class="font-semibold text-green-400">99.5%</span>
+                </article>
+                <article class="analytics-card">
+                    <h3>Data Source</h3>
+                    <div class="analytics-summary-list">
+                        <div class="analytics-summary-row"><span>Clients API</span><strong id="clientsApiState">Loading</strong></div>
+                        <div class="analytics-summary-row"><span>Stats API</span><strong id="statsApiState">Loading</strong></div>
+                        <div class="analytics-summary-row"><span>Auto refresh</span><strong>60 sec</strong></div>
                     </div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-lg shadow p-6">
-                <h4 class="font-semibold text-gray-800 mb-3">Performance</h4>
-                <div class="space-y-2 text-sm">
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Avg. Latency:</span>
-                        <span id="avgLatency" class="font-semibold">23ms</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Packet Loss:</span>
-                        <span id="packetLoss" class="font-semibold text-green-400">0.1%</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Uptime:</span>
-                        <span id="uptimePercent" class="font-semibold text-green-400">99.9%</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-lg shadow p-6">
-                <h4 class="font-semibold text-gray-800 mb-3">Resource Usage</h4>
-                <div class="space-y-2 text-sm">
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Avg. CPU:</span>
-                        <span id="avgCpu" class="font-semibold">12%</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Avg. Memory:</span>
-                        <span id="avgMemory" class="font-semibold">450 MB</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Disk Usage:</span>
-                        <span id="diskUsage" class="font-semibold">2.3 GB</span>
-                    </div>
-                </div>
-            </div>
+                </article>
+            </section>
         </div>
     </div>
 
     <script src="js/api.js?v=delegated-portal-20260911-v2"></script>
-    <script src="js/charts.js"></script>
     <script src="js/notifications.js"></script>
     <script>
         checkAuth();
 
-        let charts = {};
+        let analyticsClients = [];
+        let analyticsStats = null;
+        const analyticsCharts = {};
 
-        // Load analytics data
-        async function loadAnalytics() {
-            try {
-                // Load clients for analysis
-                const clientsData = await api.getClients();
-                const statsData = await api.getStats();
+        const chartText = '#a8b4cc';
+        const chartGrid = 'rgba(51, 78, 111, .28)';
+        const palette = {
+            cyan: 'rgba(34, 211, 238, .82)',
+            teal: 'rgba(52, 211, 153, .82)',
+            blue: 'rgba(96, 165, 250, .82)',
+            amber: 'rgba(245, 158, 11, .82)',
+            red: 'rgba(251, 113, 133, .82)',
+            purple: 'rgba(167, 139, 250, .82)'
+        };
 
-                if (clientsData.success) {
-                    const clients = clientsData.data || [];
-                    
-                    // Calculate metrics
-                    updateMetrics(clients, statsData);
-                    
-                    // Create charts
-                    createCharts(clients);
-                    
-                    // Update top clients table
-                    updateTopClients(clients);
-                }
-            } catch (error) {
-                console.error('Failed to load analytics:', error);
-                notificationManager.error('Failed to load analytics data');
-            }
+        Chart.defaults.color = chartText;
+        Chart.defaults.borderColor = chartGrid;
+
+        function numberValue(value) {
+            const n = Number(value || 0);
+            return Number.isFinite(n) ? n : 0;
         }
 
-        function updateMetrics(clients, statsData) {
-            // Calculate total traffic
-            const totalTraffic = clients.reduce((sum, c) => 
-                sum + (c.bytes_sent || 0) + (c.bytes_received || 0), 0
+        function formatBytes(bytes) {
+            let size = Math.max(0, numberValue(bytes));
+            if (size < 1000) return `${Math.round(size)} B`;
+            const units = ['KB', 'MB', 'GB', 'TB'];
+            let unit = 0;
+            size /= 1000;
+            while (size >= 1000 && unit < units.length - 1) {
+                size /= 1000;
+                unit += 1;
+            }
+            const decimals = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+            return `${size.toFixed(decimals)} ${units[unit]}`;
+        }
+
+        function getUsedBytes(client) {
+            const trafficUsed = numberValue(client.traffic_used_bytes);
+            if (trafficUsed > 0) return trafficUsed;
+            const stable = numberValue(client.upload) + numberValue(client.download);
+            if (stable > 0) return stable;
+            return numberValue(client.bytes_sent) + numberValue(client.bytes_received);
+        }
+
+        function getTrafficParts(client) {
+            const used = getUsedBytes(client);
+            let upload = numberValue(client.upload);
+            let download = numberValue(client.download);
+            if (upload + download <= 0) {
+                upload = numberValue(client.bytes_sent);
+                download = numberValue(client.bytes_received);
+            }
+            const sum = upload + download;
+            if (used > 0 && sum > 0 && Math.abs(sum - used) > 1) {
+                upload = Math.round(used * upload / sum);
+                download = used - upload;
+            }
+            if (used > 0 && upload + download <= 0) {
+                upload = Math.round(used * .5);
+                download = used - upload;
+            }
+            return { upload: Math.max(0, upload), download: Math.max(0, download), total: Math.max(0, used) };
+        }
+
+        function getLimitBytes(client) {
+            return numberValue(client.traffic_limit_bytes || client.data_limit || client.limit_bytes || client.traffic_limit);
+        }
+
+        function isExpired(client) {
+            const raw = client.expires_at || client.expire_at || client.expiry_date || client.expiration_date;
+            if (!raw) return false;
+            const ts = Date.parse(raw);
+            return Number.isFinite(ts) && ts > 0 && ts <= Date.now();
+        }
+
+        function isTrafficEnded(client) {
+            const status = String(client.status || '').toLowerCase();
+            const limit = getLimitBytes(client);
+            return status.includes('traffic_limit') || status.includes('limit_exceeded') || status.includes('exceeded') || (limit > 0 && getUsedBytes(client) >= limit);
+        }
+
+        function isEnded(client) {
+            const status = String(client.status || '').toLowerCase();
+            return isExpired(client) || isTrafficEnded(client) || status.includes('expired') || status.includes('time_limit') || status.includes('time_exceeded');
+        }
+
+        function isOnline(client) {
+            const truthy = value => value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true' || String(value || '').toLowerCase() === 'online' || String(value || '').toLowerCase() === 'connected';
+            const activeConnections = Math.max(
+                numberValue(client.active_connections),
+                numberValue(client.connection_count),
+                numberValue(client.current_connections),
+                numberValue(client.online_connections),
+                numberValue(client.session_count),
+                Array.isArray(client.sessions) ? client.sessions.length : 0
             );
-            document.getElementById('totalTrafficStat').textContent = 
-                formatBytes(totalTraffic).replace('MB', 'GB');
+            return truthy(client.connected) || truthy(client.online) || truthy(client.is_online) || truthy(client.connection_status) || activeConnections > 0;
+        }
 
-            // Client growth
-            document.getElementById('clientGrowth').textContent = 
-                `+${clients.length}`;
+        function accessState(client) {
+            if (isEnded(client)) return 'Ended';
+            if (client.active === false) return 'Disabled';
+            if (isOnline(client)) return 'Online';
+            return 'Ready';
+        }
 
-            if (statsData && statsData.success) {
-                const stats = statsData.data;
-                document.getElementById('peakConnections').textContent = 
-                    stats.connected_clients || 0;
+        function destroyChart(id) {
+            if (analyticsCharts[id]) {
+                analyticsCharts[id].destroy();
+                delete analyticsCharts[id];
             }
         }
 
-        function createCharts(clients) {
-            // Traffic Chart
-            const trafficData = chartManager.generateSampleTrafficData(7);
-            chartManager.createTrafficChart('trafficChart', trafficData);
+        function commonChartOptions() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: chartText, usePointStyle: true, boxWidth: 8 } },
+                    tooltip: {
+                        backgroundColor: 'rgba(6, 18, 36, .96)',
+                        titleColor: '#e6f1ff',
+                        bodyColor: '#c5d2e8',
+                        borderColor: 'rgba(100,255,218,.35)',
+                        borderWidth: 1
+                    }
+                }
+            };
+        }
 
-            // Growth Chart
-            const growthData = chartManager.generateSampleGrowthData(30);
-            chartManager.createClientGrowthChart('growthChart', growthData);
-
-            // Peak Hours Chart
-            const peakHoursData = chartManager.generateSamplePeakHours();
-            chartManager.createPeakHoursChart('peakHoursChart', peakHoursData);
-
-            // Status Distribution
-            const activeCount = clients.filter(c => c.active).length;
-            const inactiveCount = clients.length - activeCount;
-            
-            chartManager.createStatusChart('statusChart', {
-                labels: ['Active', 'Inactive'],
-                values: [activeCount, inactiveCount]
+        function renderTopTrafficChart() {
+            const id = 'topTrafficChart';
+            destroyChart(id);
+            const sorted = [...analyticsClients]
+                .map(c => ({ name: c.name || 'Unknown', total: getUsedBytes(c) }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 10)
+                .reverse();
+            analyticsCharts[id] = new Chart(document.getElementById(id), {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(x => x.name),
+                    datasets: [{
+                        label: 'Traffic (GB)',
+                        data: sorted.map(x => +(x.total / 1e9).toFixed(3)),
+                        backgroundColor: palette.cyan,
+                        borderColor: palette.cyan,
+                        borderWidth: 1,
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    ...commonChartOptions(),
+                    indexAxis: 'y',
+                    plugins: { ...commonChartOptions().plugins, legend: { display: false } },
+                    scales: {
+                        x: { beginAtZero: true, grid: { color: chartGrid }, ticks: { color: chartText, callback: v => `${v} GB` } },
+                        y: { grid: { display: false }, ticks: { color: chartText } }
+                    }
+                }
             });
         }
 
-        function updateTopClients(clients) {
-            // Sort by total traffic
-            const sorted = [...clients]
-                .map(c => ({
-                    ...c,
-                    total: (c.bytes_sent || 0) + (c.bytes_received || 0)
-                }))
-                .sort((a, b) => b.total - a.total)
-                .slice(0, 10);
+        function creationBuckets(period) {
+            const now = new Date();
+            const parseCreated = client => {
+                const raw = client.created_at || client.createdAt || client.created || client.creation_date;
+                const ts = Date.parse(raw || '');
+                return Number.isFinite(ts) ? new Date(ts) : null;
+            };
 
+            if (period === '24h') {
+                const labels = [];
+                const values = Array(24).fill(0);
+                for (let i = 23; i >= 0; i--) {
+                    const d = new Date(now.getTime() - i * 3600000);
+                    labels.push(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                }
+                const start = now.getTime() - 24 * 3600000;
+                analyticsClients.forEach(c => {
+                    const d = parseCreated(c);
+                    if (!d || d.getTime() < start || d > now) return;
+                    const index = Math.min(23, Math.max(0, Math.floor((d.getTime() - start) / 3600000)));
+                    values[index] += 1;
+                });
+                return { labels, values, chip: '24 hours' };
+            }
+
+            if (period === 'all') {
+                const months = 12;
+                const labels = [];
+                const keys = [];
+                const values = Array(months).fill(0);
+                for (let i = months - 1; i >= 0; i--) {
+                    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                    keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                    labels.push(d.toLocaleDateString([], { month: 'short', year: '2-digit' }));
+                }
+                analyticsClients.forEach(c => {
+                    const d = parseCreated(c);
+                    if (!d) return;
+                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                    const idx = keys.indexOf(key);
+                    if (idx >= 0) values[idx] += 1;
+                });
+                return { labels, values, chip: 'last 12 months' };
+            }
+
+            const days = period === '90d' ? 90 : period === '30d' ? 30 : 7;
+            const labels = [];
+            const keys = [];
+            const values = Array(days).fill(0);
+            for (let i = days - 1; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+                const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                keys.push(key);
+                labels.push(d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
+            }
+            analyticsClients.forEach(c => {
+                const d = parseCreated(c);
+                if (!d) return;
+                const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                const idx = keys.indexOf(key);
+                if (idx >= 0) values[idx] += 1;
+            });
+            return { labels, values, chip: `${days} days` };
+        }
+
+        function renderCreationChart() {
+            const id = 'creationChart';
+            destroyChart(id);
+            const period = document.getElementById('timePeriod').value;
+            const series = creationBuckets(period);
+            document.getElementById('creationWindowChip').textContent = series.chip;
+            analyticsCharts[id] = new Chart(document.getElementById(id), {
+                type: 'line',
+                data: {
+                    labels: series.labels,
+                    datasets: [{
+                        label: 'New clients',
+                        data: series.values,
+                        borderColor: palette.teal,
+                        backgroundColor: 'rgba(52,211,153,.11)',
+                        fill: true,
+                        tension: .28,
+                        pointRadius: series.labels.length > 31 ? 0 : 2,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    ...commonChartOptions(),
+                    plugins: { ...commonChartOptions().plugins, legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: chartGrid }, ticks: { color: chartText, maxTicksLimit: 10 } },
+                        y: { beginAtZero: true, grid: { color: chartGrid }, ticks: { color: chartText, precision: 0 } }
+                    }
+                }
+            });
+        }
+
+        function renderTrafficSplitChart() {
+            const id = 'trafficSplitChart';
+            destroyChart(id);
+            const totals = analyticsClients.reduce((acc, c) => {
+                const parts = getTrafficParts(c);
+                acc.upload += parts.upload;
+                acc.download += parts.download;
+                return acc;
+            }, { upload: 0, download: 0 });
+            analyticsCharts[id] = new Chart(document.getElementById(id), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Upload', 'Download'],
+                    datasets: [{ data: [totals.upload, totals.download], backgroundColor: [palette.purple, palette.cyan], borderWidth: 0, hoverOffset: 5 }]
+                },
+                options: { ...commonChartOptions(), cutout: '66%' }
+            });
+        }
+
+        function renderStatusChart() {
+            const id = 'statusChart';
+            destroyChart(id);
+            const counts = { Online: 0, Ready: 0, Disabled: 0, Ended: 0 };
+            analyticsClients.forEach(c => { counts[accessState(c)] += 1; });
+            analyticsCharts[id] = new Chart(document.getElementById(id), {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(counts),
+                    datasets: [{ data: Object.values(counts), backgroundColor: [palette.teal, palette.blue, palette.amber, palette.red], borderWidth: 0, hoverOffset: 5 }]
+                },
+                options: { ...commonChartOptions(), cutout: '66%' }
+            });
+        }
+
+        function updateMetrics() {
+            const totals = analyticsClients.reduce((sum, c) => sum + getUsedBytes(c), 0);
+            let online = 0, ready = 0, ended = 0, disabled = 0, enabled = 0, expired = 0, trafficEnded = 0, nearQuota = 0;
+
+            analyticsClients.forEach(client => {
+                const state = accessState(client);
+                if (state === 'Online') online += 1;
+                if (state === 'Ready') ready += 1;
+                if (state === 'Ended') ended += 1;
+                if (state === 'Disabled') disabled += 1;
+                if (!isEnded(client) && client.active !== false) enabled += 1;
+                if (isExpired(client)) expired += 1;
+                if (isTrafficEnded(client)) trafficEnded += 1;
+                const limit = getLimitBytes(client);
+                if (limit > 0 && !isTrafficEnded(client) && getUsedBytes(client) / limit >= .85) nearQuota += 1;
+            });
+
+            const statsOnline = numberValue(analyticsStats?.connected_clients);
+            if (statsOnline > online) online = statsOnline;
+
+            document.getElementById('totalTrafficStat').textContent = formatBytes(totals);
+            document.getElementById('onlineStat').textContent = String(online);
+            document.getElementById('readyStat').textContent = String(ready);
+            document.getElementById('endedStat').textContent = String(ended + disabled);
+            document.getElementById('summaryTotal').textContent = String(analyticsClients.length);
+            document.getElementById('summaryEnabled').textContent = String(enabled);
+            document.getElementById('summaryDisabled').textContent = String(disabled);
+            document.getElementById('summaryExpired').textContent = String(expired);
+            document.getElementById('summaryTrafficEnded').textContent = String(trafficEnded);
+            document.getElementById('summaryNearQuota').textContent = String(nearQuota);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
+        }
+
+        function updateTopClientsTable() {
+            const rows = [...analyticsClients]
+                .map(c => ({ client: c, used: getUsedBytes(c), limit: getLimitBytes(c) }))
+                .sort((a, b) => b.used - a.used)
+                .slice(0, 10);
             const tbody = document.getElementById('topClientsTable');
-            
-            if (sorted.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">No data available</td></tr>';
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="analytics-empty">No client data available.</td></tr>';
                 return;
             }
-
-            tbody.innerHTML = sorted.map((client, index) => `
-                <tr class="hover:bg-gray-50">
-                    <td class="px-4 py-3 text-sm font-bold text-cyan-400">#${index + 1}</td>
-                    <td class="px-4 py-3 text-sm font-medium text-gray-900">${client.name}</td>
-                    <td class="px-4 py-3 text-sm text-gray-600">${formatBytes(client.bytes_sent || 0)}</td>
-                    <td class="px-4 py-3 text-sm text-gray-600">${formatBytes(client.bytes_received || 0)}</td>
-                    <td class="px-4 py-3 text-sm font-semibold text-purple-400">${formatBytes(client.total)}</td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = rows.map((row, index) => {
+                const remaining = row.limit > 0 ? Math.max(0, row.limit - row.used) : null;
+                return `
+                    <tr>
+                        <td>#${index + 1}</td>
+                        <td class="client-name">${escapeHtml(row.client.name || 'Unknown')}</td>
+                        <td>${escapeHtml(accessState(row.client))}</td>
+                        <td class="traffic-total">${formatBytes(row.used)}</td>
+                        <td>${row.limit > 0 ? formatBytes(row.limit) : 'Unlimited'}</td>
+                        <td>${remaining === null ? 'Unlimited' : formatBytes(remaining)}</td>
+                    </tr>`;
+            }).join('');
         }
 
-        function changePeriod() {
-            const period = document.getElementById('timePeriod').value;
-            notificationManager.info(`Loading data for: ${period}`);
-            
-            // Regenerate charts with different time periods
-            let days = 7;
-            if (period === '24h') days = 1;
-            else if (period === '7d') days = 7;
-            else if (period === '30d') days = 30;
-            else if (period === '90d') days = 90;
-            else days = 365;
+        function renderAll() {
+            updateMetrics();
+            renderTopTrafficChart();
+            renderCreationChart();
+            renderTrafficSplitChart();
+            renderStatusChart();
+            updateTopClientsTable();
+            document.getElementById('analyticsUpdated').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        }
 
-            const trafficData = chartManager.generateSampleTrafficData(days);
-            chartManager.updateChart('trafficChart', {
-                labels: trafficData.labels,
-                datasets: [trafficData.upload, trafficData.download]
-            });
+        async function loadAnalytics() {
+            document.getElementById('clientsApiState').textContent = 'Loading';
+            document.getElementById('statsApiState').textContent = 'Loading';
+            try {
+                const [clientsResult, statsResult] = await Promise.allSettled([api.getClients(), api.getStats()]);
+                if (clientsResult.status !== 'fulfilled' || !clientsResult.value?.success) {
+                    throw new Error(clientsResult.reason?.message || clientsResult.value?.message || 'Clients API failed');
+                }
+                analyticsClients = Array.isArray(clientsResult.value.data) ? clientsResult.value.data : [];
+                document.getElementById('clientsApiState').textContent = 'Live';
 
-            const growthData = chartManager.generateSampleGrowthData(days);
-            chartManager.updateChart('growthChart', {
-                labels: growthData.labels,
-                datasets: [growthData.values]
-            });
+                if (statsResult.status === 'fulfilled' && statsResult.value?.success) {
+                    analyticsStats = statsResult.value.data || {};
+                    document.getElementById('statsApiState').textContent = 'Live';
+                } else {
+                    analyticsStats = null;
+                    document.getElementById('statsApiState').textContent = 'Unavailable';
+                }
+                renderAll();
+            } catch (error) {
+                console.error('Failed to load analytics:', error);
+                document.getElementById('clientsApiState').textContent = 'Error';
+                document.getElementById('statsApiState').textContent = 'Unknown';
+                if (window.notificationManager) notificationManager.error('Failed to load analytics data');
+            }
         }
 
         function exportReport() {
-            notificationManager.withProgress('Generating analytics report...', 'info');
-            
-            // Simulate export process
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += 10;
-                if (progress <= 100) {
-                    document.querySelector('.progress-bar').style.width = progress + '%';
-                } else {
-                    clearInterval(interval);
-                    notificationManager.success('Report exported successfully!');
-                }
-            }, 200);
+            const header = ['client','access','used_bytes','traffic_limit_bytes','remaining_bytes','expires_at','created_at'];
+            const lines = [header.join(',')];
+            analyticsClients.forEach(client => {
+                const used = getUsedBytes(client);
+                const limit = getLimitBytes(client);
+                const remaining = limit > 0 ? Math.max(0, limit - used) : '';
+                const values = [
+                    client.name || '',
+                    accessState(client),
+                    used,
+                    limit || '',
+                    remaining,
+                    client.expires_at || '',
+                    client.created_at || ''
+                ].map(value => `"${String(value).replaceAll('"', '""')}"`);
+                lines.push(values.join(','));
+            });
+            const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `net-spoof-analytics-${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            if (window.notificationManager) notificationManager.success('Analytics CSV exported');
         }
 
-        // Initial load
         loadAnalytics();
-
-        // Auto-refresh every 60 seconds
         setInterval(loadAnalytics, 60000);
-
-        // Initialize sidebar
         initSidebar('analytics');
     </script>
     </div>
 </body>
 </html>
-
