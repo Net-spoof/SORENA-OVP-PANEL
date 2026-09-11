@@ -1,0 +1,63 @@
+name: Fix dashboard uptime null error
+
+on:
+  push:
+    branches:
+      - l2tp-dev
+    paths:
+      - .github/workflows/dashboard-uptime-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Fix dashboard uptime element guard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('webpanel/frontend/dashboard.html')
+          text = p.read_text(encoding='utf-8')
+
+          old = """                    if (stats.uptime) {
+                        document.getElementById('uptime').textContent = formatUptime(stats.uptime / 1000000000);
+                    }
+"""
+          new = """                    const uptimeEl = document.getElementById('uptime');
+                    if (stats.uptime && uptimeEl) {
+                        uptimeEl.textContent = formatUptime(stats.uptime / 1000000000);
+                    }
+"""
+
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected exactly one uptime block, found {text.count(old)}')
+
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+          print('Dashboard uptime guard applied')
+          PY
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          grep -n -A3 -B1 "const uptimeEl" webpanel/frontend/dashboard.html
+          git diff --check
+
+      - name: Commit dashboard fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add webpanel/frontend/dashboard.html
+          git commit -m 'fix(ui): guard missing dashboard uptime element'
+          git push origin HEAD:l2tp-dev
