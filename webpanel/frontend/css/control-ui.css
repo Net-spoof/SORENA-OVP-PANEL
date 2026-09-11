@@ -1,0 +1,591 @@
+/* NET SPOOF control-plane UI polish v1
+ * Shared visual layer for client edit, Outbounds, Nodes and Settings.
+ * Scoped carefully so existing functional logic remains untouched.
+ */
+
+:root {
+  --ns-surface: color-mix(in srgb, var(--secondary-bg, #112240) 96%, #020617);
+  --ns-surface-soft: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 72%, #020617);
+  --ns-border: color-mix(in srgb, var(--border-color, #1e3a5f) 92%, transparent);
+  --ns-muted: var(--text-secondary, #8892b0);
+  --ns-text: var(--text-primary, #e6f1ff);
+  --ns-accent: var(--accent-color, #64ffda);
+  --ns-accent-2: var(--accent-secondary, #00d4ff);
+  --ns-shadow: 0 22px 58px rgba(2, 8, 23, .24);
+}
+
+/* --------------------------------------------------------------------------
+   EDIT CLIENT MODAL — shared by root and delegated admins
+   -------------------------------------------------------------------------- */
+#editClientModal {
+  padding: 1rem !important;
+  background: rgba(2, 8, 23, .76) !important;
+  backdrop-filter: blur(10px);
+}
+
+#editClientModal > div {
+  width: min(900px, calc(100vw - 2rem)) !important;
+  max-width: 900px !important;
+  max-height: 92vh !important;
+  margin: 0 !important;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--ns-accent) 22%, var(--ns-border)) !important;
+  border-radius: 22px !important;
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--ns-accent-2) 7%, transparent), transparent 25rem),
+    var(--ns-surface) !important;
+  box-shadow: 0 34px 110px rgba(0, 0, 0, .52) !important;
+}
+
+#editClientModal > div > div:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 1.25rem 1.5rem !important;
+  border-bottom: 1px solid var(--ns-border) !important;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 94%, #020617) !important;
+  backdrop-filter: blur(14px);
+}
+
+#editClientModal h3 {
+  color: var(--ns-text) !important;
+  font-size: 1.2rem !important;
+  letter-spacing: -.02em;
+}
+
+#editClientModal h3::after {
+  content: 'Update quota, validity, connection limit and allowed locations.';
+  display: block;
+  margin-top: .35rem;
+  color: var(--ns-muted);
+  font-size: .74rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+#editClientModal > div > div:first-child button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--ns-border);
+  border-radius: 10px;
+  color: var(--ns-muted) !important;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 54%, transparent);
+}
+
+#editClientForm {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .9rem !important;
+  padding: 1.25rem 1.5rem 1.5rem !important;
+}
+
+#editClientForm > div:not(:last-child),
+#editClientForm > label {
+  min-width: 0;
+  margin: 0 !important;
+  padding: .95rem;
+  border: 1px solid var(--ns-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 65%, var(--secondary-bg, #112240));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+}
+
+#editClientForm > div:nth-of-type(5),
+#editClientForm > div:nth-of-type(6) {
+  grid-column: 1 / -1;
+}
+
+#editClientForm > label {
+  min-height: 66px;
+  display: flex !important;
+  align-items: center !important;
+  gap: .65rem !important;
+}
+
+#editClientForm > label:nth-of-type(2) {
+  border-color: color-mix(in srgb, #f59e0b 34%, var(--ns-border));
+  background: color-mix(in srgb, #f59e0b 6%, var(--ns-surface-soft));
+}
+
+#editClientForm label.block {
+  margin-bottom: .5rem !important;
+  color: var(--ns-text) !important;
+  font-size: .76rem !important;
+  font-weight: 800 !important;
+  letter-spacing: .018em;
+}
+
+#editClientForm input[type='text'],
+#editClientForm input[type='number'],
+#editClientForm select {
+  min-height: 46px;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 72%, transparent) !important;
+  color: var(--ns-text) !important;
+}
+
+#editClientForm input:focus,
+#editClientForm select:focus {
+  outline: 0 !important;
+  border-color: color-mix(in srgb, var(--ns-accent) 66%, var(--ns-border)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ns-accent) 12%, transparent) !important;
+}
+
+#editClientNameDisplay:disabled {
+  opacity: .75;
+  cursor: not-allowed;
+}
+
+#editClientForm p.text-xs,
+#editClientForm span.text-sm {
+  color: var(--ns-muted) !important;
+  line-height: 1.45;
+}
+
+#editClientNodesBox {
+  max-height: 220px !important;
+  padding: .7rem !important;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 11px !important;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 58%, transparent) !important;
+}
+
+#editClientNodesBox > label {
+  min-height: 38px;
+  padding: .45rem .55rem;
+  border-radius: 9px;
+  color: var(--ns-text);
+  transition: background-color .14s ease;
+}
+
+#editClientNodesBox > label:hover {
+  background: color-mix(in srgb, var(--ns-accent) 6%, transparent);
+}
+
+#editClientNodesBox input[type='checkbox'],
+#editClientForm > label input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  accent-color: var(--ns-accent);
+}
+
+#editClientForm > div:last-child {
+  grid-column: 1 / -1;
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: .7rem !important;
+  padding: .35rem 0 0 !important;
+}
+
+#editClientForm > div:last-child button {
+  min-width: 140px;
+  min-height: 44px;
+  border-radius: 10px !important;
+  font-weight: 800 !important;
+}
+
+#editClientForm > div:last-child button[type='button'] {
+  border: 1px solid var(--ns-border);
+  color: var(--ns-muted) !important;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 68%, transparent);
+}
+
+#editClientForm > div:last-child button[type='submit'] {
+  border: 1px solid color-mix(in srgb, var(--ns-accent) 55%, transparent);
+  color: #f8fbff !important;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--ns-accent-2) 58%, #17345a),
+    color-mix(in srgb, var(--ns-accent) 38%, #17345a)) !important;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--ns-accent-2) 12%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   ROOT OPERATIONS WORKSPACES
+   -------------------------------------------------------------------------- */
+.page-routing,
+.page-nodes,
+.page-settings {
+  min-height: 100vh;
+  color: var(--ns-text);
+  background: var(--primary-bg, #0a192f) !important;
+}
+
+.page-routing .main-content,
+.page-nodes .main-content,
+.page-settings .main-content {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--ns-accent) 5%, transparent), transparent 32rem),
+    radial-gradient(circle at 94% 12%, color-mix(in srgb, var(--ns-accent-2) 5%, transparent), transparent 34rem),
+    var(--primary-bg, #0a192f) !important;
+}
+
+.page-routing .main-content > .max-w-7xl,
+.page-nodes .main-content > .max-w-6xl,
+.page-settings .main-content > .max-w-4xl {
+  width: 100%;
+  max-width: 1500px !important;
+  padding: 1.65rem 1.35rem 3rem !important;
+}
+
+.page-routing h1,
+.page-nodes h1,
+.page-settings h1 {
+  color: var(--ns-text) !important;
+  letter-spacing: -.035em;
+}
+
+.page-routing h2,
+.page-routing h3,
+.page-nodes h2,
+.page-nodes h3,
+.page-settings h2,
+.page-settings h3 {
+  color: var(--ns-text) !important;
+}
+
+.page-routing p.text-gray-500,
+.page-routing p.text-gray-600,
+.page-nodes p.text-gray-500,
+.page-nodes p.text-gray-600,
+.page-settings p.text-gray-500,
+.page-settings p.text-gray-600 {
+  color: var(--ns-muted) !important;
+}
+
+.page-routing .bg-white,
+.page-nodes .bg-white,
+.page-settings .tab-content > .bg-white,
+.page-settings .tab-content .bg-white {
+  border-color: var(--ns-border) !important;
+  background: var(--ns-surface) !important;
+  color: var(--ns-text) !important;
+}
+
+.page-routing .rounded-xl.shadow,
+.page-nodes .rounded-xl.shadow,
+.page-settings .tab-content > .bg-white.rounded-lg.shadow {
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--ns-shadow) !important;
+}
+
+.page-routing input,
+.page-routing select,
+.page-routing textarea,
+.page-nodes input,
+.page-nodes select,
+.page-nodes textarea,
+.page-settings input:not([type='checkbox']),
+.page-settings select,
+.page-settings textarea {
+  min-height: 44px;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 10px !important;
+  color: var(--ns-text) !important;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 70%, transparent) !important;
+}
+
+.page-routing textarea,
+.page-settings textarea {
+  min-height: 118px;
+}
+
+.page-routing input:focus,
+.page-routing select:focus,
+.page-routing textarea:focus,
+.page-nodes input:focus,
+.page-nodes select:focus,
+.page-nodes textarea:focus,
+.page-settings input:focus,
+.page-settings select:focus,
+.page-settings textarea:focus {
+  outline: 0 !important;
+  border-color: color-mix(in srgb, var(--ns-accent) 65%, var(--ns-border)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ns-accent) 11%, transparent) !important;
+}
+
+.page-routing label,
+.page-nodes label,
+.page-settings label {
+  color: color-mix(in srgb, var(--ns-text) 72%, var(--ns-muted)) !important;
+  font-weight: 700 !important;
+}
+
+.page-routing button,
+.page-nodes button,
+.page-settings button {
+  border-radius: 10px !important;
+  font-weight: 750 !important;
+  transition: transform .14s ease, filter .14s ease, border-color .14s ease;
+}
+
+.page-routing button:hover,
+.page-nodes button:hover,
+.page-settings button:hover {
+  transform: translateY(-1px);
+}
+
+/* Outbounds */
+.page-routing .main-content > .max-w-7xl > div:first-child {
+  margin-bottom: .35rem;
+  padding: .25rem .1rem;
+}
+
+.page-routing .grid.grid-cols-1.xl\:grid-cols-2 > .bg-white.rounded-xl.shadow {
+  position: relative;
+  overflow: hidden;
+}
+
+.page-routing .grid.grid-cols-1.xl\:grid-cols-2 > .bg-white.rounded-xl.shadow::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--ns-accent) 64%, transparent);
+}
+
+.page-routing #inboundBindSelector {
+  border-radius: 14px !important;
+  border-color: color-mix(in srgb, var(--ns-accent-2) 28%, var(--ns-border)) !important;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 56%, transparent) !important;
+}
+
+.page-routing #inboundBindSelector > .grid > div {
+  border-color: var(--ns-border) !important;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 62%, transparent) !important;
+}
+
+.page-routing #selectionPreview,
+.page-routing pre {
+  line-height: 1.55;
+}
+
+.page-routing table,
+.page-nodes table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.page-routing thead,
+.page-nodes thead {
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 86%, #020617) !important;
+}
+
+.page-routing th,
+.page-nodes th {
+  color: color-mix(in srgb, var(--ns-muted) 90%, white) !important;
+  font-size: .69rem !important;
+  font-weight: 850 !important;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.page-routing tbody tr,
+.page-nodes tbody tr {
+  transition: background-color .14s ease, box-shadow .14s ease;
+}
+
+.page-routing tbody tr:hover,
+.page-nodes tbody tr:hover {
+  background: color-mix(in srgb, var(--ns-accent) 4%, transparent) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ns-accent) 66%, transparent);
+}
+
+.page-routing tbody td,
+.page-nodes tbody td {
+  border-top-color: color-mix(in srgb, var(--ns-border) 68%, transparent) !important;
+}
+
+.page-routing details {
+  padding: .8rem;
+  border: 1px solid var(--ns-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--primary-bg, #0a192f) 48%, transparent);
+}
+
+/* Nodes */
+.page-nodes .main-content > .max-w-6xl > .flex.items-center.justify-between {
+  margin-bottom: 1.2rem !important;
+}
+
+.page-nodes #nodeForm,
+.page-nodes #portLocationForm {
+  gap: .85rem !important;
+}
+
+.page-nodes #nodeForm > div:not(:last-child),
+.page-nodes #portLocationForm > div:not(:last-child) {
+  padding: .85rem;
+  border: 1px solid color-mix(in srgb, var(--ns-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 56%, var(--secondary-bg, #112240));
+}
+
+.page-nodes #nodeForm > div:last-child,
+.page-nodes #portLocationForm > div:last-child {
+  padding-top: .25rem;
+}
+
+.page-nodes .mt-8.border-t {
+  border-top-color: var(--ns-border) !important;
+}
+
+.page-nodes .bg-blue-50 {
+  color: #bae6fd !important;
+  border-color: color-mix(in srgb, #38bdf8 32%, var(--ns-border)) !important;
+  background: color-mix(in srgb, #0ea5e9 7%, var(--ns-surface-soft)) !important;
+}
+
+.page-nodes #nodesTable td,
+.page-nodes #portLocationsTable td {
+  vertical-align: middle;
+}
+
+/* Settings */
+.page-settings .main-content > .max-w-4xl {
+  max-width: 1220px !important;
+}
+
+.page-settings .main-content > .max-w-4xl > h1 {
+  margin-bottom: 1.25rem !important;
+}
+
+.page-settings .main-content > .max-w-4xl > .mb-6.border-b {
+  position: sticky;
+  top: .7rem;
+  z-index: 20;
+  margin-bottom: 1.2rem !important;
+  padding: .55rem;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--secondary-bg, #112240) 90%, #020617);
+  box-shadow: 0 12px 34px rgba(2,8,23,.18);
+  backdrop-filter: blur(12px);
+}
+
+.page-settings .main-content > .max-w-4xl > .mb-6.border-b nav {
+  gap: .4rem !important;
+}
+
+.page-settings .tab-button {
+  min-height: 40px;
+  padding: .62rem .82rem !important;
+  border: 1px solid transparent !important;
+  border-radius: 9px !important;
+  color: var(--ns-muted) !important;
+  background: transparent;
+  font-size: .78rem;
+  white-space: nowrap;
+}
+
+.page-settings .tab-button:hover {
+  color: var(--ns-text) !important;
+  border-color: var(--ns-border) !important;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 54%, transparent) !important;
+}
+
+.page-settings .tab-button.active {
+  color: var(--ns-text) !important;
+  border-color: color-mix(in srgb, var(--ns-accent) 38%, var(--ns-border)) !important;
+  background: color-mix(in srgb, var(--ns-accent) 8%, var(--tertiary-bg, #1a2f4f)) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ns-accent) 8%, transparent);
+}
+
+.page-settings .tab-content > .bg-white,
+.page-settings .tab-content > .bg-white + .bg-white {
+  padding: 1.35rem !important;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--ns-shadow) !important;
+}
+
+.page-settings .tab-content form.space-y-4 > div:not(.flex):not(.grid) {
+  padding: .8rem;
+  border: 1px solid color-mix(in srgb, var(--ns-border) 82%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 52%, transparent);
+}
+
+.page-settings input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--ns-accent);
+}
+
+.page-settings .theme-switcher {
+  gap: .8rem !important;
+}
+
+.page-settings .theme-option {
+  border-color: var(--ns-border) !important;
+  border-radius: 13px !important;
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 58%, var(--secondary-bg, #112240)) !important;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.page-settings .theme-option:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--ns-accent) 34%, var(--ns-border)) !important;
+  box-shadow: 0 12px 28px rgba(2,8,23,.18);
+}
+
+.page-settings .theme-name,
+.page-settings .theme-description {
+  color: var(--ns-text) !important;
+}
+
+@media (max-width: 900px) {
+  #editClientForm {
+    grid-template-columns: 1fr;
+  }
+  #editClientForm > div:nth-of-type(5),
+  #editClientForm > div:nth-of-type(6) {
+    grid-column: auto;
+  }
+  .page-routing .main-content > .max-w-7xl,
+  .page-nodes .main-content > .max-w-6xl,
+  .page-settings .main-content > .max-w-4xl {
+    padding-inline: .9rem !important;
+  }
+  .page-settings .main-content > .max-w-4xl > .mb-6.border-b {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  #editClientModal { padding: .45rem !important; }
+  #editClientModal > div {
+    width: 100% !important;
+    max-height: 96vh !important;
+    border-radius: 16px !important;
+  }
+  #editClientForm {
+    padding: .9rem !important;
+    gap: .65rem !important;
+  }
+  #editClientForm > div:last-child {
+    flex-direction: column-reverse;
+  }
+  #editClientForm > div:last-child button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #editClientNodesBox > label,
+  .page-routing button,
+  .page-nodes button,
+  .page-settings button,
+  .page-routing tbody tr,
+  .page-nodes tbody tr,
+  .page-settings .theme-option {
+    transition: none !important;
+  }
+}
