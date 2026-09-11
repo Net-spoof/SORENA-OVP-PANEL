@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
     <link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">
+    <link rel="stylesheet" href="css/settings-ui.css?v=settings-ui-20260912-v2">
     <script src="js/particles.js"></script>
     <script src="js/sidebar.js?v=panel-ui-20260911-v4"></script>
     <script src="js/theme-loader.js"></script>
@@ -62,10 +63,16 @@
 
     <!-- Main Content -->
     <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-3xl font-bold text-gray-800 mb-8">Settings</h1>
+        <div class="settings-hero">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Settings</h1>
+                <p>Manage panel security, server identity, appearance, Telegram automation, backups and proxy/server behavior from one control center.</p>
+                <span class="settings-scope-badge">Root control center</span>
+            </div>
+        </div>
 
         <!-- Tabs -->
-        <div class="mb-6 border-b border-gray-200">
+        <div class="settings-tab-wrap mb-6 border-b border-gray-200">
             <nav class="-mb-px flex flex-wrap gap-x-8 gap-y-2">
                 <button onclick="showTab('admin')" id="tab-admin" class="tab-button active">
                     Admin Settings
