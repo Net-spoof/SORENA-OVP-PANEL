@@ -1,0 +1,55 @@
+name: Delegated Clients Cleanup
+
+on:
+  push:
+    branches:
+      - l2tp-dev
+    paths:
+      - ".github/workflows/delegated-clients-cleanup.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch delegated-only orphan handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("webpanel/frontend/clients.html")
+          text = p.read_text(encoding="utf-8")
+          old = """        // Initial load
+        loadClients();
+        checkOrphaned();
+"""
+          new = """        // Initial load
+        loadClients();
+        if ((localStorage.getItem('role') || 'root') !== 'delegated_admin') {
+            checkOrphaned();
+        } else {
+            const orphanedList = document.getElementById('orphanedList');
+            const orphanedSection = orphanedList ? orphanedList.closest('.mt-8') : null;
+            if (orphanedSection) orphanedSection.classList.add('hidden');
+        }
+"""
+          if text.count(old) != 1:
+              raise SystemExit(f"initial orphan call count={text.count(old)}")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git diff --check
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add webpanel/frontend/clients.html
+          git commit -m "fix(ui): hide root-only orphan tools from delegated clients"
+          git push origin HEAD:l2tp-dev
