@@ -3,141 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IranGate - Admins</title>
+    <title>Admins - IranGate</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
     <link rel="stylesheet" href="css/sidebar.css">
+    <link rel="stylesheet" href="css/mobile.css">
+    <link rel="stylesheet" href="css/themes.css">
+    <link rel="stylesheet" href="css/theme-overrides.css">
+    <style>
+        .soft-ring { box-shadow: 0 0 0 1px rgba(148,163,184,.12); }
+        .admin-row { cursor: pointer; }
+    </style>
 </head>
 <body>
     <div id="sidebar-container"></div>
 
     <main class="main-content">
-        <div class="p-6 lg:p-8 max-w-7xl mx-auto">
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-7">
                 <div>
-                    <h1 class="text-3xl font-bold text-white">Delegated Admins</h1>
-                    <p class="text-slate-400 mt-2">Create restricted admins with shared traffic and time quotas.</p>
+                    <h1 class="text-3xl font-bold text-gray-900">Delegated Admins</h1>
+                    <p class="text-gray-500 mt-2">Manage reseller access, traffic pools, validity and owned users from one place.</p>
                 </div>
-                <button onclick="openCreateModal()" class="px-5 py-3 rounded-lg bg-cyan-400 text-slate-950 font-semibold hover:bg-cyan-300 transition">
-                    + Add Admin
-                </button>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div class="rounded-xl border border-slate-700 bg-slate-900/70 p-5">
-                    <div class="text-xs uppercase tracking-wide text-slate-400">Total Admins</div>
-                    <div id="statTotal" class="text-2xl font-bold text-white mt-2">0</div>
-                </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/70 p-5">
-                    <div class="text-xs uppercase tracking-wide text-slate-400">Active</div>
-                    <div id="statActive" class="text-2xl font-bold text-emerald-300 mt-2">0</div>
-                </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/70 p-5">
-                    <div class="text-xs uppercase tracking-wide text-slate-400">Suspended</div>
-                    <div id="statSuspended" class="text-2xl font-bold text-amber-300 mt-2">0</div>
-                </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/70 p-5">
-                    <div class="text-xs uppercase tracking-wide text-slate-400">Managed Clients</div>
-                    <div id="statClients" class="text-2xl font-bold text-cyan-300 mt-2">0</div>
+                <div class="flex gap-2">
+                    <button onclick="loadAdmins(true)" class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Refresh</button>
+                    <button onclick="openCreateModal()" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-700">+ Add Admin</button>
                 </div>
             </div>
 
-            <div class="rounded-xl border border-slate-700 bg-slate-900/70 overflow-hidden">
-                <div class="p-5 border-b border-slate-700 flex items-center justify-between gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Total Admins</p>
+                    <p id="statTotal" class="mt-2 text-3xl font-bold text-gray-900">0</p>
+                </div>
+                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Active Admins</p>
+                    <p id="statActive" class="mt-2 text-3xl font-bold text-emerald-600">0</p>
+                </div>
+                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Managed Users</p>
+                    <p id="statClients" class="mt-2 text-3xl font-bold text-blue-600">0</p>
+                </div>
+                <div class="soft-ring rounded-2xl bg-white p-5 shadow-sm">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Traffic Pools</p>
+                    <p id="statTraffic" class="mt-2 text-lg font-bold text-gray-900">0 B / 0 B</p>
+                    <p class="mt-1 text-xs text-gray-500">Used / total assigned</p>
+                </div>
+            </div>
+
+            <section class="soft-ring rounded-2xl bg-white shadow-sm overflow-hidden">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-gray-100 px-5 py-4">
                     <div>
-                        <h2 class="text-lg font-semibold text-white">Admin List</h2>
-                        <p class="text-sm text-slate-400">Traffic shown here is the aggregate pool used by all clients owned by that admin.</p>
+                        <h2 class="font-semibold text-gray-900">Admin List</h2>
+                        <p class="text-xs text-gray-500 mt-1">Click an admin to inspect its users, usage and connection state.</p>
                     </div>
-                    <button onclick="loadAdmins()" class="px-3 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800">Refresh</button>
+                    <input id="adminSearch" oninput="renderAdmins()" class="w-full md:w-64 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-purple-400" placeholder="Search admin...">
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
-                        <thead class="bg-slate-950/60 text-slate-400">
+                        <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-400">
                             <tr>
-                                <th class="text-left px-5 py-3">Admin</th>
-                                <th class="text-left px-5 py-3">Status</th>
-                                <th class="text-left px-5 py-3">Traffic</th>
-                                <th class="text-left px-5 py-3">Time</th>
-                                <th class="text-left px-5 py-3">Clients</th>
-                                <th class="text-right px-5 py-3">Actions</th>
+                                <th class="px-5 py-3 text-left">Admin</th>
+                                <th class="px-5 py-3 text-left">Status</th>
+                                <th class="px-5 py-3 text-left">Users</th>
+                                <th class="px-5 py-3 text-left">Traffic Used / Total</th>
+                                <th class="px-5 py-3 text-left">Validity</th>
+                                <th class="px-5 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="adminsTable" class="divide-y divide-slate-800">
-                            <tr><td colspan="6" class="px-5 py-10 text-center text-slate-400">Loading...</td></tr>
+                        <tbody id="adminsTable" class="divide-y divide-gray-100">
+                            <tr><td colspan="6" class="px-5 py-10 text-center text-gray-400">Loading...</td></tr>
                         </tbody>
                     </table>
                 </div>
-            </div>
+            </section>
         </div>
     </main>
 
-    <div id="createModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4">
-        <div class="w-full max-w-xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+    <div id="createModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 p-4">
+        <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
             <div class="flex items-center justify-between mb-6">
                 <div>
-                    <h2 class="text-xl font-bold text-white">Create Admin</h2>
-                    <p class="text-sm text-slate-400 mt-1">This account will only see and manage its own OpenVPN clients.</p>
+                    <h2 class="text-xl font-bold text-gray-900">Create Delegated Admin</h2>
+                    <p class="text-sm text-gray-500 mt-1">This admin can only manage its own OpenVPN users.</p>
                 </div>
-                <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-2xl">&times;</button>
+                <button onclick="closeCreateModal()" class="text-2xl text-gray-400 hover:text-gray-700">&times;</button>
             </div>
-
             <form id="createAdminForm" class="space-y-4">
                 <div>
-                    <label class="block text-sm text-slate-300 mb-2">Username</label>
-                    <input id="adminUsername" required minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400" placeholder="reseller01">
+                    <label class="mb-2 block text-sm font-medium text-gray-700">Username</label>
+                    <input id="adminUsername" required minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" class="w-full rounded-lg border border-gray-200 px-4 py-3 outline-none focus:border-purple-400" placeholder="reseller01">
                 </div>
                 <div>
-                    <label class="block text-sm text-slate-300 mb-2">Password</label>
-                    <input id="adminPassword" required type="password" minlength="8" maxlength="128" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400" placeholder="Minimum 8 characters">
+                    <label class="mb-2 block text-sm font-medium text-gray-700">Password</label>
+                    <input id="adminPassword" required type="password" minlength="8" maxlength="128" class="w-full rounded-lg border border-gray-200 px-4 py-3 outline-none focus:border-purple-400" placeholder="Minimum 8 characters">
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm text-slate-300 mb-2">Traffic quota</label>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Traffic quota</label>
                         <div class="flex gap-2">
-                            <input id="adminTraffic" required type="number" min="0.01" step="0.01" class="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400" value="100">
-                            <select id="adminTrafficUnit" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-white">
-                                <option value="GB">GB</option>
-                                <option value="TB">TB</option>
-                                <option value="MB">MB</option>
-                            </select>
+                            <input id="adminTraffic" required type="number" min="0.01" step="0.01" class="min-w-0 flex-1 rounded-lg border border-gray-200 px-4 py-3 outline-none focus:border-purple-400" value="100">
+                            <select id="adminTrafficUnit" class="rounded-lg border border-gray-200 px-3 py-3"><option value="GB">GB</option><option value="TB">TB</option><option value="MB">MB</option></select>
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm text-slate-300 mb-2">Validity (days)</label>
-                        <input id="adminDays" required type="number" min="1" max="3650" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400" value="30">
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Validity (days)</label>
+                        <input id="adminDays" required type="number" min="1" max="3650" class="w-full rounded-lg border border-gray-200 px-4 py-3 outline-none focus:border-purple-400" value="30">
                     </div>
                 </div>
-
-                <div class="rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm text-cyan-100">
-                    When this admin is disabled, expires, or consumes its traffic pool, all of its clients are blocked on Master, Nodes and IKEv2.
-                </div>
-
-                <div class="flex justify-end gap-3 pt-2">
-                    <button type="button" onclick="closeCreateModal()" class="px-4 py-2 rounded-lg border border-slate-600 text-slate-200">Cancel</button>
-                    <button id="createAdminBtn" type="submit" class="px-5 py-2 rounded-lg bg-cyan-400 text-slate-950 font-semibold">Create Admin</button>
+                <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">Disabling an admin, exhausting its traffic pool, or expiring its time blocks all owned users on Master, Nodes and IKEv2.</div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeCreateModal()" class="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700">Cancel</button>
+                    <button id="createAdminBtn" type="submit" class="rounded-lg bg-purple-600 px-5 py-2 text-sm font-semibold text-white hover:bg-purple-700">Create Admin</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <script src="js/api.js?v=delegated-admin-v1"></script>
+    <div id="detailsModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 p-4">
+        <div class="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div class="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-6 py-4">
+                <div>
+                    <h2 id="detailsTitle" class="text-xl font-bold text-gray-900">Admin Details</h2>
+                    <p class="text-sm text-gray-500 mt-1">Owned-user status and delegated traffic pool.</p>
+                </div>
+                <button onclick="closeDetailsModal()" class="text-2xl text-gray-400 hover:text-gray-700">&times;</button>
+            </div>
+            <div id="detailsContent" class="p-6"></div>
+        </div>
+    </div>
+
+    <script src="js/api.js?v=admins-clean-20260911-v1"></script>
     <script src="js/sidebar.js?v=delegated-admin-clean-20260911-v3"></script>
     <script>
-        if (!checkAuth()) {
-            throw new Error('Authentication required');
-        }
-        if ((localStorage.getItem('role') || 'root') === 'delegated_admin') {
-            window.location.replace('clients.html');
-        }
-
+        if (!checkAuth()) throw new Error('Authentication required');
+        if ((localStorage.getItem('role') || 'root') === 'delegated_admin') window.location.replace('clients.html');
         document.getElementById('sidebar-container').innerHTML = createSidebar('admins');
 
         let admins = [];
+        let allClients = [];
 
-        const authHeaders = () => ({
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + (localStorage.getItem('token') || '')
-        });
+        const authHeaders = () => ({'Content-Type':'application/json','Authorization':'Bearer ' + (localStorage.getItem('token') || '')});
+        const asNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 
         function quotaMultiplier(unit) {
             if (unit === 'TB') return 1000 * 1000 * 1000 * 1000;
@@ -146,224 +153,236 @@
         }
 
         function escapeHtml(value) {
-            return String(value ?? '').replace(/[&<>'"]/g, ch => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-            }[ch]));
+            return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
         }
 
         function statusBadge(admin) {
             const status = String(admin.status || '').toLowerCase();
-            const labels = {
-                active: ['Active', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'],
-                disabled: ['Disabled', 'bg-red-500/15 text-red-300 border-red-500/30'],
-                expired: ['Time expired', 'bg-amber-500/15 text-amber-300 border-amber-500/30'],
-                traffic_exhausted: ['Traffic finished', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
+            const map = {
+                active: ['Active', 'bg-emerald-50 text-emerald-700'],
+                disabled: ['Disabled', 'bg-red-50 text-red-700'],
+                expired: ['Time expired', 'bg-amber-50 text-amber-700'],
+                traffic_exhausted: ['Traffic finished', 'bg-amber-50 text-amber-700']
             };
-            const [label, cls] = labels[status] || [status || 'Unknown', 'bg-slate-700 text-slate-200 border-slate-600'];
-            return `<span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${cls}">${escapeHtml(label)}</span>`;
+            const [label, cls] = map[status] || [status || 'Unknown', 'bg-gray-100 text-gray-600'];
+            return `<span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${cls}">${escapeHtml(label)}</span>`;
+        }
+
+        function getUsedBytes(client) {
+            const explicit = asNumber(client.traffic_used_bytes);
+            if (explicit > 0) return explicit;
+            const total = asNumber(client.total_bytes);
+            if (total > 0) return total;
+            return asNumber(client.bytes_received) + asNumber(client.bytes_sent);
+        }
+
+        function getLimitBytes(client) {
+            return asNumber(client.traffic_limit_bytes ?? client.data_limit ?? client.limit_bytes ?? client.traffic_limit);
+        }
+
+        function getExpiryMs(client) {
+            const raw = client.expires_at || client.expire_at || client.expiry_date || client.expiration_date;
+            const ts = raw ? Date.parse(raw) : NaN;
+            return Number.isFinite(ts) ? ts : NaN;
+        }
+
+        function isClientActive(client) {
+            const limit = getLimitBytes(client);
+            const used = getUsedBytes(client);
+            const expiry = getExpiryMs(client);
+            const status = String(client.persisted_status || client.status || '').toLowerCase();
+            const badStatus = status.includes('expired') || status.includes('traffic_limit') || status.includes('limit_exceeded') || status.includes('admin_');
+            return limit > 0 && used < limit && Number.isFinite(expiry) && expiry > Date.now() && !Boolean(client.admin_suspended) && !badStatus;
+        }
+
+        function isClientOnline(client) {
+            const truthy = value => value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true' || String(value || '').toLowerCase() === 'online' || String(value || '').toLowerCase() === 'connected';
+            return truthy(client.connected) || truthy(client.online) || truthy(client.is_online) || truthy(client.connection_status) || asNumber(client.active_connections) > 0 || asNumber(client.connection_count) > 0;
         }
 
         function formatExpiry(admin) {
             if (!admin.expires_at) return '—';
             const date = new Date(admin.expires_at);
             if (Number.isNaN(date.getTime())) return '—';
-            return `${admin.days_remaining || 0} day(s)<div class="text-xs text-slate-500 mt-1">${date.toLocaleString()}</div>`;
+            return `<div class="font-medium text-gray-700">${asNumber(admin.days_remaining)} day(s)</div><div class="text-xs text-gray-400 mt-1">${date.toLocaleString()}</div>`;
         }
 
         function trafficBar(admin) {
-            const used = Number(admin.traffic_used_bytes || 0);
-            const limit = Number(admin.traffic_limit_bytes || 0);
+            const used = asNumber(admin.traffic_used_bytes);
+            const limit = asNumber(admin.traffic_limit_bytes);
             const pct = limit > 0 ? Math.min(100, Math.round(used * 100 / limit)) : 0;
-            return `
-                <div class="min-w-[190px]">
-                    <div class="flex justify-between gap-3 text-xs mb-1">
-                        <span class="text-slate-300">${formatBytes(used)}</span>
-                        <span class="text-slate-500">/ ${formatBytes(limit)}</span>
-                    </div>
-                    <div class="h-1.5 rounded-full bg-slate-800 overflow-hidden"><div class="h-full bg-cyan-400" style="width:${pct}%"></div></div>
-                    <div class="text-xs text-slate-500 mt-1">${formatBytes(Number(admin.traffic_remaining_bytes || 0))} remaining</div>
-                </div>`;
+            return `<div class="min-w-[190px]">
+                <div class="flex justify-between gap-3 text-xs mb-1"><span class="font-semibold text-gray-700">${formatBytes(used)}</span><span class="text-gray-400">/ ${formatBytes(limit)}</span></div>
+                <div class="h-1.5 rounded-full bg-gray-100 overflow-hidden"><div class="h-full rounded-full ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-purple-500'}" style="width:${pct}%"></div></div>
+                <div class="text-xs text-gray-400 mt-1">${formatBytes(asNumber(admin.traffic_remaining_bytes))} remaining · ${pct}% used</div>
+            </div>`;
         }
 
         async function apiCall(path, method = 'GET', body = null) {
-            const response = await fetch('/api' + path, {
-                method,
-                headers: authHeaders(),
-                body: body === null ? null : JSON.stringify(body)
-            });
-            const data = await response.json().catch(() => ({ success: false, message: `HTTP ${response.status}` }));
-            if (response.status === 401) {
-                logout();
-                throw new Error('Authentication required');
-            }
-            if (!response.ok || data.success !== true) {
-                throw new Error(data.message || `HTTP ${response.status}`);
-            }
+            const response = await fetch('/api' + path, {method, headers:authHeaders(), body:body === null ? null : JSON.stringify(body)});
+            const data = await response.json().catch(() => ({success:false,message:`HTTP ${response.status}`}));
+            if (response.status === 401) { logout(); throw new Error('Authentication required'); }
+            if (!response.ok || data.success !== true) throw new Error(data.message || `HTTP ${response.status}`);
             return data;
         }
 
-        async function loadAdmins() {
+        async function loadAdmins(force = false) {
             const table = document.getElementById('adminsTable');
-            table.innerHTML = '<tr><td colspan="6" class="px-5 py-10 text-center text-slate-400">Loading...</td></tr>';
+            table.innerHTML = '<tr><td colspan="6" class="px-5 py-10 text-center text-gray-400">Loading...</td></tr>';
             try {
-                const result = await apiCall('/delegated-admins');
-                admins = Array.isArray(result.data) ? result.data : [];
+                if (force && api.invalidateCache) api.invalidateCache('/clients');
+                const [adminResult, clientResult] = await Promise.all([apiCall('/delegated-admins'), api.getClients()]);
+                admins = Array.isArray(adminResult.data) ? adminResult.data : [];
+                allClients = clientResult?.success && Array.isArray(clientResult.data) ? clientResult.data : [];
                 renderAdmins();
             } catch (error) {
-                table.innerHTML = `<tr><td colspan="6" class="px-5 py-10 text-center text-red-300">${escapeHtml(error.message)}</td></tr>`;
+                table.innerHTML = `<tr><td colspan="6" class="px-5 py-10 text-center text-red-500">${escapeHtml(error.message)}</td></tr>`;
                 showToast(error.message, 'error');
             }
         }
 
         function renderAdmins() {
+            const totalUsed = admins.reduce((sum, a) => sum + asNumber(a.traffic_used_bytes), 0);
+            const totalLimit = admins.reduce((sum, a) => sum + asNumber(a.traffic_limit_bytes), 0);
             document.getElementById('statTotal').textContent = admins.length;
             document.getElementById('statActive').textContent = admins.filter(a => a.status === 'active').length;
-            document.getElementById('statSuspended').textContent = admins.filter(a => a.status !== 'active').length;
-            document.getElementById('statClients').textContent = admins.reduce((sum, a) => sum + Number(a.client_count || 0), 0);
+            document.getElementById('statClients').textContent = admins.reduce((sum, a) => sum + asNumber(a.client_count), 0);
+            document.getElementById('statTraffic').textContent = `${formatBytes(totalUsed)} / ${formatBytes(totalLimit)}`;
 
+            const q = String(document.getElementById('adminSearch').value || '').trim().toLowerCase();
+            const visible = admins.filter(a => !q || String(a.username || '').toLowerCase().includes(q));
             const table = document.getElementById('adminsTable');
-            if (!admins.length) {
-                table.innerHTML = '<tr><td colspan="6" class="px-5 py-10 text-center text-slate-400">No delegated admins yet.</td></tr>';
+            if (!visible.length) {
+                table.innerHTML = '<tr><td colspan="6" class="px-5 py-10 text-center text-gray-400">No matching delegated admins.</td></tr>';
                 return;
             }
 
-            table.innerHTML = admins.map(admin => `
-                <tr class="hover:bg-slate-800/40">
-                    <td class="px-5 py-4">
-                        <div class="font-semibold text-white">${escapeHtml(admin.username)}</div>
-                        <div class="text-xs text-slate-500 mt-1">Last login: ${admin.last_login && !String(admin.last_login).startsWith('0001-') ? new Date(admin.last_login).toLocaleString() : 'Never'}</div>
-                    </td>
+            table.innerHTML = visible.map(admin => `
+                <tr class="admin-row hover:bg-gray-50" onclick="openAdminDetails('${encodeURIComponent(admin.username)}')">
+                    <td class="px-5 py-4"><div class="font-semibold text-gray-900">${escapeHtml(admin.username)}</div><div class="mt-1 text-xs text-gray-400">Last login: ${admin.last_login && !String(admin.last_login).startsWith('0001-') ? new Date(admin.last_login).toLocaleString() : 'Never'}</div></td>
                     <td class="px-5 py-4">${statusBadge(admin)}</td>
+                    <td class="px-5 py-4"><div class="text-lg font-bold text-gray-900">${asNumber(admin.client_count)}</div><div class="text-xs text-gray-400">owned users</div></td>
                     <td class="px-5 py-4">${trafficBar(admin)}</td>
-                    <td class="px-5 py-4 text-slate-300">${formatExpiry(admin)}</td>
-                    <td class="px-5 py-4 text-slate-200 font-semibold">${Number(admin.client_count || 0)}</td>
-                    <td class="px-5 py-4">
+                    <td class="px-5 py-4">${formatExpiry(admin)}</td>
+                    <td class="px-5 py-4" onclick="event.stopPropagation()">
                         <div class="flex flex-wrap justify-end gap-2">
-                            <button onclick="addTraffic('${encodeURIComponent(admin.username)}')" class="px-2.5 py-1.5 rounded border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/10">+ Traffic</button>
-                            <button onclick="addTime('${encodeURIComponent(admin.username)}')" class="px-2.5 py-1.5 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-500/10">+ Time</button>
-                            <button onclick="resetPassword('${encodeURIComponent(admin.username)}')" class="px-2.5 py-1.5 rounded border border-slate-600 text-slate-200 hover:bg-slate-800">Password</button>
-                            ${admin.active
-                                ? `<button onclick="setActive('${encodeURIComponent(admin.username)}', false)" class="px-2.5 py-1.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10">Disable</button>`
-                                : `<button onclick="setActive('${encodeURIComponent(admin.username)}', true)" class="px-2.5 py-1.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10">Enable</button>`}
+                            <button onclick="addTraffic('${encodeURIComponent(admin.username)}')" class="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700">+ Traffic</button>
+                            <button onclick="addTime('${encodeURIComponent(admin.username)}')" class="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-700">+ Time</button>
+                            <button onclick="resetPassword('${encodeURIComponent(admin.username)}')" class="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-semibold text-gray-700">Password</button>
+                            ${admin.active ? `<button onclick="setActive('${encodeURIComponent(admin.username)}', false)" class="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700">Disable</button>` : `<button onclick="setActive('${encodeURIComponent(admin.username)}', true)" class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700">Enable</button>`}
                         </div>
                     </td>
                 </tr>`).join('');
         }
 
-        function openCreateModal() {
-            const modal = document.getElementById('createModal');
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            document.getElementById('adminUsername').focus();
+        function getOwnedClients(username) {
+            const target = String(username || '').toLowerCase();
+            return allClients.filter(client => String(client.owner_admin || '').toLowerCase() === target);
         }
 
-        function closeCreateModal() {
-            const modal = document.getElementById('createModal');
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
+        function clientQuotaLabel(client) {
+            if (isClientActive(client)) return '<span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">Active</span>';
+            const limit = getLimitBytes(client), used = getUsedBytes(client), expiry = getExpiryMs(client);
+            let label = 'Needs attention';
+            if (limit <= 0) label = 'No quota';
+            else if (used >= limit) label = 'Traffic finished';
+            else if (!Number.isFinite(expiry)) label = 'No expiry';
+            else if (expiry <= Date.now()) label = 'Expired';
+            return `<span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">${label}</span>`;
         }
+
+        function openAdminDetails(encoded) {
+            const username = decodeURIComponent(encoded);
+            const admin = admins.find(a => String(a.username).toLowerCase() === username.toLowerCase());
+            if (!admin) return;
+            const clients = getOwnedClients(username);
+            const activeUsers = clients.filter(isClientActive).length;
+            const onlineUsers = clients.filter(isClientOnline).length;
+            const used = asNumber(admin.traffic_used_bytes), limit = asNumber(admin.traffic_limit_bytes), remaining = asNumber(admin.traffic_remaining_bytes);
+            document.getElementById('detailsTitle').textContent = username;
+
+            const clientRows = clients.length ? clients.map(client => {
+                const cUsed = getUsedBytes(client), cLimit = getLimitBytes(client);
+                return `<tr class="border-t border-gray-100">
+                    <td class="px-4 py-3 font-medium text-gray-900">${escapeHtml(client.name || '—')}</td>
+                    <td class="px-4 py-3">${clientQuotaLabel(client)}</td>
+                    <td class="px-4 py-3">${isClientOnline(client) ? '<span class="font-semibold text-violet-700">Online</span>' : '<span class="text-gray-400">Offline</span>'}</td>
+                    <td class="px-4 py-3 text-gray-600">${formatBytes(cUsed)} / ${cLimit > 0 ? formatBytes(cLimit) : '—'}</td>
+                    <td class="px-4 py-3 text-gray-600">${client.expires_at ? new Date(client.expires_at).toLocaleString() : '—'}</td>
+                </tr>`;
+            }).join('') : '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-400">No owned users found.</td></tr>';
+
+            document.getElementById('detailsContent').innerHTML = `
+                <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+                    <div class="rounded-xl bg-gray-50 p-4"><div class="text-xs text-gray-400">Status</div><div class="mt-2">${statusBadge(admin)}</div></div>
+                    <div class="rounded-xl bg-gray-50 p-4"><div class="text-xs text-gray-400">Users</div><div class="mt-1 text-2xl font-bold text-gray-900">${asNumber(admin.client_count)}</div></div>
+                    <div class="rounded-xl bg-gray-50 p-4"><div class="text-xs text-gray-400">Active users</div><div class="mt-1 text-2xl font-bold text-emerald-600">${activeUsers}</div></div>
+                    <div class="rounded-xl bg-gray-50 p-4"><div class="text-xs text-gray-400">Online</div><div class="mt-1 text-2xl font-bold text-violet-600">${onlineUsers}</div></div>
+                    <div class="rounded-xl bg-gray-50 p-4"><div class="text-xs text-gray-400">Days left</div><div class="mt-1 text-2xl font-bold text-gray-900">${asNumber(admin.days_remaining)}</div></div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+                    <div class="rounded-xl border border-gray-100 p-4"><div class="text-xs text-gray-400">Traffic used</div><div class="mt-1 text-lg font-bold text-gray-900">${formatBytes(used)}</div></div>
+                    <div class="rounded-xl border border-gray-100 p-4"><div class="text-xs text-gray-400">Total traffic</div><div class="mt-1 text-lg font-bold text-gray-900">${formatBytes(limit)}</div></div>
+                    <div class="rounded-xl border border-gray-100 p-4"><div class="text-xs text-gray-400">Remaining</div><div class="mt-1 text-lg font-bold text-gray-900">${formatBytes(remaining)}</div></div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-gray-100">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-xs uppercase text-gray-400"><tr><th class="px-4 py-3 text-left">User</th><th class="px-4 py-3 text-left">Quota</th><th class="px-4 py-3 text-left">Connection</th><th class="px-4 py-3 text-left">Traffic</th><th class="px-4 py-3 text-left">Expires</th></tr></thead>
+                        <tbody>${clientRows}</tbody>
+                    </table>
+                </div>`;
+
+            const modal = document.getElementById('detailsModal');
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        }
+
+        function closeDetailsModal() { const modal = document.getElementById('detailsModal'); modal.classList.add('hidden'); modal.classList.remove('flex'); }
+        function openCreateModal() { const modal = document.getElementById('createModal'); modal.classList.remove('hidden'); modal.classList.add('flex'); document.getElementById('adminUsername').focus(); }
+        function closeCreateModal() { const modal = document.getElementById('createModal'); modal.classList.add('hidden'); modal.classList.remove('flex'); }
 
         document.getElementById('createAdminForm').addEventListener('submit', async event => {
             event.preventDefault();
             const button = document.getElementById('createAdminBtn');
-            const amount = Number(document.getElementById('adminTraffic').value || 0);
-            const unit = document.getElementById('adminTrafficUnit').value;
-            const payload = {
-                username: document.getElementById('adminUsername').value.trim(),
-                password: document.getElementById('adminPassword').value,
-                traffic_limit_bytes: Math.round(amount * quotaMultiplier(unit)),
-                expiration_days: Number(document.getElementById('adminDays').value || 0)
-            };
-
-            button.disabled = true;
-            button.textContent = 'Creating...';
+            const amount = Number(document.getElementById('adminTraffic').value || 0), unit = document.getElementById('adminTrafficUnit').value;
+            const payload = {username:document.getElementById('adminUsername').value.trim(), password:document.getElementById('adminPassword').value, traffic_limit_bytes:Math.round(amount * quotaMultiplier(unit)), expiration_days:Number(document.getElementById('adminDays').value || 0)};
+            button.disabled = true; button.textContent = 'Creating...';
             try {
                 await apiCall('/delegated-admins', 'POST', payload);
                 showToast(`Admin "${payload.username}" created`, 'success');
-                document.getElementById('createAdminForm').reset();
-                document.getElementById('adminTraffic').value = '100';
-                document.getElementById('adminDays').value = '30';
-                closeCreateModal();
-                await loadAdmins();
-            } catch (error) {
-                showToast(error.message, 'error');
-            } finally {
-                button.disabled = false;
-                button.textContent = 'Create Admin';
-            }
+                document.getElementById('createAdminForm').reset(); document.getElementById('adminTraffic').value = '100'; document.getElementById('adminDays').value = '30'; closeCreateModal(); await loadAdmins(true);
+            } catch (error) { showToast(error.message, 'error'); }
+            finally { button.disabled = false; button.textContent = 'Create Admin'; }
         });
 
         async function addTraffic(encoded) {
-            const username = decodeURIComponent(encoded);
-            const raw = prompt(`Traffic to add for ${username} (example: 50 GB, 500 MB, 1 TB):`, '50 GB');
+            const username = decodeURIComponent(encoded), raw = prompt(`Traffic to add for ${username} (example: 50 GB):`, '50 GB');
             if (!raw) return;
             const match = raw.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(MB|GB|TB)?$/i);
-            if (!match) {
-                showToast('Use a value like 50 GB, 500 MB or 1 TB', 'error');
-                return;
-            }
-            const value = Number(match[1]);
-            const unit = (match[2] || 'GB').toUpperCase();
-            try {
-                await apiCall(`/delegated-admins/${encodeURIComponent(username)}/add-traffic`, 'POST', { bytes: Math.round(value * quotaMultiplier(unit)) });
-                showToast(`Traffic added to ${username}`, 'success');
-                await loadAdmins();
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
+            if (!match) return showToast('Use a value like 50 GB, 500 MB or 1 TB', 'error');
+            try { await apiCall(`/delegated-admins/${encodeURIComponent(username)}/add-traffic`, 'POST', {bytes:Math.round(Number(match[1]) * quotaMultiplier((match[2] || 'GB').toUpperCase()))}); showToast(`Traffic added to ${username}`, 'success'); await loadAdmins(true); } catch (error) { showToast(error.message, 'error'); }
         }
 
         async function addTime(encoded) {
-            const username = decodeURIComponent(encoded);
-            const raw = prompt(`Days to add for ${username}:`, '30');
+            const username = decodeURIComponent(encoded), raw = prompt(`Days to add for ${username}:`, '30');
             if (!raw) return;
-            const days = Number.parseInt(raw, 10);
-            if (!Number.isInteger(days) || days <= 0) {
-                showToast('Enter a positive number of days', 'error');
-                return;
-            }
-            try {
-                await apiCall(`/delegated-admins/${encodeURIComponent(username)}/add-time`, 'POST', { days });
-                showToast(`Time added to ${username}`, 'success');
-                await loadAdmins();
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
+            const days = Number.parseInt(raw, 10); if (!Number.isInteger(days) || days <= 0) return showToast('Enter a positive number of days', 'error');
+            try { await apiCall(`/delegated-admins/${encodeURIComponent(username)}/add-time`, 'POST', {days}); showToast(`Time added to ${username}`, 'success'); await loadAdmins(true); } catch (error) { showToast(error.message, 'error'); }
         }
 
         async function resetPassword(encoded) {
-            const username = decodeURIComponent(encoded);
-            const password = prompt(`New password for ${username} (minimum 8 characters):`);
-            if (password === null) return;
-            if (password.length < 8) {
-                showToast('Password must be at least 8 characters', 'error');
-                return;
-            }
-            try {
-                await apiCall(`/delegated-admins/${encodeURIComponent(username)}/password`, 'POST', { password });
-                showToast(`Password changed for ${username}`, 'success');
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
+            const username = decodeURIComponent(encoded), password = prompt(`New password for ${username} (minimum 8 characters):`);
+            if (password === null) return; if (password.length < 8) return showToast('Password must be at least 8 characters', 'error');
+            try { await apiCall(`/delegated-admins/${encodeURIComponent(username)}/password`, 'POST', {password}); showToast(`Password changed for ${username}`, 'success'); } catch (error) { showToast(error.message, 'error'); }
         }
 
         async function setActive(encoded, active) {
-            const username = decodeURIComponent(encoded);
-            const action = active ? 'enable' : 'disable';
-            const warning = active
-                ? `Enable ${username}? Clients will reconnect only if the admin still has both traffic and time.`
-                : `Disable ${username}? All of this admin's clients will be blocked immediately on Master, Nodes and IKEv2.`;
+            const username = decodeURIComponent(encoded), action = active ? 'enable' : 'disable';
+            const warning = active ? `Enable ${username}?` : `Disable ${username}? All owned users will be blocked immediately.`;
             if (!confirm(warning)) return;
-            try {
-                await apiCall(`/delegated-admins/${encodeURIComponent(username)}/${action}`, 'POST', {});
-                showToast(`${username} ${active ? 'enabled' : 'disabled'}`, active ? 'success' : 'warning');
-                await loadAdmins();
-            } catch (error) {
-                showToast(error.message, 'error');
-            }
+            try { await apiCall(`/delegated-admins/${encodeURIComponent(username)}/${action}`, 'POST', {}); showToast(`${username} ${active ? 'enabled' : 'disabled'}`, active ? 'success' : 'warning'); await loadAdmins(true); } catch (error) { showToast(error.message, 'error'); }
         }
 
-        loadAdmins();
+        loadAdmins(true);
     </script>
 </body>
 </html>
