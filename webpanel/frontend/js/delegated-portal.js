@@ -8,7 +8,41 @@
         return;
     }
 
+    const isDelegated = (localStorage.getItem('role') || 'root') === 'delegated_admin';
     const rootCreateSidebar = window.createSidebar;
+
+    // The orphan-certificate controls are root-only. The legacy clients page checks
+    // them automatically, so suppress that request for delegated admins and hide
+    // the corresponding card without granting any additional backend access.
+    if (isDelegated && typeof window.fetch === 'function') {
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = function delegatedSafeFetch(input, init) {
+            try {
+                const raw = typeof input === 'string' ? input : input && input.url;
+                const method = String((init && init.method) || 'GET').toUpperCase();
+                const url = new URL(raw, window.location.origin);
+                if (method === 'GET' && url.pathname === '/api/clients/orphaned') {
+                    return Promise.resolve(new Response(JSON.stringify({
+                        success: true,
+                        message: 'Root-only check skipped for delegated admin',
+                        data: { count: 0 }
+                    }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' }
+                    }));
+                }
+            } catch (_) {
+                // Fall through to the real request.
+            }
+            return nativeFetch(input, init);
+        };
+
+        document.addEventListener('DOMContentLoaded', function hideRootOnlyClientTools() {
+            const orphanedList = document.getElementById('orphanedList');
+            const orphanedSection = orphanedList ? orphanedList.closest('.mt-8') : null;
+            if (orphanedSection) orphanedSection.classList.add('hidden');
+        });
+    }
 
     window.createSidebar = function createDelegatedAwareSidebar(activePage) {
         const role = localStorage.getItem('role') || 'root';
@@ -79,7 +113,7 @@
                 <div class="sidebar-footer">
                     <button onclick="logout()" class="logout-btn">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 013-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
                         </svg>
                         <span>Logout</span>
                     </button>
