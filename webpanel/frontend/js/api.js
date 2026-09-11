@@ -357,6 +357,14 @@ function checkAuth() {
         window.location.href = 'index.html';
         return false;
     }
+
+    const role = localStorage.getItem('role') || 'root';
+    const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
+    if (role === 'delegated_admin' && currentPage !== 'clients.html') {
+        window.location.replace('clients.html');
+        return false;
+    }
+
     return true;
 }
 

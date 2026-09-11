@@ -143,14 +143,15 @@ admins_anchor = clients_anchor + '''
 replace_once(sidebar, clients_anchor, admins_anchor)
 
 # Backup v2 must preserve delegated credentials, quotas and accounting snapshots.
-for backup in [
+replace_once(
     "deploy/master/scripts/irangate-backup-v2-export.py",
+    '"nodes.json",\n                "admin.json",\n                "telegram.json",',
+    '"nodes.json",\n                "admin.json",\n                "delegated_admins.json",\n                "telegram.json",',
+)
+replace_once(
     "deploy/master/scripts/irangate-backup-v2-import.py",
-]:
-    replace_once(
-        backup,
-        '"nodes.json",\n                "admin.json",\n                "telegram.json",',
-        '"nodes.json",\n                "admin.json",\n                "delegated_admins.json",\n                "telegram.json",',
-    )
+    '"nodes.json",\n        "admin.json",\n        "telegram.json",',
+    '"nodes.json",\n        "admin.json",\n        "delegated_admins.json",\n        "telegram.json",',
+)
 
 print("Delegated admin integration patch applied successfully")

@@ -1287,6 +1287,7 @@ def main() -> int:
             for name in (
                 "nodes.json",
                 "admin.json",
+                "delegated_admins.json",
                 "telegram.json",
                 "server.json",
                 "subscriptions.json",

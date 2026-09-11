@@ -104,7 +104,8 @@
                     localStorage.setItem('token', data.data.token);
                     localStorage.setItem('username', data.data.username);
                     localStorage.setItem('expires_at', data.data.expires_at);
-                    window.location.href = 'dashboard.html';
+                    localStorage.setItem('role', data.data.role || 'root');
+                    window.location.href = data.data.role === 'delegated_admin' ? 'clients.html' : 'dashboard.html';
                 } else {
                     showError(data.message || 'Login failed');
                     loginBtn.disabled = false;
@@ -127,7 +128,7 @@
 
         // Check if already logged in
         if (localStorage.getItem('token')) {
-            window.location.href = 'dashboard.html';
+            window.location.href = localStorage.getItem('role') === 'delegated_admin' ? 'clients.html' : 'dashboard.html';
         }
     </script>
 </body>

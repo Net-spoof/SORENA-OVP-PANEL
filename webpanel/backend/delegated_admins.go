@@ -40,10 +40,10 @@ type DelegatedAdmin struct {
 	Active            bool             `json:"active"`
 	TrafficLimitBytes int64            `json:"traffic_limit_bytes"`
 	TrafficUsedBytes  int64            `json:"traffic_used_bytes"`
-	ExpiresAt         time.Time         `json:"expires_at"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	LastLogin         time.Time         `json:"last_login"`
+	ExpiresAt         time.Time        `json:"expires_at"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	LastLogin         time.Time        `json:"last_login"`
 	Suspended         bool             `json:"suspended"`
 	SuspendReason     string           `json:"suspend_reason,omitempty"`
 	UsageSnapshots    map[string]int64 `json:"usage_snapshots,omitempty"`

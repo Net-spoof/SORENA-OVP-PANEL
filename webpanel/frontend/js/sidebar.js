@@ -2,7 +2,35 @@
 
 function createSidebar(activePage) {
     const username = localStorage.getItem('username') || 'Admin';
-    
+    const role = localStorage.getItem('role') || 'root';
+
+    if (role === 'delegated_admin') {
+        return `
+            <button class="sidebar-toggle" onclick="toggleSidebar()">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <div class="sidebar-overlay" onclick="closeSidebar()"></div>
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <div class="sidebar-logo">
+                        <div class="sidebar-logo-icon"><img src="logo/logo.ico" alt="IranGate Logo" class="w-10 h-10 rounded-lg"></div>
+                        <span class="sidebar-logo-text">IranGate</span>
+                    </div>
+                    <div class="sidebar-user"><div class="flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg><span class="font-medium">${username}</span></div></div>
+                </div>
+                <nav class="sidebar-menu">
+                    <div class="menu-section">
+                        <div class="menu-section-title">Clients</div>
+                        <a href="clients.html" class="menu-item ${activePage === 'clients' ? 'active' : ''}" title="OpenVPN Clients">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                            <span>OpenVPN Clients</span>
+                        </a>
+                    </div>
+                </nav>
+                <div class="sidebar-footer"><button onclick="logout()" class="logout-btn"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg><span>Logout</span></button></div>
+            </aside>`;
+    }
+
     return `
         <!-- Sidebar Toggle (Mobile) -->
         <button class="sidebar-toggle" onclick="toggleSidebar()">
@@ -69,6 +97,13 @@ function createSidebar(activePage) {
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
                         </svg>
                         <span>OpenVPN Clients</span>
+                    </a>
+
+                    <a href="admins.html" class="menu-item ${activePage === 'admins' ? 'active' : ''}" title="Admins">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-5.4-3.75M9 20H3v-2a4 4 0 016-3.46M15 7a4 4 0 11-8 0 4 4 0 018 0zm4 3v6m3-3h-6"/>
+                        </svg>
+                        <span>Admins</span>
                     </a>
 
                     <a href="#" class="menu-item coming-soon" title="V2ray" onclick="showComingSoon('V2ray')">
