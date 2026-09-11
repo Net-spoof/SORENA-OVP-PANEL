@@ -348,7 +348,20 @@ func fastEnforceStopClient(
 	killLocalOpenVPNClient(clientName)
 
 	// روی هر نود: block + kill
-	go blockRemoteNodes(clientName)
+	// Keep this synchronous: lifecycle stop must not return before all
+	// configured remote nodes have received the block/kill request.
+	blockRemoteNodes(clientName)
+
+	// IKEv2 uses its own credential store, so OpenVPN block files are
+	// not sufficient. Block the account and terminate any active SA.
+	if out, err := ikev2Run("block", clientName); err != nil {
+		log.Printf(
+			"Client %s IKEv2 block/terminate failed: %v (%s)",
+			clientName,
+			err,
+			strings.TrimSpace(out),
+		)
+	}
 
 	// پاک‌کردن cache صفحه کاربران
 	clientsCache.mutex.Lock()
@@ -852,6 +865,64 @@ func CheckConnectionLimits() error {
 	return nil
 }
 
+func syncBlockedIKEv2Clients(blockedNames []string) {
+	if len(blockedNames) == 0 {
+		return
+	}
+
+	const usersDB = "/opt/irangate/ikev2/users.tsv"
+
+	data, err := os.ReadFile(usersDB)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("IKEv2 blocked-client sync: read users database failed: %v", err)
+		}
+		return
+	}
+
+	active := make(map[string]bool)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "\t")
+		if len(parts) < 4 {
+			continue
+		}
+
+		name := strings.TrimSpace(parts[0])
+		status := strings.TrimSpace(parts[3])
+
+		if name != "" && strings.EqualFold(status, "active") {
+			active[strings.ToLower(name)] = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("IKEv2 blocked-client sync: parse users database failed: %v", err)
+		return
+	}
+
+	for _, blockedName := range blockedNames {
+		blockedName = strings.TrimSpace(blockedName)
+		if blockedName == "" || !active[strings.ToLower(blockedName)] {
+			continue
+		}
+
+		out, err := ikev2Run("block", blockedName)
+		if err != nil {
+			log.Printf(
+				"IKEv2 blocked-client sync failed for %s: %v (%s)",
+				blockedName,
+				err,
+				strings.TrimSpace(out),
+			)
+			continue
+		}
+
+		log.Printf("Synced blocked client to IKEv2: %s", blockedName)
+	}
+}
+
 func StartBlockedClientRemoteSync(
 	intervalSeconds int,
 ) {
@@ -895,6 +966,11 @@ func StartBlockedClientRemoteSync(
 		if len(blockedNames) == 0 {
 			return
 		}
+
+		// Keep IKEv2 access in parity with the same durable block set used
+		// by the master and remote OpenVPN nodes. This also repairs drift
+		// after restarts/restores or a transient IKEv2 block failure.
+		syncBlockedIKEv2Clients(blockedNames)
 
 		for _, node := range loadResetNodes() {
 			if node.IsLocal {
