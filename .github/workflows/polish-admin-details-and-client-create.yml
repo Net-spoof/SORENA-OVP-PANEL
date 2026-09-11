@@ -1,0 +1,55 @@
+name: Polish Admin Details and Client Create
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: ['.github/workflows/polish-admin-details-and-client-create.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+      - name: Wire fresh UI assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          admins = Path('webpanel/frontend/admins.html')
+          s = admins.read_text(encoding='utf-8')
+          old = 'css/admins-ui.css?v=admins-ui-20260911-v2'
+          new = 'css/admins-ui.css?v=admins-ui-20260911-v3'
+          if s.count(old) != 1:
+              raise SystemExit(f'admins old cache ref count={s.count(old)}')
+          admins.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          clients = Path('webpanel/frontend/clients.html')
+          s = clients.read_text(encoding='utf-8')
+          marker = '    <link rel="stylesheet" href="css/theme-overrides.css">\n'
+          addition = marker + '    <link rel="stylesheet" href="css/clients-ui.css?v=clients-ui-20260911-v1">\n'
+          if 'css/clients-ui.css?' not in s:
+              if s.count(marker) != 1:
+                  raise SystemExit(f'clients theme marker count={s.count(marker)}')
+              s = s.replace(marker, addition, 1)
+          s = s.replace('<title>Clients - adsvpn</title>', '<title>Clients - NET SPOOF</title>')
+          clients.write_text(s, encoding='utf-8')
+          PY
+
+          grep -Fq 'css/admins-ui.css?v=admins-ui-20260911-v3' webpanel/frontend/admins.html
+          grep -Fq 'css/clients-ui.css?v=clients-ui-20260911-v1' webpanel/frontend/clients.html
+          grep -Fq '<title>Clients - NET SPOOF</title>' webpanel/frontend/clients.html
+          git diff --check
+      - name: Commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add webpanel/frontend/admins.html webpanel/frontend/clients.html
+          git commit -m 'feat(ui): polish admin details and client creation'
+          git push origin HEAD:l2tp-dev
