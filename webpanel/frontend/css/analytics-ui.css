@@ -1,29 +1,53 @@
-/* NET SPOOF analytics workspace v1 */
+/* NET SPOOF analytics workspace v2 — high contrast + correct layer stacking */
 :root {
-  --an-surface: color-mix(in srgb, var(--secondary-bg, #112240) 96%, #020617);
-  --an-surface-soft: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 68%, #020617);
-  --an-border: color-mix(in srgb, var(--border-color, #1e3a5f) 90%, transparent);
-  --an-text: var(--text-primary, #e6f1ff);
-  --an-muted: var(--text-secondary, #8892b0);
+  --an-bg: var(--primary-bg, #0a192f);
+  --an-surface: color-mix(in srgb, var(--secondary-bg, #112240) 98%, #020617);
+  --an-surface-soft: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 84%, #020617);
+  --an-border: color-mix(in srgb, var(--border-color, #1e3a5f) 92%, #64ffda 8%);
+  --an-text: #eaf4ff;
+  --an-muted: #a9bad1;
+  --an-faint: #7f94ad;
   --an-accent: var(--accent-color, #64ffda);
   --an-accent-2: var(--accent-secondary, #00d4ff);
 }
 
-.page-analytics,
-.page-analytics .main-content {
+body.page-analytics {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--an-accent) 6%, transparent), transparent 34rem),
-    radial-gradient(circle at 92% 10%, color-mix(in srgb, var(--an-accent-2) 6%, transparent), transparent 36rem),
-    var(--primary-bg, #0a192f) !important;
   color: var(--an-text);
+  background: var(--an-bg) !important;
+}
+
+/* Keep decorative particles behind the UI instead of above it. */
+body.page-analytics #particleCanvas {
+  z-index: 0 !important;
+  opacity: .15 !important;
+  mix-blend-mode: normal !important;
+}
+
+.page-analytics .main-content {
+  position: relative !important;
+  z-index: 2 !important;
+  isolation: isolate;
+  min-height: 100vh;
+  opacity: 1 !important;
+  filter: none !important;
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--an-accent) 7%, transparent), transparent 34rem),
+    radial-gradient(circle at 92% 12%, color-mix(in srgb, var(--an-accent-2) 8%, transparent), transparent 36rem),
+    var(--an-bg) !important;
 }
 
 .analytics-shell {
+  position: relative !important;
+  z-index: 3 !important;
   width: 100%;
   max-width: 1500px;
   margin: 0 auto;
   padding: 1.7rem 1.35rem 3rem;
+  opacity: 1 !important;
+  filter: none !important;
 }
 
 .analytics-header {
@@ -34,17 +58,32 @@
   margin-bottom: 1.15rem;
 }
 
+/* dark-theme.css globally makes headings transparent gradient text.
+   Analytics needs explicit readable text, so reset that behavior here. */
+.page-analytics .analytics-title h1,
+.page-analytics .analytics-card h2,
+.page-analytics .analytics-card h3 {
+  background: none !important;
+  -webkit-background-clip: border-box !important;
+  background-clip: border-box !important;
+  -webkit-text-fill-color: currentColor !important;
+  opacity: 1 !important;
+}
+
 .analytics-title h1 {
   margin: 0;
-  color: var(--an-text);
-  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  color: var(--an-text) !important;
+  font-size: clamp(1.85rem, 3vw, 2.45rem);
+  font-weight: 900;
   letter-spacing: -.04em;
 }
 
 .analytics-title p {
-  margin-top: .45rem;
-  color: var(--an-muted);
   max-width: 760px;
+  margin-top: .45rem;
+  color: var(--an-muted) !important;
+  opacity: 1 !important;
+  line-height: 1.55;
 }
 
 .analytics-live-badge {
@@ -52,13 +91,13 @@
   align-items: center;
   gap: .45rem;
   margin-top: .75rem;
-  padding: .34rem .62rem;
-  border: 1px solid color-mix(in srgb, #34d399 34%, var(--an-border));
+  padding: .36rem .64rem;
+  border: 1px solid color-mix(in srgb, #34d399 48%, var(--an-border));
   border-radius: 999px;
-  color: #6ee7b7;
-  background: color-mix(in srgb, #10b981 7%, transparent);
+  color: #8ff4cb;
+  background: color-mix(in srgb, #10b981 12%, var(--an-surface));
   font-size: .7rem;
-  font-weight: 800;
+  font-weight: 850;
   letter-spacing: .04em;
   text-transform: uppercase;
 }
@@ -69,7 +108,7 @@
   height: 7px;
   border-radius: 50%;
   background: #34d399;
-  box-shadow: 0 0 0 5px rgba(52, 211, 153, .10);
+  box-shadow: 0 0 0 5px rgba(52, 211, 153, .12);
 }
 
 .analytics-actions {
@@ -83,25 +122,32 @@
 .analytics-actions select,
 .analytics-actions button {
   min-height: 44px;
-  border: 1px solid var(--an-border);
-  border-radius: 11px;
-  color: var(--an-text);
-  background: var(--an-surface-soft);
   padding: .65rem .9rem;
-  font-weight: 750;
+  border: 1px solid var(--an-border) !important;
+  border-radius: 11px !important;
+  color: var(--an-text) !important;
+  background: var(--an-surface-soft) !important;
+  font-weight: 800;
+  opacity: 1 !important;
 }
 
 .analytics-actions button {
-  border-color: color-mix(in srgb, var(--an-accent) 44%, var(--an-border));
+  border-color: color-mix(in srgb, var(--an-accent) 50%, var(--an-border)) !important;
   background: linear-gradient(135deg,
-    color-mix(in srgb, var(--an-accent-2) 42%, #17345a),
-    color-mix(in srgb, var(--an-accent) 30%, #17345a));
+    color-mix(in srgb, var(--an-accent-2) 48%, #17345a),
+    color-mix(in srgb, var(--an-accent) 36%, #17345a)) !important;
   cursor: pointer;
+  box-shadow: 0 8px 22px rgba(0, 212, 255, .08);
 }
 
-.analytics-actions button:hover { transform: translateY(-1px); }
+.analytics-actions button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
 
 .analytics-metrics {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: .85rem;
@@ -111,12 +157,13 @@
 .analytics-metric {
   position: relative;
   overflow: hidden;
-  min-height: 118px;
+  min-height: 120px;
   padding: 1rem 1.05rem;
   border: 1px solid var(--an-border);
   border-radius: 16px;
-  background: var(--an-surface);
-  box-shadow: 0 16px 44px rgba(2, 8, 23, .18);
+  background: var(--an-surface) !important;
+  box-shadow: 0 18px 48px rgba(2, 8, 23, .28), inset 0 1px 0 rgba(255,255,255,.025);
+  opacity: 1 !important;
 }
 
 .analytics-metric::after {
@@ -127,17 +174,18 @@
   width: 130px;
   height: 130px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--an-accent) 5%, transparent);
+  background: color-mix(in srgb, var(--an-accent) 8%, transparent);
 }
 
 .analytics-metric .metric-label {
   position: relative;
   z-index: 1;
-  color: var(--an-muted);
+  color: #bdcbe0 !important;
   font-size: .72rem;
-  font-weight: 800;
+  font-weight: 850;
   letter-spacing: .055em;
   text-transform: uppercase;
+  opacity: 1 !important;
 }
 
 .analytics-metric .metric-value {
@@ -145,10 +193,11 @@
   z-index: 1;
   display: block;
   margin-top: .55rem;
-  color: var(--an-text);
-  font-size: 1.8rem;
+  color: #f4f8ff !important;
+  font-size: 1.85rem;
   font-weight: 900;
   letter-spacing: -.04em;
+  opacity: 1 !important;
 }
 
 .analytics-metric .metric-note {
@@ -156,15 +205,19 @@
   z-index: 1;
   display: block;
   margin-top: .4rem;
-  color: var(--an-muted);
+  color: var(--an-muted) !important;
   font-size: .72rem;
+  line-height: 1.45;
+  opacity: 1 !important;
 }
 
-.metric-online .metric-value { color: #34d399; }
-.metric-ready .metric-value { color: #38bdf8; }
-.metric-ended .metric-value { color: #fb7185; }
+.metric-online .metric-value { color: #4adea4 !important; }
+.metric-ready .metric-value { color: #53c7f5 !important; }
+.metric-ended .metric-value { color: #fb8191 !important; }
 
 .analytics-grid-2 {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .9rem;
@@ -172,12 +225,15 @@
 }
 
 .analytics-card {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   padding: 1.05rem;
   border: 1px solid var(--an-border);
   border-radius: 17px;
-  background: var(--an-surface);
-  box-shadow: 0 18px 48px rgba(2, 8, 23, .18);
+  background: var(--an-surface) !important;
+  box-shadow: 0 20px 52px rgba(2, 8, 23, .28), inset 0 1px 0 rgba(255,255,255,.02);
+  opacity: 1 !important;
 }
 
 .analytics-card-head {
@@ -191,65 +247,102 @@
 .analytics-card h2,
 .analytics-card h3 {
   margin: 0;
-  color: var(--an-text);
+  color: #eaf4ff !important;
   font-size: 1rem;
   font-weight: 850;
 }
 
 .analytics-card-head p {
   margin-top: .25rem;
-  color: var(--an-muted);
+  color: var(--an-muted) !important;
   font-size: .72rem;
+  line-height: 1.45;
+  opacity: 1 !important;
 }
 
 .analytics-chip {
   flex: 0 0 auto;
-  padding: .28rem .5rem;
-  border: 1px solid var(--an-border);
+  padding: .3rem .52rem;
+  border: 1px solid color-mix(in srgb, var(--an-accent-2) 18%, var(--an-border));
   border-radius: 999px;
-  color: var(--an-muted);
-  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 60%, transparent);
+  color: #a9bad1 !important;
+  background: var(--an-surface-soft) !important;
   font-size: .65rem;
-  font-weight: 800;
+  font-weight: 850;
   white-space: nowrap;
+  opacity: 1 !important;
 }
 
-.analytics-chart-wrap { height: 290px; }
-.analytics-chart-wrap.small { height: 270px; }
+.analytics-chart-wrap {
+  position: relative;
+  z-index: 2;
+  height: 290px;
+  opacity: 1 !important;
+}
 
-.analytics-table-card { padding: 0; overflow: hidden; }
-.analytics-table-card .analytics-card-head { padding: 1.05rem 1.05rem .7rem; margin: 0; }
+.analytics-chart-wrap.small { height: 270px; }
+.analytics-chart-wrap canvas { opacity: 1 !important; filter: none !important; }
+
+.analytics-table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.analytics-table-card .analytics-card-head {
+  padding: 1.05rem 1.05rem .7rem;
+  margin: 0;
+}
+
 .analytics-table-scroll { overflow-x: auto; }
+
 .analytics-table {
   width: 100%;
   min-width: 780px;
   border-collapse: separate;
   border-spacing: 0;
 }
-.analytics-table thead { background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 86%, #020617); }
+
+.analytics-table thead {
+  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 92%, #020617) !important;
+}
+
 .analytics-table th {
-  padding: .78rem .95rem;
-  color: color-mix(in srgb, var(--an-muted) 90%, white);
+  padding: .8rem .95rem;
+  color: #b8c8dc !important;
   text-align: left;
   font-size: .67rem;
-  font-weight: 850;
+  font-weight: 900;
   letter-spacing: .06em;
   text-transform: uppercase;
+  opacity: 1 !important;
 }
+
 .analytics-table td {
-  padding: .82rem .95rem;
-  border-top: 1px solid color-mix(in srgb, var(--an-border) 68%, transparent);
-  color: var(--an-muted);
+  padding: .84rem .95rem;
+  border-top: 1px solid color-mix(in srgb, var(--an-border) 72%, transparent);
+  color: var(--an-muted) !important;
   font-size: .78rem;
+  opacity: 1 !important;
 }
+
 .analytics-table tbody tr:hover {
-  background: color-mix(in srgb, var(--an-accent) 4%, transparent);
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--an-accent) 66%, transparent);
+  background: color-mix(in srgb, var(--an-accent) 6%, transparent) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--an-accent) 72%, transparent);
 }
-.analytics-table .client-name { color: var(--an-text); font-weight: 800; }
-.analytics-table .traffic-total { color: var(--an-accent-2); font-weight: 850; }
+
+.analytics-table .client-name {
+  color: #edf6ff !important;
+  font-weight: 850;
+}
+
+.analytics-table .traffic-total {
+  color: #53d7ff !important;
+  font-weight: 900;
+}
 
 .analytics-summary-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: .85rem;
@@ -266,16 +359,24 @@
   justify-content: space-between;
   gap: 1rem;
   padding: .68rem .72rem;
-  border: 1px solid color-mix(in srgb, var(--an-border) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--an-border) 80%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--tertiary-bg, #1a2f4f) 48%, transparent);
+  background: var(--an-surface-soft) !important;
 }
-.analytics-summary-row span:first-child { color: var(--an-muted); font-size: .75rem; }
-.analytics-summary-row strong { color: var(--an-text); font-size: .78rem; }
+
+.analytics-summary-row span:first-child {
+  color: var(--an-muted) !important;
+  font-size: .75rem;
+}
+
+.analytics-summary-row strong {
+  color: #eef7ff !important;
+  font-size: .78rem;
+}
 
 .analytics-empty {
   padding: 2rem;
-  color: var(--an-muted);
+  color: var(--an-muted) !important;
   text-align: center;
 }
 
