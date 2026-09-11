@@ -1,0 +1,163 @@
+name: Delegated portal UI integration
+
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: [.github/workflows/delegated-portal-ui.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch delegated navigation and auth
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          version = 'delegated-portal-20260911-v1'
+
+          # sidebar: delegated admins see exactly Dashboard / Clients / Usage
+          p = Path('webpanel/frontend/js/sidebar.js')
+          text = p.read_text(encoding='utf-8')
+          start_marker = "    if (role === 'delegated_admin') {"
+          start = text.index(start_marker)
+          end = text.index("\n\n    return `", start)
+          block = '''    if (role === 'delegated_admin') {
+        return `
+            <button class="sidebar-toggle" onclick="toggleSidebar()">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <div class="sidebar-overlay" onclick="closeSidebar()"></div>
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <div class="sidebar-logo">
+                        <div class="sidebar-logo-icon"><img src="logo/logo.ico" alt="IranGate Logo" class="w-10 h-10 rounded-lg"></div>
+                        <span class="sidebar-logo-text">IranGate</span>
+                    </div>
+                    <div class="sidebar-user">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                            <span class="font-medium">${username}</span>
+                        </div>
+                        <div class="mt-1 text-xs opacity-70">Delegated Admin</div>
+                    </div>
+                </div>
+                <nav class="sidebar-menu">
+                    <div class="menu-section">
+                        <div class="menu-section-title">My Panel</div>
+                        <a href="dealer-dashboard.html" class="menu-item ${activePage === 'delegated-dashboard' ? 'active' : ''}" title="Dashboard">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                            <span>Dashboard</span>
+                        </a>
+                        <a href="clients.html" class="menu-item ${activePage === 'clients' ? 'active' : ''}" title="Clients">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                            <span>Clients</span>
+                        </a>
+                        <a href="usage.html" class="menu-item ${activePage === 'usage' ? 'active' : ''}" title="Usage">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3v18m4-14v14m4-9v9M7 9v12M3 14v7"/></svg>
+                            <span>Usage</span>
+                        </a>
+                    </div>
+                </nav>
+                <div class="sidebar-footer">
+                    <button onclick="logout()" class="logout-btn">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                        <span>Logout</span>
+                    </button>
+                </div>
+            </aside>`;
+    }'''
+          text = text[:start] + block + text[end:]
+          p.write_text(text, encoding='utf-8')
+
+          # auth: delegated admins may only open their three portal pages
+          p = Path('webpanel/frontend/js/api.js')
+          text = p.read_text(encoding='utf-8')
+          old = '''    const role = localStorage.getItem('role') || 'root';
+    const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
+    if (role === 'delegated_admin' && currentPage !== 'clients.html') {
+        window.location.replace('clients.html');
+        return false;
+    }
+'''
+          new = '''    const role = localStorage.getItem('role') || 'root';
+    const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
+    if (role === 'delegated_admin') {
+        const allowedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
+        if (!allowedPages.has(currentPage)) {
+            window.location.replace('dealer-dashboard.html');
+            return false;
+        }
+    }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'api.js delegated auth block count={text.count(old)}')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # login: delegated admins land on their dashboard, not directly on clients
+          p = Path('webpanel/frontend/index.html')
+          text = p.read_text(encoding='utf-8')
+          count = text.count("data.data.role === 'delegated_admin' ? 'clients.html' : 'dashboard.html'")
+          if count != 1:
+              raise SystemExit(f'index login redirect count={count}')
+          text = text.replace("data.data.role === 'delegated_admin' ? 'clients.html' : 'dashboard.html'", "data.data.role === 'delegated_admin' ? 'dealer-dashboard.html' : 'dashboard.html'", 1)
+          count = text.count("localStorage.getItem('role') === 'delegated_admin' ? 'clients.html' : 'dashboard.html'")
+          if count != 1:
+              raise SystemExit(f'index existing-session redirect count={count}')
+          text = text.replace("localStorage.getItem('role') === 'delegated_admin' ? 'clients.html' : 'dashboard.html'", "localStorage.getItem('role') === 'delegated_admin' ? 'dealer-dashboard.html' : 'dashboard.html'", 1)
+          p.write_text(text, encoding='utf-8')
+
+          # cache-bust shared assets on every top-level page so old delegated menus cannot reappear
+          for p in Path('webpanel/frontend').glob('*.html'):
+              text = p.read_text(encoding='utf-8')
+              text = re.sub(r'js/sidebar\.js(?:\?v=[^\"\']*)?', f'js/sidebar.js?v={version}', text)
+              text = re.sub(r'js/api\.js(?:\?v=[^\"\']*)?', f'js/api.js?v={version}', text)
+              p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate delegated portal
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'dealer-dashboard.html' webpanel/frontend/js/sidebar.js
+          grep -q 'usage.html' webpanel/frontend/js/sidebar.js
+          grep -q "allowedPages = new Set(\['dealer-dashboard.html', 'clients.html', 'usage.html'\])" webpanel/frontend/js/api.js
+          grep -q "delegated_admin' ? 'dealer-dashboard.html'" webpanel/frontend/index.html
+          grep -q 'Traffic Pool' webpanel/frontend/usage.html
+          grep -q 'Active Users' webpanel/frontend/dealer-dashboard.html
+          grep -q 'Online Now' webpanel/frontend/dealer-dashboard.html
+          grep -q 'days_remaining' webpanel/frontend/dealer-dashboard.html
+          grep -q 'traffic_remaining_bytes' webpanel/frontend/usage.html
+          grep -q 'new Chart' webpanel/frontend/usage.html
+          node --check webpanel/frontend/js/sidebar.js
+          node --check webpanel/frontend/js/api.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for name in ('dealer-dashboard.html','usage.html'):
+              text=Path('webpanel/frontend',name).read_text(encoding='utf-8')
+              scripts=re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',text,re.S|re.I)
+              Path('/tmp/'+name+'.js').write_text('\n'.join(s for s in scripts if s.strip()),encoding='utf-8')
+          PY
+          node --check /tmp/dealer-dashboard.html.js
+          node --check /tmp/usage.html.js
+          git diff --check
+
+      - name: Commit delegated portal integration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add webpanel/frontend
+          git commit -m 'feat(ui): add delegated dashboard clients and usage portal'
+          git push origin HEAD:l2tp-dev
