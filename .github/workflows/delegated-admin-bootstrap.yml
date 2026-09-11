@@ -20,6 +20,9 @@ jobs:
           ref: l2tp-dev
           fetch-depth: 0
 
+      - name: Repair integration matcher
+        run: python3 .github/scripts/fix_delegated_integration_match.py
+
       - name: Apply integration patch
         run: python3 .github/scripts/integrate_delegated_admin.py
 
@@ -45,7 +48,8 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add webpanel/backend/api.go \
+          git add .github/scripts/integrate_delegated_admin.py \
+                  webpanel/backend/api.go \
                   webpanel/backend/delegated_admins.go \
                   webpanel/frontend/index.html \
                   webpanel/frontend/js/api.js \
