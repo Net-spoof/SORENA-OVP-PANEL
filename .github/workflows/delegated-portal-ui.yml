@@ -1,11 +1,11 @@
-name: Delegated portal UI integration
+name: Delegated Portal Integration
 
 on:
   push:
     branches:
       - l2tp-dev
     paths:
-      - .github/workflows/delegated-portal-ui.yml
+      - ".github/workflows/delegated-portal-ui.yml"
 
 permissions:
   contents: write
@@ -20,111 +20,16 @@ jobs:
           ref: l2tp-dev
           fetch-depth: 0
 
-      - name: Integrate delegated portal
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+      - name: Patch and validate
+        run: python3 .github/scripts/delegated_portal_patch.py
 
-          version = "delegated-portal-20260911-v1"
-
-          # Allow delegated admins to use only their dedicated Dashboard, Clients and Usage pages.
-          api = Path("webpanel/frontend/js/api.js")
-          text = api.read_text(encoding="utf-8")
-          old = """    const role = localStorage.getItem('role') || 'root';
-    const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
-    if (role === 'delegated_admin' && currentPage !== 'clients.html') {
-        window.location.replace('clients.html');
-        return false;
-    }
-"""
-          new = """    const role = localStorage.getItem('role') || 'root';
-    const currentPage = (window.location.pathname.split('/').pop() || '').split('?')[0];
-    if (role === 'delegated_admin') {
-        const allowedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
-        if (!allowedPages.has(currentPage)) {
-            window.location.replace('dealer-dashboard.html');
-            return false;
-        }
-    }
-"""
-          if text.count(old) != 1:
-              raise SystemExit(f"api auth block count={text.count(old)}")
-          api.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          # Delegated login/session lands on the delegated dashboard.
-          index = Path("webpanel/frontend/index.html")
-          text = index.read_text(encoding="utf-8")
-          a = "data.data.role === 'delegated_admin' ? 'clients.html' : 'dashboard.html'"
-          b = "data.data.role === 'delegated_admin' ? 'dealer-dashboard.html' : 'dashboard.html'"
-          if text.count(a) != 1:
-              raise SystemExit(f"login redirect count={text.count(a)}")
-          text = text.replace(a, b, 1)
-          a = "localStorage.getItem('role') === 'delegated_admin' ? 'clients.html' : 'dashboard.html'"
-          b = "localStorage.getItem('role') === 'delegated_admin' ? 'dealer-dashboard.html' : 'dashboard.html'"
-          if text.count(a) != 1:
-              raise SystemExit(f"session redirect count={text.count(a)}")
-          index.write_text(text.replace(a, b, 1), encoding="utf-8")
-
-          # Load the delegated-only sidebar override and fresh api.js on the three delegated pages.
-          for name in ("dealer-dashboard.html", "clients.html", "usage.html"):
-              page = Path("webpanel/frontend") / name
-              text = page.read_text(encoding="utf-8")
-
-              if "js/delegated-portal.js" not in text:
-                  match = re.search(r'<script src="js/sidebar\.js[^\"]*"></script>', text)
-                  if not match:
-                      raise SystemExit(f"sidebar script not found in {name}")
-                  insertion = match.group(0) + f'\n    <script src="js/delegated-portal.js?v={version}"></script>'
-                  text = text[:match.start()] + insertion + text[match.end():]
-
-              text = re.sub(
-                  r'<script src="js/api\.js[^\"]*"></script>',
-                  f'<script src="js/api.js?v={version}"></script>',
-                  text,
-              )
-              page.write_text(text, encoding="utf-8")
-          PY
-
-      - name: Validate
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -Fq "allowedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html'])" webpanel/frontend/js/api.js
-          grep -Fq "delegated_admin' ? 'dealer-dashboard.html'" webpanel/frontend/index.html
-          grep -Fq 'js/delegated-portal.js?v=delegated-portal-20260911-v1' webpanel/frontend/clients.html
-          grep -Fq 'js/delegated-portal.js?v=delegated-portal-20260911-v1' webpanel/frontend/dealer-dashboard.html
-          grep -Fq 'js/delegated-portal.js?v=delegated-portal-20260911-v1' webpanel/frontend/usage.html
-          grep -Fq 'Dashboard' webpanel/frontend/js/delegated-portal.js
-          grep -Fq 'Clients' webpanel/frontend/js/delegated-portal.js
-          grep -Fq 'Usage' webpanel/frontend/js/delegated-portal.js
-          grep -Fq 'Active Users' webpanel/frontend/dealer-dashboard.html
-          grep -Fq 'Online Now' webpanel/frontend/dealer-dashboard.html
-          grep -Fq 'traffic_remaining_bytes' webpanel/frontend/dealer-dashboard.html
-          grep -Fq 'days_remaining' webpanel/frontend/dealer-dashboard.html
-          grep -Fq 'new Chart' webpanel/frontend/usage.html
-          node --check webpanel/frontend/js/api.js
-          node --check webpanel/frontend/js/delegated-portal.js
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          for name in ("dealer-dashboard.html", "usage.html"):
-              text = (Path("webpanel/frontend") / name).read_text(encoding="utf-8")
-              scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', text, re.S | re.I)
-              Path("/tmp/" + name + ".js").write_text("\n".join(x for x in scripts if x.strip()), encoding="utf-8")
-          PY
-          node --check /tmp/dealer-dashboard.html.js
-          node --check /tmp/usage.html.js
-          git diff --check
+      - name: Check diff
+        run: git diff --check
 
       - name: Commit
-        shell: bash
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add webpanel/frontend/js/api.js webpanel/frontend/index.html webpanel/frontend/clients.html webpanel/frontend/dealer-dashboard.html webpanel/frontend/usage.html
-          git commit -m 'feat(ui): integrate delegated dashboard clients and usage portal'
+          git commit -m "feat(ui): integrate delegated dashboard clients and usage portal"
           git push origin HEAD:l2tp-dev
