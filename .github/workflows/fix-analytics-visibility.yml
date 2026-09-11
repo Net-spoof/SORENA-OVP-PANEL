@@ -1,0 +1,107 @@
+name: Fix Analytics Visibility
+on:
+  push:
+    branches: [l2tp-dev]
+    paths: ['.github/workflows/fix-analytics-visibility.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+      - name: Fix analytics stacking and contrast
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          html = Path('webpanel/frontend/analytics.html')
+          css = Path('webpanel/frontend/css/analytics-ui.css')
+
+          h = html.read_text()
+          h = h.replace('analytics-ui-20260912-v1', 'analytics-ui-20260912-v2')
+          html.write_text(h)
+
+          c = css.read_text()
+          marker = '/* ANALYTICS VISIBILITY LAYER FIX v2 */'
+          if marker not in c:
+              c += r'''
+
+/* ANALYTICS VISIBILITY LAYER FIX v2
+ * Keep animated particles strictly behind the analytics workspace.
+ * The custom analytics shell is not one of the legacy max-w-* containers,
+ * so without its own stacking context the fixed particle canvas can paint
+ * above the page and make the whole workspace look washed out/dim.
+ */
+body.page-analytics {
+  position: relative;
+  isolation: isolate;
+}
+
+body.page-analytics #particleCanvas {
+  z-index: 0 !important;
+  opacity: .22 !important;
+  mix-blend-mode: normal !important;
+}
+
+body.page-analytics .main-content {
+  position: relative !important;
+  z-index: 2 !important;
+  isolation: isolate;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+body.page-analytics .analytics-shell {
+  position: relative !important;
+  z-index: 3 !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+body.page-analytics .analytics-header,
+body.page-analytics .analytics-metrics,
+body.page-analytics .analytics-grid-2,
+body.page-analytics .analytics-card,
+body.page-analytics .analytics-table-card,
+body.page-analytics .analytics-summary-grid {
+  position: relative;
+  z-index: 1;
+}
+
+body.page-analytics .analytics-title h1,
+body.page-analytics .analytics-card h2,
+body.page-analytics .analytics-card h3,
+body.page-analytics .metric-value,
+body.page-analytics .analytics-table .client-name {
+  opacity: 1 !important;
+}
+
+body.page-analytics .analytics-title p,
+body.page-analytics .metric-note,
+body.page-analytics .analytics-card-head p,
+body.page-analytics .analytics-table td {
+  opacity: .92 !important;
+}
+'''
+          css.write_text(c)
+          PY
+
+          grep -Fq 'analytics-ui-20260912-v2' webpanel/frontend/analytics.html
+          grep -Fq 'ANALYTICS VISIBILITY LAYER FIX v2' webpanel/frontend/css/analytics-ui.css
+          grep -Fq 'z-index: 3 !important' webpanel/frontend/css/analytics-ui.css
+          git diff --check
+      - name: Commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add webpanel/frontend/analytics.html webpanel/frontend/css/analytics-ui.css
+          git commit -m 'fix(ui): restore analytics contrast and stacking'
+          git push origin l2tp-dev
