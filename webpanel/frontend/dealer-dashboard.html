@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - IranGate</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="css/dark-theme.css">
+    <link rel="stylesheet" href="css/loading.css">
+    <link rel="stylesheet" href="css/mobile.css">
+    <link rel="stylesheet" href="css/sidebar.css">
+    <link rel="stylesheet" href="css/themes.css">
+    <link rel="stylesheet" href="css/theme-overrides.css">
+    <script src="js/particles.js"></script>
+    <script src="js/sidebar.js?v=delegated-portal-20260911-v1"></script>
+    <script src="js/theme-loader.js"></script>
+    <style>
+        .portal-card { box-shadow: 0 0 0 1px rgba(148,163,184,.12), 0 12px 30px rgba(0,0,0,.12); }
+        .metric-card { transition: transform .18s ease, box-shadow .18s ease; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .progress-track { background: rgba(148,163,184,.16); }
+    </style>
+</head>
+<body>
+    <div id="sidebar-container"></div>
+
+    <main class="main-content">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-7">
+                <div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <h1 class="text-3xl font-bold text-gray-900">Dashboard</h1>
+                        <span id="panelStatus" class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-gray-600">Loading</span>
+                    </div>
+                    <p class="text-gray-500 mt-2">Welcome, <span id="username" class="font-semibold text-gray-700"></span>. This dashboard shows only your own panel and users.</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button onclick="loadDashboard(true)" class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Refresh</button>
+                    <button onclick="window.location.href='clients.html'" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-700">Manage Clients</button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+                <div class="metric-card portal-card rounded-2xl bg-white p-5">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Total Users</p>
+                    <p id="totalUsers" class="mt-2 text-3xl font-bold text-gray-900">—</p>
+                    <p class="mt-2 text-xs text-gray-500">All users created by your account.</p>
+                </div>
+                <div class="metric-card portal-card rounded-2xl bg-white p-5">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Active Users</p>
+                    <p id="activeUsers" class="mt-2 text-3xl font-bold text-emerald-600">—</p>
+                    <p class="mt-2 text-xs text-gray-500">Users with remaining traffic and valid time.</p>
+                </div>
+                <div class="metric-card portal-card rounded-2xl bg-white p-5">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Online Now</p>
+                    <p id="onlineUsers" class="mt-2 text-3xl font-bold text-violet-600">—</p>
+                    <p class="mt-2 text-xs text-gray-500">Your users connected right now.</p>
+                </div>
+                <div class="metric-card portal-card rounded-2xl bg-white p-5">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">Needs Attention</p>
+                    <p id="attentionUsers" class="mt-2 text-3xl font-bold text-amber-600">—</p>
+                    <p class="mt-2 text-xs text-gray-500">Expired or depleted users.</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+                <section class="xl:col-span-2 portal-card rounded-2xl bg-white overflow-hidden">
+                    <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                        <div>
+                            <h2 class="font-semibold text-gray-900">Panel Traffic</h2>
+                            <p class="text-xs text-gray-500 mt-1">Your delegated traffic pool.</p>
+                        </div>
+                        <a href="usage.html" class="text-sm font-semibold text-purple-600 hover:text-purple-700">Usage details →</a>
+                    </div>
+                    <div class="p-5">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+                            <div class="rounded-xl bg-gray-50 p-4">
+                                <p class="text-xs uppercase tracking-wide text-gray-400">Total</p>
+                                <p id="trafficTotal" class="mt-2 text-xl font-bold text-gray-900">—</p>
+                            </div>
+                            <div class="rounded-xl bg-gray-50 p-4">
+                                <p class="text-xs uppercase tracking-wide text-gray-400">Used</p>
+                                <p id="trafficUsed" class="mt-2 text-xl font-bold text-amber-600">—</p>
+                            </div>
+                            <div class="rounded-xl bg-gray-50 p-4">
+                                <p class="text-xs uppercase tracking-wide text-gray-400">Remaining</p>
+                                <p id="trafficRemaining" class="mt-2 text-xl font-bold text-emerald-600">—</p>
+                            </div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-500 mb-2"><span>Traffic usage</span><span id="trafficPercent">—</span></div>
+                        <div class="progress-track h-3 rounded-full overflow-hidden"><div id="trafficBar" class="h-full rounded-full bg-emerald-500 transition-all duration-500" style="width:0%"></div></div>
+                    </div>
+                </section>
+
+                <section class="portal-card rounded-2xl bg-white overflow-hidden">
+                    <div class="border-b border-gray-100 px-5 py-4">
+                        <h2 class="font-semibold text-gray-900">Panel Validity</h2>
+                        <p class="text-xs text-gray-500 mt-1">Time remaining on your reseller account.</p>
+                    </div>
+                    <div class="p-5">
+                        <p id="daysRemaining" class="text-4xl font-bold text-gray-900">—</p>
+                        <p class="text-xs text-gray-500 mt-1">days remaining</p>
+                        <div class="mt-5 rounded-xl bg-gray-50 p-4">
+                            <p class="text-xs uppercase tracking-wide text-gray-400">Expires at</p>
+                            <p id="expiresAt" class="mt-2 text-sm font-semibold text-gray-700">—</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <section class="portal-card rounded-2xl bg-white overflow-hidden">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-100 px-5 py-4">
+                    <div>
+                        <h2 class="font-semibold text-gray-900">Recent Users</h2>
+                        <p class="text-xs text-gray-500 mt-1">Status is based on both traffic and expiry.</p>
+                    </div>
+                    <a href="clients.html" class="text-sm font-semibold text-purple-600 hover:text-purple-700">View all users →</a>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-400">
+                            <tr><th class="px-5 py-3 text-left">User</th><th class="px-5 py-3 text-left">Quota</th><th class="px-5 py-3 text-left">Connection</th><th class="px-5 py-3 text-left">Traffic</th><th class="px-5 py-3 text-left">Expires</th></tr>
+                        </thead>
+                        <tbody id="recentUsers" class="divide-y divide-gray-100"><tr><td colspan="5" class="px-5 py-10 text-center text-gray-400">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="js/api.js?v=delegated-portal-20260911-v1"></script>
+    <script>
+        if (!checkAuth()) throw new Error('Authentication required');
+        if ((localStorage.getItem('role') || 'root') !== 'delegated_admin') window.location.replace('dashboard.html');
+        document.getElementById('sidebar-container').innerHTML = createSidebar('delegated-dashboard');
+        document.getElementById('username').textContent = localStorage.getItem('username') || 'Admin';
+
+        const n = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+        const esc = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+
+        function quotaBytes(bytes) {
+            const value = Math.max(0, n(bytes));
+            if (!value) return '0 Bytes';
+            const units = [['TB',1e12],['GB',1e9],['MB',1e6],['KB',1e3],['Bytes',1]];
+            const [unit,size] = units.find(([,size]) => value >= size) || units[units.length - 1];
+            return `${Number((value / size).toFixed(2))} ${unit}`;
+        }
+        function usedBytes(c) {
+            const explicit = n(c.traffic_used_bytes); if (explicit > 0) return explicit;
+            const total = n(c.total_bytes); if (total > 0) return total;
+            return n(c.bytes_received) + n(c.bytes_sent);
+        }
+        function limitBytes(c) { return n(c.traffic_limit_bytes ?? c.data_limit ?? c.limit_bytes ?? c.traffic_limit); }
+        function expiryMs(c) { const raw = c.expires_at || c.expire_at || c.expiry_date || c.expiration_date; const v = raw ? Date.parse(raw) : NaN; return Number.isFinite(v) ? v : NaN; }
+        function active(c) {
+            const limit = limitBytes(c), used = usedBytes(c), exp = expiryMs(c);
+            const status = String(c.persisted_status || c.status || '').toLowerCase();
+            const bad = status.includes('expired') || status.includes('traffic_limit') || status.includes('limit_exceeded') || status.includes('admin_');
+            return limit > 0 && used < limit && Number.isFinite(exp) && exp > Date.now() && !Boolean(c.admin_suspended) && !bad;
+        }
+        function online(c) {
+            const t = v => v === true || v === 1 || v === '1' || ['true','online','connected'].includes(String(v || '').toLowerCase());
+            return t(c.connected) || t(c.online) || t(c.is_online) || t(c.connection_status) || n(c.active_connections) > 0 || n(c.connection_count) > 0;
+        }
+        function dateText(value) { const d = new Date(value); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(); }
+        function quotaBadge(c) { return active(c) ? '<span class="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">Active</span>' : '<span class="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">Inactive</span>'; }
+        function connectionBadge(c) { return online(c) ? '<span class="font-semibold text-violet-700">Online</span>' : '<span class="text-gray-400">Offline</span>'; }
+
+        function renderRecent(clients) {
+            const rows = [...clients].sort((a,b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0)).slice(0,6);
+            document.getElementById('recentUsers').innerHTML = rows.length ? rows.map(c => {
+                const used = usedBytes(c), limit = limitBytes(c);
+                return `<tr class="hover:bg-gray-50/80"><td class="px-5 py-4 font-semibold text-gray-900">${esc(c.name || '—')}</td><td class="px-5 py-4">${quotaBadge(c)}</td><td class="px-5 py-4">${connectionBadge(c)}</td><td class="px-5 py-4 text-gray-600">${quotaBytes(used)} / ${limit > 0 ? quotaBytes(limit) : '—'}</td><td class="px-5 py-4 text-gray-600">${dateText(c.expires_at)}</td></tr>`;
+            }).join('') : '<tr><td colspan="5" class="px-5 py-10 text-center text-gray-400">No users yet.</td></tr>';
+        }
+
+        async function loadDashboard(force = false) {
+            try {
+                if (force && api.invalidateCache) api.invalidateCache('/clients');
+                const [me, clientsResult] = await Promise.all([api.request('/me'), api.getClients()]);
+                if (me?.success !== true) throw new Error(me?.message || 'Failed to load panel quota');
+                if (clientsResult?.success !== true) throw new Error(clientsResult?.message || 'Failed to load users');
+                const quota = me.data?.quota || {};
+                const clients = Array.isArray(clientsResult.data) ? clientsResult.data : [];
+                const activeCount = clients.filter(active).length;
+                const onlineCount = clients.filter(online).length;
+
+                document.getElementById('totalUsers').textContent = clients.length;
+                document.getElementById('activeUsers').textContent = activeCount;
+                document.getElementById('onlineUsers').textContent = onlineCount;
+                document.getElementById('attentionUsers').textContent = Math.max(0, clients.length - activeCount);
+
+                const total = n(quota.traffic_limit_bytes), used = n(quota.traffic_used_bytes), remaining = n(quota.traffic_remaining_bytes);
+                const pct = total > 0 ? Math.min(100, Math.max(0, used * 100 / total)) : 0;
+                document.getElementById('trafficTotal').textContent = quotaBytes(total);
+                document.getElementById('trafficUsed').textContent = quotaBytes(used);
+                document.getElementById('trafficRemaining').textContent = quotaBytes(remaining);
+                document.getElementById('trafficPercent').textContent = `${pct.toFixed(1)}% used`;
+                document.getElementById('trafficBar').style.width = `${pct}%`;
+                document.getElementById('trafficBar').className = `h-full rounded-full transition-all duration-500 ${pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500'}`;
+
+                document.getElementById('daysRemaining').textContent = Math.max(0, n(quota.days_remaining));
+                document.getElementById('expiresAt').textContent = dateText(quota.expires_at);
+                const status = String(quota.status || 'active').toLowerCase();
+                const good = status === 'active' && quota.active !== false && !quota.suspended;
+                const badge = document.getElementById('panelStatus');
+                badge.className = good ? 'inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700' : 'inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700';
+                badge.textContent = good ? 'Panel active' : (status.replaceAll('_',' ') || 'Panel suspended');
+                renderRecent(clients);
+            } catch (error) {
+                console.error(error);
+                showToast(error.message || 'Failed to load dashboard', 'error');
+            }
+        }
+
+        loadDashboard(true);
+        setInterval(() => loadDashboard(false), 30000);
+    </script>
+</body>
+</html>
