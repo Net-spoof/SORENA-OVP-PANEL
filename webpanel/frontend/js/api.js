@@ -413,12 +413,23 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
+// Traffic quotas are decimal SI units across NET SPOOF:
+// 1 KB = 1,000 bytes, 1 MB = 1,000,000 bytes, 1 GB = 1,000,000,000 bytes.
 function formatBytes(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    const value = Number(bytes || 0);
+    if (!Number.isFinite(value) || value <= 0) return '0 Bytes';
+
+    const units = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    let size = value;
+    let unitIndex = 0;
+
+    while (size >= 1000 && unitIndex < units.length - 1) {
+        size /= 1000;
+        unitIndex++;
+    }
+
+    if (unitIndex === 0) return `${Math.round(size)} ${units[unitIndex]}`;
+    return `${Math.round(size * 100) / 100} ${units[unitIndex]}`;
 }
 
 function formatDate(dateString) {
