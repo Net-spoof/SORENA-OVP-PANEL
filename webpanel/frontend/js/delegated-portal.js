@@ -3,11 +3,11 @@
 (function () {
     'use strict';
 
+    const isClientsPage = /(?:^|\/)clients\.html$/.test(window.location.pathname);
+
     // The master/local OpenVPN location is mandatory for every client. Keep it
     // selected in the DOM for create/edit flows, but do not expose a redundant
     // checkbox to the operator. Remote locations remain user-selectable.
-    const isClientsPage = /(?:^|\/)clients\.html$/.test(window.location.pathname);
-
     function enforceImplicitMasterLocation(root = document) {
         const selectors = [
             '#clientNodesBox input.client-node-checkbox[value="local"]',
@@ -31,6 +31,7 @@
                 const label = input.closest('label');
                 if (label) {
                     label.hidden = true;
+                    label.style.display = 'none';
                     label.setAttribute('aria-hidden', 'true');
                     label.dataset.implicitMasterLocation = 'true';
                 }
@@ -38,36 +39,135 @@
         });
     }
 
-    function initImplicitMasterLocation() {
+    // The panel currently has a single/default OpenVPN server configuration for
+    // client creation. Select it automatically and remove the redundant selector
+    // from the UI. The legacy inline submit handler can continue reading
+    // #clientInbound, so backend behaviour stays unchanged.
+    function chooseImplicitServerConfiguration(select) {
+        if (!select) return false;
+
+        const options = Array.from(select.options || []).filter(
+            option => option && option.value && !option.disabled
+        );
+
+        if (!options.length) return false;
+
+        let selected = options.find((option) => {
+            try {
+                const config = option.dataset && option.dataset.config
+                    ? JSON.parse(option.dataset.config)
+                    : null;
+                return String(config && config.status || '').toLowerCase() === 'active';
+            } catch (_) {
+                return false;
+            }
+        });
+
+        if (!selected) {
+            selected = options[0];
+        }
+
+        if (select.value !== selected.value) {
+            select.value = selected.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        return Boolean(select.value);
+    }
+
+    function enforceImplicitServerConfiguration(root = document) {
+        let select = null;
+
+        if (root && root.matches && root.matches('#clientInbound')) {
+            select = root;
+        } else if (root && root.querySelector) {
+            select = root.querySelector('#clientInbound');
+        }
+
+        if (!select) {
+            select = document.getElementById('clientInbound');
+        }
+
+        if (!select) return;
+
+        chooseImplicitServerConfiguration(select);
+
+        const wrapper = select.closest('.mb-6') || select.parentElement;
+        if (wrapper) {
+            wrapper.hidden = true;
+            wrapper.style.display = 'none';
+            wrapper.setAttribute('aria-hidden', 'true');
+            wrapper.dataset.implicitServerConfiguration = 'true';
+        }
+    }
+
+    function initImplicitClientDefaults() {
         enforceImplicitMasterLocation(document);
+        enforceImplicitServerConfiguration(document);
 
         if (!document.body) return;
 
-        const masterLocationObserver = new MutationObserver((mutations) => {
+        const clientDefaultsObserver = new MutationObserver((mutations) => {
+            let inboundChanged = false;
+            let clientNodesChanged = false;
+
             mutations.forEach((mutation) => {
+                if (
+                    mutation.target &&
+                    mutation.target.id === 'clientInbound'
+                ) {
+                    inboundChanged = true;
+                }
+
                 mutation.addedNodes.forEach((node) => {
-                    if (node && node.nodeType === 1) {
-                        enforceImplicitMasterLocation(node);
+                    if (!node || node.nodeType !== 1) return;
+
+                    if (
+                        node.matches?.('#clientInbound, #clientInbound option') ||
+                        node.querySelector?.('#clientInbound')
+                    ) {
+                        inboundChanged = true;
+                    }
+
+                    if (
+                        node.matches?.('.client-node-checkbox, .edit-client-node-checkbox') ||
+                        node.querySelector?.('.client-node-checkbox, .edit-client-node-checkbox')
+                    ) {
+                        clientNodesChanged = true;
                     }
                 });
             });
+
+            if (inboundChanged) {
+                enforceImplicitServerConfiguration(document);
+            }
+
+            if (clientNodesChanged) {
+                enforceImplicitMasterLocation(document);
+            }
         });
 
-        masterLocationObserver.observe(document.body, {
+        clientDefaultsObserver.observe(document.body, {
             childList: true,
             subtree: true
         });
 
+        // One extra pass after inline page scripts finish wiring the form.
+        setTimeout(() => {
+            enforceImplicitMasterLocation(document);
+            enforceImplicitServerConfiguration(document);
+        }, 0);
+
         window.addEventListener('beforeunload', () => {
-            masterLocationObserver.disconnect();
+            clientDefaultsObserver.disconnect();
         }, { once: true });
     }
 
     if (isClientsPage) {
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initImplicitMasterLocation, { once: true });
+            document.addEventListener('DOMContentLoaded', initImplicitClientDefaults, { once: true });
         } else {
-            initImplicitMasterLocation();
+            initImplicitClientDefaults();
         }
     }
 
@@ -181,7 +281,7 @@
                 <div class="sidebar-footer">
                     <button onclick="logout()" class="logout-btn">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 013-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
                         </svg>
                         <span>Logout</span>
                     </button>
