@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: node-client-download-fix
+  cancel-in-progress: true
+
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -25,7 +29,19 @@ jobs:
           from pathlib import Path
 
           path = Path('webpanel/backend/api.go')
-          lines = path.read_text().splitlines(keepends=True)
+          text = path.read_text()
+
+          fixed_markers = (
+              'payload, err := json.Marshal(map[string]string{"name": clientName})',
+              'func ensureClientOnNode(node NodeConfig, clientName string) error {',
+              '"Node client create failed: "+err.Error()',
+          )
+
+          if all(marker in text for marker in fixed_markers):
+              print('Source is already patched; no source edit needed.')
+              raise SystemExit(0)
+
+          lines = text.splitlines(keepends=True)
 
           create_matches = [
               i for i, line in enumerate(lines)
@@ -105,15 +121,72 @@ jobs:
         working-directory: webpanel/backend
         run: go build ./...
 
-      - name: Commit fix
+      - name: Commit source fix through GitHub API
+        if: ${{ success() }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if git diff --quiet -- webpanel/backend/api.go; then
-            echo 'No source change to commit.'
+            echo 'Source already fixed on branch.'
             exit 0
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add webpanel/backend/api.go
-          git commit -m 'fix: create node client before subscription download'
-          git push origin HEAD:l2tp-dev
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GITHUB_TOKEN']
+          branch = 'l2tp-dev'
+          repo_path = 'webpanel/backend/api.go'
+          local_path = Path(repo_path)
+          api = f'https://api.github.com/repos/{repo}/contents/{repo_path}'
+
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'irangate-node-download-fix',
+          }
+
+          def get_remote():
+              url = api + '?' + urllib.parse.urlencode({'ref': branch})
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req) as resp:
+                  return json.load(resp)
+
+          remote = get_remote()
+          content = base64.b64encode(local_path.read_bytes()).decode('ascii')
+          payload = json.dumps({
+              'message': 'fix: create node client before subscription download',
+              'content': content,
+              'sha': remote['sha'],
+              'branch': branch,
+          }).encode('utf-8')
+
+          req = urllib.request.Request(api, data=payload, headers=headers, method='PUT')
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  result = json.load(resp)
+              print('Committed source fix:', result['commit']['sha'])
+          except urllib.error.HTTPError as exc:
+              if exc.code != 409:
+                  raise
+              latest = get_remote()
+              remote_text = base64.b64decode(latest['content']).decode('utf-8')
+              markers = (
+                  'payload, err := json.Marshal(map[string]string{"name": clientName})',
+                  'func ensureClientOnNode(node NodeConfig, clientName string) error {',
+                  '"Node client create failed: "+err.Error()',
+              )
+              if all(marker in remote_text for marker in markers):
+                  print('Concurrent writer already committed the same fix.')
+              else:
+                  raise
+          PY
