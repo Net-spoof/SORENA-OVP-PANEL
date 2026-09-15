@@ -18,6 +18,9 @@ jobs:
           ref: l2tp-dev
           fetch-depth: 0
 
+      - name: Install Python test dependency
+        run: python3 -m pip install --disable-pip-version-check psycopg2-binary
+
       - name: Apply source patch
         run: python3 .github/scripts/apply-accounting-v3-case-safe.py
 
