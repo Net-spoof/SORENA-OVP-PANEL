@@ -28,52 +28,48 @@ jobs:
           portal = Path('webpanel/frontend/js/delegated-portal.js')
           text = portal.read_text(encoding='utf-8')
 
-          old = '''            inputs.forEach((input) => {
-                input.checked = true;
-                input.disabled = true;
+          replacements = [
+              ("label.hidden = true;", "label.hidden = false;"),
+              ("label.style.display = 'none';", "label.style.removeProperty('display');"),
+              ("label.setAttribute('aria-hidden', 'true');", "label.removeAttribute('aria-hidden');"),
+              (
+                  "label.dataset.implicitMasterLocation = 'true';",
+                  "delete label.dataset.implicitMasterLocation;\n                    label.dataset.mandatoryMasterLocation = 'true';"
+              ),
+          ]
 
-                const label = input.closest('label');
-                if (label) {
-                    label.hidden = true;
-                    label.style.display = 'none';
-                    label.setAttribute('aria-hidden', 'true');
-                    label.dataset.implicitMasterLocation = 'true';
-                }
-            });'''
-
-          new = '''            inputs.forEach((input) => {
-                // Germany Master is mandatory for every client: keep it selected,
-                // visible to the operator, and non-removable.
-                input.checked = true;
-                input.disabled = true;
-                input.setAttribute('aria-checked', 'true');
-                input.style.opacity = '1';
-
-                const label = input.closest('label');
-                if (label) {
-                    label.hidden = false;
-                    label.style.removeProperty('display');
-                    label.removeAttribute('aria-hidden');
-                    delete label.dataset.implicitMasterLocation;
-                    label.dataset.mandatoryMasterLocation = 'true';
-                }
-            });'''
-
-          if new in text:
-              print('master visibility already patched')
-          else:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected one master visibility block, got {text.count(old)}')
+          for old, new in replacements:
+              if new in text:
+                  continue
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one occurrence of {old!r}, got {count}')
               text = text.replace(old, new, 1)
-              portal.write_text(text, encoding='utf-8')
+
+          needle = "input.checked = true;\n                input.disabled = true;"
+          replacement = (
+              "input.checked = true;\n"
+              "                input.disabled = true;\n"
+              "                input.setAttribute('aria-checked', 'true');\n"
+              "                input.style.opacity = '1';"
+          )
+          if "input.setAttribute('aria-checked', 'true');" not in text:
+              count = text.count(needle)
+              if count != 1:
+                  raise SystemExit(f'expected one master checkbox block, got {count}')
+              text = text.replace(needle, replacement, 1)
+
+          portal.write_text(text, encoding='utf-8')
 
           clients = Path('webpanel/frontend/clients.html')
           html = clients.read_text(encoding='utf-8')
           old_asset = 'js/delegated-portal.js?v=delegated-portal-20260915-v4'
           new_asset = 'js/delegated-portal.js?v=delegated-portal-20260915-v5'
+
           if new_asset not in html:
-              if html.count(old_asset) != 1:
-                  raise SystemExit(f'expected one old asset reference, got {html.count(old_asset)}')
+              count = html.count(old_asset)
+              if count != 1:
+                  raise SystemExit(f'expected one old asset reference, got {count}')
               html = html.replace(old_asset, new_asset, 1)
               clients.write_text(html, encoding='utf-8')
           PY
@@ -84,9 +80,9 @@ jobs:
           set -Eeuo pipefail
           grep -Fq "label.hidden = false;" webpanel/frontend/js/delegated-portal.js
           grep -Fq "label.style.removeProperty('display');" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "label.removeAttribute('aria-hidden');" webpanel/frontend/js/delegated-portal.js
           grep -Fq "label.dataset.mandatoryMasterLocation = 'true';" webpanel/frontend/js/delegated-portal.js
-          grep -Fq "input.checked = true;" webpanel/frontend/js/delegated-portal.js
-          grep -Fq "input.disabled = true;" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "input.setAttribute('aria-checked', 'true');" webpanel/frontend/js/delegated-portal.js
           grep -Fq 'js/delegated-portal.js?v=delegated-portal-20260915-v5' webpanel/frontend/clients.html
           git diff --check
 
