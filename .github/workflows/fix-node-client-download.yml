@@ -25,69 +25,80 @@ jobs:
           from pathlib import Path
 
           path = Path('webpanel/backend/api.go')
-          text = path.read_text()
+          lines = path.read_text().splitlines(keepends=True)
 
-          old_create = '''func createClientOnNode(node NodeConfig, clientName string) error {
-          \tbody := strings.NewReader(fmt.Sprintf(`{\\"name\\":%q}`, clientName))
-          '''
-          new_create = '''func createClientOnNode(node NodeConfig, clientName string) error {
-          \tpayload, err := json.Marshal(map[string]string{"name": clientName})
-          \tif err != nil {
-          \t\treturn fmt.Errorf("encode node create request: %w", err)
-          \t}
+          # 1) Build valid JSON instead of hand-escaped JSON.
+          create_matches = [
+              i for i, line in enumerate(lines)
+              if 'body := strings.NewReader(fmt.Sprintf(' in line and 'clientName' in line
+          ]
+          if len(create_matches) != 1:
+              raise SystemExit(f'create request body: expected 1 match, got {len(create_matches)}')
 
-          \tbody := strings.NewReader(string(payload))
-          '''
-
-          old_ensure = '''func ensureClientOnNode(node NodeConfig, clientName string) {
-          \t_ = createClientOnNode(node, clientName)
-          }
-          '''
-          new_ensure = '''func ensureClientOnNode(node NodeConfig, clientName string) error {
-          \treturn createClientOnNode(node, clientName)
-          }
-          '''
-
-          old_download = '''func downloadClientFromNode(
-          \tw http.ResponseWriter,
-          \tr *http.Request,
-          \tnode NodeConfig,
-          \tclientName string,
-          ) {
-          \tensureClientOnNode(node, clientName)
-          '''
-          new_download = '''func downloadClientFromNode(
-          \tw http.ResponseWriter,
-          \tr *http.Request,
-          \tnode NodeConfig,
-          \tclientName string,
-          ) {
-          \tif err := ensureClientOnNode(node, clientName); err != nil {
-          \t\thttp.Error(
-          \t\t\tw,
-          \t\t\t"Node client create failed: "+err.Error(),
-          \t\t\thttp.StatusBadGateway,
-          \t\t)
-          \t\treturn
-          \t}
-          '''
-
-          replacements = [
-              (old_create, new_create, 'createClientOnNode JSON body'),
-              (old_ensure, new_ensure, 'ensureClientOnNode error propagation'),
-              (old_download, new_download, 'downloadClientFromNode fail-fast'),
+          i = create_matches[0]
+          indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+          lines[i:i+1] = [
+              f'{indent}payload, err := json.Marshal(map[string]string{{"name": clientName}})\n',
+              f'{indent}if err != nil {{\n',
+              f'{indent}\treturn fmt.Errorf("encode node create request: %w", err)\n',
+              f'{indent}}}\n',
+              '\n',
+              f'{indent}body := strings.NewReader(string(payload))\n',
           ]
 
-          for old, new, label in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
-              text = text.replace(old, new, 1)
+          # 2) Propagate create errors instead of discarding them.
+          ensure_matches = [
+              i for i, line in enumerate(lines)
+              if line.strip() == 'func ensureClientOnNode(node NodeConfig, clientName string) {'
+          ]
+          if len(ensure_matches) != 1:
+              raise SystemExit(f'ensureClientOnNode: expected 1 match, got {len(ensure_matches)}')
 
-          path.write_text(text)
+          i = ensure_matches[0]
+          if i + 2 >= len(lines) or lines[i + 1].strip() != '_ = createClientOnNode(node, clientName)' or lines[i + 2].strip() != '}':
+              raise SystemExit('ensureClientOnNode body is not in the expected pre-fix form')
+          lines[i:i+3] = [
+              'func ensureClientOnNode(node NodeConfig, clientName string) error {\n',
+              '\treturn createClientOnNode(node, clientName)\n',
+              '}\n',
+          ]
+
+          # 3) Stop before download when node-side client creation fails.
+          download_matches = [
+              i for i, line in enumerate(lines)
+              if line.strip() == 'ensureClientOnNode(node, clientName)'
+          ]
+          if len(download_matches) != 1:
+              raise SystemExit(f'download ensure call: expected 1 match, got {len(download_matches)}')
+
+          i = download_matches[0]
+          indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+          lines[i:i+1] = [
+              f'{indent}if err := ensureClientOnNode(node, clientName); err != nil {{\n',
+              f'{indent}\thttp.Error(\n',
+              f'{indent}\t\tw,\n',
+              f'{indent}\t\t"Node client create failed: "+err.Error(),\n',
+              f'{indent}\t\thttp.StatusBadGateway,\n',
+              f'{indent}\t)\n',
+              f'{indent}\treturn\n',
+              f'{indent}}}\n',
+          ]
+
+          path.write_text(''.join(lines))
           PY
 
           gofmt -w webpanel/backend/api.go
+
+      - name: Verify patched source
+        shell: bash
+        run: |
+          grep -F 'payload, err := json.Marshal(map[string]string{"name": clientName})' webpanel/backend/api.go
+          grep -F 'func ensureClientOnNode(node NodeConfig, clientName string) error {' webpanel/backend/api.go
+          grep -F 'Node client create failed:' webpanel/backend/api.go
+          if grep -F 'fmt.Sprintf(`{\"name\":%q}`, clientName)' webpanel/backend/api.go; then
+            echo 'Old malformed JSON builder still exists' >&2
+            exit 1
+          fi
 
       - name: Test backend
         working-directory: webpanel/backend
