@@ -3,6 +3,74 @@
 (function () {
     'use strict';
 
+    // The master/local OpenVPN location is mandatory for every client. Keep it
+    // selected in the DOM for create/edit flows, but do not expose a redundant
+    // checkbox to the operator. Remote locations remain user-selectable.
+    const isClientsPage = /(?:^|\/)clients\.html$/.test(window.location.pathname);
+
+    function enforceImplicitMasterLocation(root = document) {
+        const selectors = [
+            '#clientNodesBox input.client-node-checkbox[value="local"]',
+            '#editClientNodesBox input.edit-client-node-checkbox[value="local"]'
+        ];
+
+        selectors.forEach((selector) => {
+            const inputs = [];
+
+            if (root && root.matches && root.matches(selector)) {
+                inputs.push(root);
+            }
+            if (root && root.querySelectorAll) {
+                inputs.push(...root.querySelectorAll(selector));
+            }
+
+            inputs.forEach((input) => {
+                input.checked = true;
+                input.disabled = true;
+
+                const label = input.closest('label');
+                if (label) {
+                    label.hidden = true;
+                    label.setAttribute('aria-hidden', 'true');
+                    label.dataset.implicitMasterLocation = 'true';
+                }
+            });
+        });
+    }
+
+    function initImplicitMasterLocation() {
+        enforceImplicitMasterLocation(document);
+
+        if (!document.body) return;
+
+        const masterLocationObserver = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node && node.nodeType === 1) {
+                        enforceImplicitMasterLocation(node);
+                    }
+                });
+            });
+        });
+
+        masterLocationObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        window.addEventListener('beforeunload', () => {
+            masterLocationObserver.disconnect();
+        }, { once: true });
+    }
+
+    if (isClientsPage) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initImplicitMasterLocation, { once: true });
+        } else {
+            initImplicitMasterLocation();
+        }
+    }
+
     if (typeof window.createSidebar !== 'function') {
         console.error('IranGate delegated portal: createSidebar is unavailable');
         return;
@@ -69,7 +137,7 @@
                     <div class="sidebar-user">
                         <div class="flex items-center gap-2">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
                             </svg>
                             <span class="font-medium">${username}</span>
                         </div>
