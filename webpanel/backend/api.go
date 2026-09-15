@@ -1841,7 +1841,12 @@ func clientHasNode(clientData map[string]interface{}, nodeID string) bool {
 }
 
 func createClientOnNode(node NodeConfig, clientName string) error {
-	body := strings.NewReader(fmt.Sprintf(`{"name":%q}`, clientName))
+	payload, err := json.Marshal(map[string]string{"name": clientName})
+	if err != nil {
+		return fmt.Errorf("encode node create request: %w", err)
+	}
+
+	body := strings.NewReader(string(payload))
 
 	req, err := http.NewRequest("POST", strings.TrimRight(node.AgentURL, "/")+"/clients", body)
 	if err != nil {
@@ -1875,8 +1880,8 @@ func createClientOnNode(node NodeConfig, clientName string) error {
 	return nil
 }
 
-func ensureClientOnNode(node NodeConfig, clientName string) {
-	_ = createClientOnNode(node, clientName)
+func ensureClientOnNode(node NodeConfig, clientName string) error {
+	return createClientOnNode(node, clientName)
 }
 
 func configuredOpenVPNDownloadHost() (string, error) {
@@ -2048,7 +2053,14 @@ func downloadClientFromNode(
 	node NodeConfig,
 	clientName string,
 ) {
-	ensureClientOnNode(node, clientName)
+	if err := ensureClientOnNode(node, clientName); err != nil {
+		http.Error(
+			w,
+			"Node client create failed: "+err.Error(),
+			http.StatusBadGateway,
+		)
+		return
+	}
 
 	req, err := http.NewRequest(
 		"GET",
