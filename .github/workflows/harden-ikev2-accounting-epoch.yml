@@ -1,0 +1,173 @@
+name: Harden IKEv2 accounting epoch identity
+
+on:
+  push:
+    paths:
+      - .github/workflows/harden-ikev2-accounting-epoch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout l2tp-dev
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Apply IKEv2 epoch hardening
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          usage = Path('deploy/master/scripts/irangate-pg-usage-tick.py')
+          text = usage.read_text(encoding='utf-8')
+
+          old = '''def session_of(x):
+              parts = []
+              for k in ("connected_since", "real_address", "virtual_ip", "virtual_address"):
+                  v = x.get(k)
+                  if v:
+                      parts.append(f"{k}={v}")
+              if not parts:
+                  parts.append("unknown_session")
+              return "|".join(parts)
+          '''
+          new = '''def session_of(x):
+              parts = []
+              for k in (
+                  "session_id",
+                  "ike_id",
+                  "connected_since",
+                  "real_address",
+                  "virtual_ip",
+                  "virtual_address",
+              ):
+                  v = x.get(k)
+                  if v:
+                      parts.append(f"{k}={v}")
+              if not parts:
+                  parts.append("unknown_session")
+              return "|".join(parts)
+          '''
+          if old not in text:
+              raise SystemExit('session_of source pattern not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    if source.lower() == "ikev2":
+                  # One IKE SA is a counter epoch. connected_since is stable even if a
+                  # MOBIKE/NAT address changes while the SA remains alive.
+                  seed = connected_since or session or "unknown_session"
+          '''
+          new = '''    if source.lower() == "ikev2":
+                  # One IKE SA is one counter epoch. Prefer the strongSwan IKE id,
+                  # which is stable for the life of the SA and separates simultaneous
+                  # SAs even when their connected_since timestamps fall in the same second.
+                  stable_session_id = str(
+                      x.get("session_id") or x.get("ike_id") or ""
+                  ).strip()
+                  seed = stable_session_id or connected_since or session or "unknown_session"
+          '''
+          if old not in text:
+              raise SystemExit('IKEv2 counter_epoch_key source pattern not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    assert key_a == counter_epoch_key("local", dict(local_a), "replay")
+              assert counter_epoch_key("turkey", local_a, "a") == "turkey"
+              print("accounting_identity_self_test = PASS")
+          '''
+          new = '''    assert key_a == counter_epoch_key("local", dict(local_a), "replay")
+              assert counter_epoch_key("turkey", local_a, "a") == "turkey"
+
+              ike_a = {
+                  "ike_id": "101",
+                  "session_id": "ike:101",
+                  "connected_since": "2026-09-15T10:00:00Z",
+              }
+              ike_b = {
+                  "ike_id": "102",
+                  "session_id": "ike:102",
+                  "connected_since": "2026-09-15T10:00:00Z",
+              }
+              ike_key_a = counter_epoch_key("ikev2", ike_a, "same-fallback")
+              ike_key_b = counter_epoch_key("ikev2", ike_b, "same-fallback")
+              assert ike_key_a != ike_key_b, (ike_key_a, ike_key_b)
+              assert ike_key_a == counter_epoch_key("ikev2", dict(ike_a), "replay")
+              print("accounting_identity_self_test = PASS")
+          '''
+          if old not in text:
+              raise SystemExit('self-test source pattern not found')
+          text = text.replace(old, new, 1)
+
+          old = '''            # local and node inputs are cumulative counters. IKEv2 counters are
+                  # per-SA, but each SA has its own accounting_source epoch key, so the
+                  # same monotonic/reset math is safe for every persisted stream.
+          '''
+          new = '''            # Every persisted accounting_source is one monotonic counter stream:
+                  # local OpenVPN sessions and IKEv2 SAs each have their own epoch key,
+                  # while each remote node/client keeps one cumulative source key.
+          '''
+          if old not in text:
+              raise SystemExit('counter stream comment pattern not found')
+          text = text.replace(old, new, 1)
+          usage.write_text(text, encoding='utf-8')
+
+          ike = Path('deploy/master/ikev2/irangate-ikev2-stats-snapshot.py')
+          text = ike.read_text(encoding='utf-8')
+          old = '''        items.append({
+                      "source_id": "ikev2",
+                      "client_name": user,
+          '''
+          new = '''        items.append({
+                      "source_id": "ikev2",
+                      "ike_id": ike_id,
+                      "session_id": f"ike:{ike_id}",
+                      "client_name": user,
+          '''
+          if old not in text:
+              raise SystemExit('IKEv2 snapshot items pattern not found')
+          text = text.replace(old, new, 1)
+          ike.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate accounting and identity fixes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --disable-pip-version-check psycopg2-binary
+          python3 -m py_compile \
+            deploy/master/scripts/irangate-pg-usage-tick.py \
+            deploy/master/ikev2/irangate-ikev2-stats-snapshot.py
+          python3 deploy/master/scripts/irangate-pg-usage-tick.py --self-test
+          grep -Fq 'x.get("session_id") or x.get("ike_id")' deploy/master/scripts/irangate-pg-usage-tick.py
+          grep -Fq '"session_id": f"ike:{ike_id}"' deploy/master/ikev2/irangate-ikev2-stats-snapshot.py
+          grep -Fq 'canonicalClientNameForCreate(req.Name)' webpanel/backend/api.go
+          grep -Fq 'http.StatusConflict' webpanel/backend/api.go
+          grep -Fq 'result[key] = total' webpanel/backend/delegated_admins.go
+          ! grep -A40 'func fastEnforceGlobalUsage' webpanel/backend/client_lifecycle.go | grep -Fq 'EqualFold'
+          git diff --check
+
+      - name: Run Go case-identity regression tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd webpanel/backend
+          go test ./... -run 'Test(ExactGlobalUsagePreservesClientCase|CreateClientRejectsCaseInsensitiveCollision|CanonicalNewClientNameIsLowercase)$' -count=1
+          go test ./... -run '^$'
+
+      - name: Commit verified hardening
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'Net-spoof'
+          git config user.email 'rezamhm464@gmail.com'
+          git add \
+            deploy/master/scripts/irangate-pg-usage-tick.py \
+            deploy/master/ikev2/irangate-ikev2-stats-snapshot.py
+          git commit -m 'fix: key IKEv2 accounting by stable SA identity'
+          timeout 60 git push origin HEAD:l2tp-dev
