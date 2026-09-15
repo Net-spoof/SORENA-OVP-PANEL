@@ -449,7 +449,7 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 		for i, client := range clients {
 			if clientMap, ok := client.(map[string]interface{}); ok {
 				if name, ok := clientMap["name"].(string); ok {
-					if authoritativeUsed, exists := globalUsageTotals[strings.ToLower(strings.TrimSpace(name))]; exists {
+					if authoritativeUsed, exists := globalUsageTotals[strings.TrimSpace(name)]; exists {
 						clientMap["traffic_used_bytes"] = authoritativeUsed
 					}
 					if token, err := ensureClientSubscriptionToken(name); err == nil {
@@ -732,6 +732,23 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// IRANGATE_CASE_SAFE_CREATE_V1
+	req.Name = canonicalClientNameForCreate(req.Name)
+	clientCreateIdentityMu.Lock()
+	defer clientCreateIdentityMu.Unlock()
+
+	if existing, collision, err := findCaseInsensitiveClientCollision(req.Name); err != nil {
+		sendError(w, "Failed to validate client-name uniqueness", http.StatusInternalServerError)
+		return
+	} else if collision {
+		sendError(
+			w,
+			fmt.Sprintf("Client name conflicts with existing client %q", existing),
+			http.StatusConflict,
+		)
 		return
 	}
 
@@ -3666,53 +3683,11 @@ func subIKEv2Online(clientName string) bool {
 }
 
 func subGlobalUsageTotal(clientName string) int64 {
-	data, err := os.ReadFile("/opt/irangate/traffic/global_usage_totals.json")
-	if err != nil {
-		return 0
-	}
-
-	var root map[string]interface{}
-	if json.Unmarshal(data, &root) != nil {
-		return 0
-	}
-
-	totals, ok := root["totals"].(map[string]interface{})
+	_, _, total, ok := exactGlobalUsage(clientName)
 	if !ok {
 		return 0
 	}
-
-	wanted := strings.TrimSpace(clientName)
-	used := int64(0)
-
-	// OpenVPN Common-Name casing may differ from the client metadata
-	// filename or from historical traffic records.
-	//
-	// Example:
-	//   metadata: mehdi
-	//   traffic:  Mehdi
-	//
-	// Sum all case-insensitive buckets so historical usage remains
-	// visible after a casing-only rename.
-	for storedName, raw := range totals {
-		if !strings.EqualFold(
-			strings.TrimSpace(storedName),
-			wanted,
-		) {
-			continue
-		}
-
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		value := subInt64(m["total"])
-		if value > 0 {
-			used += value
-		}
-	}
-
-	return used
+	return total
 }
 
 func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {

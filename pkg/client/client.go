@@ -1,7 +1,10 @@
 package client
+
 import (
 	"bufio"
 	"fmt"
+	"github.com/amiridev-org/irangate-ov/pkg/database"
+	"github.com/amiridev-org/irangate-ov/pkg/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,16 +12,17 @@ import (
 	"strings"
 	"text/template"
 	"time"
-	"github.com/amiridev-org/irangate-ov/pkg/database"
-	"github.com/amiridev-org/irangate-ov/pkg/utils"
 )
+
 const (
 	ClientConfigDir = "/etc/openvpn/client"
 	EasyRSAPath     = "/etc/openvpn/easy-rsa"
 )
+
 type Manager struct {
 	db *database.DB
 }
+
 func New(db *database.DB) *Manager {
 	return &Manager{
 		db: db,
@@ -37,6 +41,7 @@ func (m *Manager) GetClient(name string) (*database.Client, error) {
 	return nil, fmt.Errorf("client %s not found", name)
 }
 func (m *Manager) CreateClient(name string) (*database.Client, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
 	logger := utils.GetLogger()
 	logger.Infof("Creating new client: %s", name)
 	dm := utils.NewDependencyManager()
@@ -46,9 +51,14 @@ func (m *Manager) CreateClient(name string) (*database.Client, error) {
 	if !utils.IsValidName(name) {
 		return nil, fmt.Errorf("invalid client name: %s", name)
 	}
-	_, err := m.GetClient(name)
-	if err == nil {
-		return nil, fmt.Errorf("client %s already exists", name)
+	existingClients, err := m.db.GetClients()
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate client-name uniqueness: %v", err)
+	}
+	for _, existing := range existingClients {
+		if strings.EqualFold(strings.TrimSpace(existing.Name), name) {
+			return nil, fmt.Errorf("client name conflicts with existing client %s", existing.Name)
+		}
 	}
 	client := &database.Client{
 		Name:      name,
@@ -490,6 +500,7 @@ func (m *Manager) GetCertificateStatus(name string) (string, error) {
 	}
 	return "Not Found", nil
 }
+
 type TrafficData struct {
 	BytesReceived uint64
 	BytesSent     uint64
@@ -497,6 +508,7 @@ type TrafficData struct {
 	RealAddress   string
 	VirtualIP     string
 }
+
 func (m *Manager) getTrafficDataFromOpenVPN() map[string]TrafficData {
 	trafficData := make(map[string]TrafficData)
 	statusFiles := []string{

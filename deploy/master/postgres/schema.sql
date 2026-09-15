@@ -454,6 +454,26 @@ ALTER TABLE ONLY public.traffic_totals
     ADD CONSTRAINT traffic_totals_client_name_fkey FOREIGN KEY (client_name) REFERENCES public.clients(client_name) ON DELETE CASCADE;
 
 
+
+-- IRANGATE_CASE_INSENSITIVE_CLIENT_UNIQUENESS_V1
+-- New clients are canonical lowercase. Existing case-colliding rows must be
+-- resolved manually before the protective expression index can be created.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT lower(client_name)
+        FROM public.clients
+        GROUP BY lower(client_name)
+        HAVING count(*) > 1
+    ) THEN
+        RAISE NOTICE 'Skipping clients_client_name_lower_uidx: existing case-insensitive collisions must be resolved first';
+    ELSE
+        CREATE UNIQUE INDEX IF NOT EXISTS clients_client_name_lower_uidx
+            ON public.clients ((lower(client_name)));
+    END IF;
+END
+$$;
+
 --
 -- PostgreSQL database dump complete
 --

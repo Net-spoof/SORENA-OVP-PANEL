@@ -277,9 +277,11 @@ func delegatedGlobalUsageMap() map[string]int64 {
 		if total < 0 {
 			total = 0
 		}
-		key := strings.ToLower(strings.TrimSpace(rawName))
+		key := strings.TrimSpace(rawName)
 		if key != "" {
-			result[key] += total
+			// Existing client identity is exact/case-sensitive. Never merge
+			// meeee and Meeee into one delegated-admin quota bucket.
+			result[key] = total
 		}
 	}
 	return result
@@ -328,7 +330,7 @@ func updateDelegatedUsageRecord(admin *DelegatedAdmin, global map[string]int64) 
 	}
 
 	for _, clientName := range delegatedOwnedClientNames(admin.Username) {
-		key := strings.ToLower(clientName)
+		key := strings.TrimSpace(clientName)
 		current := global[key]
 		previous, exists := admin.UsageSnapshots[key]
 		if !exists {
@@ -1044,7 +1046,7 @@ func delegatedCreateClientHandler(w http.ResponseWriter, r *http.Request) {
 		forwardRecordedResponse(w, rec)
 		return
 	}
-	if err := stampDelegatedClientOwner(strings.TrimSpace(request.Name), principal.Username); err != nil {
+	if err := stampDelegatedClientOwner(canonicalClientNameForCreate(request.Name), principal.Username); err != nil {
 		log.Printf("CRITICAL: client %s was created but delegated ownership could not be stamped: %v", request.Name, err)
 		sendError(w, "Client was created but ownership registration failed; root admin intervention is required", http.StatusInternalServerError)
 		return

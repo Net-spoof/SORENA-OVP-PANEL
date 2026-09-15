@@ -12,6 +12,7 @@ NODE = Path("/opt/irangate/traffic/node_current_stats.json")
 IKEV2 = Path("/opt/irangate/traffic/ikev2_current_stats.json")
 GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
 ACCOUNTING_V2_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v2.marker")
+ACCOUNTING_V3_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v3.marker")
 
 
 def load_env():
@@ -107,27 +108,37 @@ def session_of(x):
 
 def counter_mode(source):
     source = str(source or "").strip().lower()
-    return "session" if source == "ikev2" else "cumulative"
+    # current_stats.json contains one row per local OpenVPN session.
+    # IKEv2 is per-SA. Remote node snapshots are cumulative per node/CN.
+    return "session" if source in ("local", "ikev2") else "cumulative"
 
 
 def counter_epoch_key(source, x, session):
-    """
-    PostgreSQL traffic_sources stores one durable counter stream per source key.
-
-    local + node snapshots are already cumulative, so their source id must stay
-    stable across reconnects. IKEv2 exposes per-SA counters, so each SA needs a
-    stable epoch key; connected_since is preferred because NAT/real-address
-    changes must not create a new accounting epoch.
-    """
+    """Return a durable accounting stream key for one counter epoch."""
     source = str(source or "").strip()
     if counter_mode(source) != "session":
+        # Node counters are cumulative per node/client, so reconnects must keep
+        # using the same durable source row.
         return source
 
     connected_since = str(x.get("connected_since") or "").strip()
-    seed = connected_since or session or "unknown_session"
+    real_address = str(
+        x.get("real_address") or x.get("remote_address") or ""
+    ).strip()
+
+    if source.lower() == "ikev2":
+        # One IKE SA is a counter epoch. connected_since is stable even if a
+        # MOBIKE/NAT address changes while the SA remains alive.
+        seed = connected_since or session or "unknown_session"
+    else:
+        # OpenVPN has one row per live session. connected_since + peer address
+        # separates simultaneous sessions of the same CN and remains stable on
+        # replay of the same status snapshot.
+        parts = (connected_since, real_address)
+        seed = "\x1f".join(parts) if any(parts) else session
+
     digest = hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:24]
     return f"{source}@{digest}"
-
 
 def gb(n):
     return f"{int(n) / 1024 / 1024 / 1024:.3f} GB"
@@ -150,10 +161,52 @@ def write_accounting_v2_marker():
     tmp.replace(ACCOUNTING_V2_MARKER)
 
 
+
+def write_accounting_v3_marker():
+    ACCOUNTING_V3_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNTING_V3_MARKER.with_suffix(".marker.tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "activated_at": datetime.now(timezone.utc).isoformat(),
+                "policy": "local+ikev2 session epochs; node cumulative; exact client identity",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+    )
+    tmp.replace(ACCOUNTING_V3_MARKER)
+
+
+def self_test_accounting_identity():
+    local_a = {
+        "connected_since": "2026-09-15 10:00:00",
+        "real_address": "1.2.3.4:10001",
+    }
+    local_b = {
+        "connected_since": "2026-09-15 10:00:00",
+        "real_address": "1.2.3.4:10002",
+    }
+    assert counter_mode("local") == "session"
+    assert counter_mode("ikev2") == "session"
+    assert counter_mode("turkey") == "cumulative"
+    key_a = counter_epoch_key("local", local_a, "a")
+    key_b = counter_epoch_key("local", local_b, "b")
+    assert key_a != key_b, (key_a, key_b)
+    assert key_a == counter_epoch_key("local", dict(local_a), "replay")
+    assert counter_epoch_key("turkey", local_a, "a") == "turkey"
+    print("accounting_identity_self_test = PASS")
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
 ap.add_argument("--verbose", action="store_true")
+ap.add_argument("--self-test", action="store_true")
 args = ap.parse_args()
+
+if args.self_test:
+    self_test_accounting_identity()
+    raise SystemExit(0)
 
 items = []
 
@@ -176,6 +229,7 @@ conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
 conn.autocommit = False
 
 migration_mode = not ACCOUNTING_V2_MARKER.exists()
+local_session_v3_migration = not ACCOUNTING_V3_MARKER.exists()
 processed = 0
 first_seen = 0
 first_sample_added = 0
@@ -207,7 +261,7 @@ with conn.cursor() as cur:
     # idempotency, but old epochs do not need to live forever.
     cur.execute("""
         DELETE FROM traffic_sources
-        WHERE source_id LIKE 'ikev2@%'
+        WHERE (source_id LIKE 'ikev2@%' OR source_id LIKE 'local@%')
           AND updated_at < now() - interval '30 days'
     """)
 
@@ -313,7 +367,13 @@ with conn.cursor() as cur:
             # Baseline only that ambiguous first observation. Fresh clients
             # (aggregate=0) and all future sources after the marker is created
             # charge their first sample exactly once.
-            if migration_mode and aggregate_total_before > 0:
+            if source == "local" and local_session_v3_migration:
+                # v2 stored every simultaneous local session in source_id=local.
+                # Baseline each live local session exactly once during v3
+                # rollout so already-accounted bytes are not charged again.
+                migration_baselines += 1
+                action = "FIRST_LOCAL_V3_BASELINE_ONLY"
+            elif migration_mode and aggregate_total_before > 0:
                 migration_baselines += 1
                 action = "FIRST_MIGRATION_BASELINE_ONLY"
             else:
@@ -437,6 +497,9 @@ if args.apply:
 
     if migration_mode:
         write_accounting_v2_marker()
+
+    if local_session_v3_migration:
+        write_accounting_v3_marker()
 
     try:
         mirror = {"last": {}, "totals": {}, "blocked": {}}

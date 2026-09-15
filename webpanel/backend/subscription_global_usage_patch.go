@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -108,35 +107,11 @@ func subGlobalIsExpired(v interface{}) bool {
 }
 
 func loadSubGlobalUsage(clientName string) (float64, float64, float64, bool) {
-	b, err := os.ReadFile("/opt/irangate/traffic/global_usage_totals.json")
-	if err != nil {
-		return 0, 0, 0, false
-	}
-
-	var raw map[string]interface{}
-	if json.Unmarshal(b, &raw) != nil {
-		return 0, 0, 0, false
-	}
-
-	totals, ok := raw["totals"].(map[string]interface{})
+	rx, tx, total, ok := exactGlobalUsage(clientName)
 	if !ok {
 		return 0, 0, 0, false
 	}
-
-	item, ok := totals[clientName].(map[string]interface{})
-	if !ok {
-		return 0, 0, 0, false
-	}
-
-	rx := subGlobalNumber(item["rx"])
-	tx := subGlobalNumber(item["tx"])
-	total := subGlobalNumber(item["total"])
-
-	if total <= 0 {
-		total = rx + tx
-	}
-
-	return rx, tx, total, true
+	return float64(rx), float64(tx), float64(total), true
 }
 
 func subGlobalBool(v interface{}) bool {

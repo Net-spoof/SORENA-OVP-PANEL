@@ -213,54 +213,19 @@ func fastEnforceNumber(value interface{}) int64 {
 }
 
 func fastEnforceGlobalUsage(clientName string) int64 {
-	path := "/opt/irangate/traffic/global_usage_totals.json"
-
-	if data, err := os.ReadFile(path); err == nil {
-		var root map[string]interface{}
-
-		if json.Unmarshal(data, &root) == nil {
-			if totals, ok := root["totals"].(map[string]interface{}); ok {
-				for name, raw := range totals {
-					if !strings.EqualFold(name, clientName) {
-						continue
-					}
-
-					if row, ok := raw.(map[string]interface{}); ok {
-						total := fastEnforceNumber(row["total"])
-
-						if total > 0 {
-							return total
-						}
-
-						rx := fastEnforceNumber(row["rx"])
-						tx := fastEnforceNumber(row["tx"])
-
-						if rx+tx > 0 {
-							return rx + tx
-						}
-					}
-				}
-			}
-		}
+	_, _, total, ok := exactGlobalUsage(clientName)
+	if ok {
+		return total
 	}
 
 	database := NewTrafficDatabase()
 	totals := database.loadCumulativeTotalsMap()
-
-	if total, exists := totals[clientName]; exists {
+	name := strings.TrimSpace(clientName)
+	if total, exists := totals[name]; exists {
 		return total.TotalReceived +
 			total.TotalSent +
 			total.LastSessionReceived +
 			total.LastSessionSent
-	}
-
-	for name, total := range totals {
-		if strings.EqualFold(name, clientName) {
-			return total.TotalReceived +
-				total.TotalSent +
-				total.LastSessionReceived +
-				total.LastSessionSent
-		}
 	}
 
 	return 0
