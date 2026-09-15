@@ -1,0 +1,52 @@
+name: Refine accounting v4 migration
+
+on:
+  push:
+    paths:
+      - .github/workflows/refine-accounting-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout l2tp-dev
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Apply precise migration guard
+        run: python3 .github/scripts/refine-accounting-v4.py
+
+      - name: Validate Python accounting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --disable-pip-version-check psycopg2-binary
+          python3 -m py_compile deploy/master/scripts/irangate-pg-usage-tick.py
+          python3 deploy/master/scripts/irangate-pg-usage-tick.py --self-test
+          grep -Fq 'ike_v4_legacy_sources_present = False' deploy/master/scripts/irangate-pg-usage-tick.py
+          grep -Fq "WHERE source_id LIKE 'ikev2@%'" deploy/master/scripts/irangate-pg-usage-tick.py
+          grep -Fq 'source == "ikev2" and ike_session_v4_migration and ike_v4_legacy_sources_present' deploy/master/scripts/irangate-pg-usage-tick.py
+          git diff --check
+
+      - name: Run backend regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd webpanel/backend
+          go test ./... -run 'Test(ExactGlobalUsagePreservesClientCase|CreateClientRejectsCaseInsensitiveCollision|CanonicalNewClientNameIsLowercase)$' -count=1
+          go test ./... -run '^$'
+
+      - name: Commit verified migration refinement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'Net-spoof'
+          git config user.email 'rezamhm464@gmail.com'
+          git add deploy/master/scripts/irangate-pg-usage-tick.py
+          git commit -m 'fix: baseline IKEv2 v4 only for legacy accounting rows'
+          timeout 60 git push origin HEAD:l2tp-dev
