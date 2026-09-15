@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import json
 import argparse
+import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import psycopg2
 
 ENV = Path("/etc/irangate-db.env")
@@ -10,6 +11,8 @@ LOCAL = Path("/opt/irangate/traffic/current_stats.json")
 NODE = Path("/opt/irangate/traffic/node_current_stats.json")
 IKEV2 = Path("/opt/irangate/traffic/ikev2_current_stats.json")
 GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
+ACCOUNTING_V2_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v2.marker")
+
 
 def load_env():
     d = {}
@@ -18,6 +21,7 @@ def load_env():
             k, v = line.split("=", 1)
             d[k.strip()] = v.strip()
     return d
+
 
 def load_json(path):
     if not path.exists():
@@ -28,11 +32,13 @@ def load_json(path):
     except Exception:
         return []
 
+
 def to_int(v):
     try:
         return int(float(v or 0))
     except Exception:
         return 0
+
 
 def pick(x, *keys):
     for k in keys:
@@ -40,14 +46,18 @@ def pick(x, *keys):
             return x.get(k)
     return None
 
+
 def name_of(x):
     return pick(x, "client_name", "name", "common_name", "username")
+
 
 def rx_of(x):
     return to_int(pick(x, "current_received", "bytes_received", "rx", "received"))
 
+
 def tx_of(x):
     return to_int(pick(x, "current_sent", "bytes_sent", "tx", "sent"))
+
 
 def total_of(x):
     total = to_int(pick(x, "current_total", "total_bytes", "total", "used_bytes"))
@@ -55,12 +65,14 @@ def total_of(x):
         total = rx_of(x) + tx_of(x)
     return total
 
+
 def bool_of(v, default=True):
     if v is None:
         return default
     if isinstance(v, bool):
         return v
     return str(v).strip().lower() in ("1", "true", "yes", "y", "connected", "active")
+
 
 def connected_of(x):
     if "connected" in x:
@@ -71,6 +83,7 @@ def connected_of(x):
         return bool_of(x.get("active"), False)
     return True
 
+
 def parse_time(v):
     if not v or str(v).startswith("0001-01-01"):
         return None
@@ -79,6 +92,7 @@ def parse_time(v):
         return datetime.fromisoformat(s)
     except Exception:
         return None
+
 
 def session_of(x):
     parts = []
@@ -90,8 +104,51 @@ def session_of(x):
         parts.append("unknown_session")
     return "|".join(parts)
 
+
+def counter_mode(source):
+    source = str(source or "").strip().lower()
+    return "session" if source == "ikev2" else "cumulative"
+
+
+def counter_epoch_key(source, x, session):
+    """
+    PostgreSQL traffic_sources stores one durable counter stream per source key.
+
+    local + node snapshots are already cumulative, so their source id must stay
+    stable across reconnects. IKEv2 exposes per-SA counters, so each SA needs a
+    stable epoch key; connected_since is preferred because NAT/real-address
+    changes must not create a new accounting epoch.
+    """
+    source = str(source or "").strip()
+    if counter_mode(source) != "session":
+        return source
+
+    connected_since = str(x.get("connected_since") or "").strip()
+    seed = connected_since or session or "unknown_session"
+    digest = hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:24]
+    return f"{source}@{digest}"
+
+
 def gb(n):
     return f"{int(n) / 1024 / 1024 / 1024:.3f} GB"
+
+
+def write_accounting_v2_marker():
+    ACCOUNTING_V2_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNTING_V2_MARKER.with_suffix(".marker.tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "activated_at": datetime.now(timezone.utc).isoformat(),
+                "policy": "local+node cumulative; ikev2 session epochs",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+    )
+    tmp.replace(ACCOUNTING_V2_MARKER)
+
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
@@ -118,8 +175,11 @@ env = load_env()
 conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
 conn.autocommit = False
 
+migration_mode = not ACCOUNTING_V2_MARKER.exists()
 processed = 0
 first_seen = 0
+first_sample_added = 0
+migration_baselines = 0
 session_reset = 0
 counter_reset = 0
 delta_count = 0
@@ -130,10 +190,26 @@ with conn.cursor() as cur:
     cur.execute("DELETE FROM active_sessions WHERE last_seen < now() - interval '90 seconds'")
 
     # Full snapshot sync: remove old active sessions for sources seen in this tick.
-    # This prevents reconnect/port-change stale sessions from creating false connection-limit violations.
-    snapshot_sources = sorted(set(["local"]) | {str(x.get("_source_id")) for x in items if x.get("_source_id")})
+    # This prevents reconnect/port-change stale sessions from creating false
+    # connection-limit violations. Accounting source ids are intentionally
+    # separate from these runtime source ids for IKEv2 session epochs.
+    snapshot_sources = sorted(
+        set(["local"])
+        | {str(x.get("_source_id")) for x in items if x.get("_source_id")}
+    )
     for snapshot_source in snapshot_sources:
-        cur.execute("DELETE FROM active_sessions WHERE source_id = %s", (snapshot_source,))
+        cur.execute(
+            "DELETE FROM active_sessions WHERE source_id = %s",
+            (snapshot_source,),
+        )
+
+    # Session-scoped IKEv2 counter rows are durable for restart/replay
+    # idempotency, but old epochs do not need to live forever.
+    cur.execute("""
+        DELETE FROM traffic_sources
+        WHERE source_id LIKE 'ikev2@%'
+          AND updated_at < now() - interval '30 days'
+    """)
 
     for x in items:
         raw_name = name_of(x)
@@ -151,11 +227,13 @@ with conn.cursor() as cur:
             continue
 
         source = str(x["_source_id"])
-        rx = rx_of(x)
-        tx = tx_of(x)
-        total = total_of(x)
+        mode = counter_mode(source)
+        rx = max(0, rx_of(x))
+        tx = max(0, tx_of(x))
+        total = max(0, total_of(x))
         connected = connected_of(x)
         session = session_of(x)
+        accounting_source = counter_epoch_key(source, x, session)
         real_address = pick(x, "real_address", "remote_address")
         virtual_ip = pick(x, "virtual_ip", "virtual_address")
         last_seen = parse_time(pick(x, "last_seen", "updated_at"))
@@ -184,17 +262,24 @@ with conn.cursor() as cur:
         """, (last_seen, name))
 
         cur.execute("""
+            SELECT rx_bytes, tx_bytes, total_bytes
+            FROM traffic_totals
+            WHERE client_name = %s
+        """, (name,))
+        aggregate_row = cur.fetchone() or (0, 0, 0)
+        aggregate_total_before = int(aggregate_row[2] or 0)
+
+        cur.execute("""
             SELECT session_fingerprint, rx_bytes, tx_bytes, total_bytes
             FROM traffic_sources
             WHERE source_id = %s AND client_name = %s
             FOR UPDATE
-        """, (source, name))
+        """, (accounting_source, name))
 
         old = cur.fetchone()
 
         drx = dtx = dtotal = 0
         action = "baseline"
-        update_source = True
 
         def add_usage_delta(action_name, add_rx, add_tx, add_total):
             global delta_count, added_total
@@ -211,37 +296,77 @@ with conn.cursor() as cur:
                     total_bytes = total_bytes + %s,
                     updated_at = now()
                 WHERE client_name = %s
-            """, (max(0, add_rx), max(0, add_tx), max(0, add_total), name))
+            """, (
+                max(0, add_rx),
+                max(0, add_tx),
+                max(0, add_total),
+                name,
+            ))
 
             return action_name
 
         if old is None:
             first_seen += 1
-            action = "FIRST_BASELINE_ONLY"
+
+            # Rollout safety: an upgraded database may already contain an
+            # imported aggregate total while having no per-source ledger row.
+            # Baseline only that ambiguous first observation. Fresh clients
+            # (aggregate=0) and all future sources after the marker is created
+            # charge their first sample exactly once.
+            if migration_mode and aggregate_total_before > 0:
+                migration_baselines += 1
+                action = "FIRST_MIGRATION_BASELINE_ONLY"
+            else:
+                drx = rx
+                dtx = tx
+                dtotal = total
+                action = add_usage_delta(
+                    "FIRST_SAMPLE_ADD",
+                    drx,
+                    dtx,
+                    dtotal,
+                )
+                if dtotal > 0:
+                    first_sample_added += 1
 
         else:
             old_session, old_rx, old_tx, old_total = old
 
             if old_session != session:
                 session_reset += 1
-                action = "SESSION_CHANGED_BASELINE_ONLY"
 
-            elif total < old_total:
-                counter_reset += 1
-                action = "COUNTER_RESET_NEW_BASELINE"
-
-            else:
+            # local and node inputs are cumulative counters. IKEv2 counters are
+            # per-SA, but each SA has its own accounting_source epoch key, so the
+            # same monotonic/reset math is safe for every persisted stream.
+            if total >= old_total:
                 drx = max(0, rx - old_rx)
                 dtx = max(0, tx - old_tx)
                 dtotal = total - old_total
 
                 if dtotal > 0:
-                    action = add_usage_delta("ADD_DELTA", drx, dtx, dtotal)
+                    action = add_usage_delta(
+                        "ADD_DELTA",
+                        drx,
+                        dtx,
+                        dtotal,
+                    )
                 else:
                     action = "NO_DELTA"
-
-        if not update_source:
-            rx, tx, total, session = old_rx, old_tx, old_total, old_session
+            else:
+                # Counter decreased inside the same durable source stream.
+                # Treat this as a new counter epoch and charge the new epoch's
+                # current value once. The persisted source row makes replay and
+                # service restart idempotent on the next tick.
+                counter_reset += 1
+                drx = rx
+                dtx = tx
+                dtotal = total
+                action = add_usage_delta(
+                    "COUNTER_RESET_ADD_NEW_EPOCH",
+                    drx,
+                    dtx,
+                    dtotal,
+                )
 
         cur.execute("""
             INSERT INTO traffic_sources (
@@ -260,8 +385,8 @@ with conn.cursor() as cur:
                 virtual_ip = EXCLUDED.virtual_ip,
                 updated_at = now()
         """, (
-            source, name, session, rx, tx, total,
-            connected, real_address, virtual_ip
+            accounting_source, name, session, rx, tx, total,
+            connected, real_address, virtual_ip,
         ))
 
         if connected:
@@ -276,7 +401,14 @@ with conn.cursor() as cur:
                     virtual_ip = EXCLUDED.virtual_ip,
                     connected_since = COALESCE(active_sessions.connected_since, EXCLUDED.connected_since),
                     last_seen = now()
-            """, (source, name, session, real_address, virtual_ip, connected_since))
+            """, (
+                source,
+                name,
+                session,
+                real_address,
+                virtual_ip,
+                connected_since,
+            ))
         else:
             cur.execute("""
                 DELETE FROM active_sessions
@@ -284,10 +416,27 @@ with conn.cursor() as cur:
             """, (source, name))
 
         if args.verbose:
-            print(action, "source=", source, "name=", name, "delta=", dtotal, "total=", total)
+            print(
+                action,
+                "source=",
+                source,
+                "accounting_source=",
+                accounting_source,
+                "mode=",
+                mode,
+                "name=",
+                name,
+                "delta=",
+                dtotal,
+                "total=",
+                total,
+            )
 
 if args.apply:
     conn.commit()
+
+    if migration_mode:
+        write_accounting_v2_marker()
 
     try:
         mirror = {"last": {}, "totals": {}, "blocked": {}}
@@ -346,10 +495,13 @@ else:
 conn.close()
 
 print("mode =", "APPLY" if args.apply else "DRY-RUN")
+print("accounting_v2_migration_mode =", migration_mode)
 print("processed =", processed)
 print("active =", active_count)
 print("first_seen =", first_seen)
-print("session_reset =", session_reset)
+print("first_sample_added =", first_sample_added)
+print("migration_baselines =", migration_baselines)
+print("session_fingerprint_changes =", session_reset)
 print("counter_reset =", counter_reset)
 print("delta_count =", delta_count)
 print("added_total_bytes =", added_total)
