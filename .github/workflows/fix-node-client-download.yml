@@ -1,0 +1,107 @@
+name: Apply node client download fix
+
+on:
+  push:
+    paths:
+      - .github/workflows/fix-node-client-download.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout l2tp-dev
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch node client create/download flow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('webpanel/backend/api.go')
+          text = path.read_text()
+
+          old_create = '''func createClientOnNode(node NodeConfig, clientName string) error {
+          \tbody := strings.NewReader(fmt.Sprintf(`{\\"name\\":%q}`, clientName))
+          '''
+          new_create = '''func createClientOnNode(node NodeConfig, clientName string) error {
+          \tpayload, err := json.Marshal(map[string]string{"name": clientName})
+          \tif err != nil {
+          \t\treturn fmt.Errorf("encode node create request: %w", err)
+          \t}
+
+          \tbody := strings.NewReader(string(payload))
+          '''
+
+          old_ensure = '''func ensureClientOnNode(node NodeConfig, clientName string) {
+          \t_ = createClientOnNode(node, clientName)
+          }
+          '''
+          new_ensure = '''func ensureClientOnNode(node NodeConfig, clientName string) error {
+          \treturn createClientOnNode(node, clientName)
+          }
+          '''
+
+          old_download = '''func downloadClientFromNode(
+          \tw http.ResponseWriter,
+          \tr *http.Request,
+          \tnode NodeConfig,
+          \tclientName string,
+          ) {
+          \tensureClientOnNode(node, clientName)
+          '''
+          new_download = '''func downloadClientFromNode(
+          \tw http.ResponseWriter,
+          \tr *http.Request,
+          \tnode NodeConfig,
+          \tclientName string,
+          ) {
+          \tif err := ensureClientOnNode(node, clientName); err != nil {
+          \t\thttp.Error(
+          \t\t\tw,
+          \t\t\t"Node client create failed: "+err.Error(),
+          \t\t\thttp.StatusBadGateway,
+          \t\t)
+          \t\treturn
+          \t}
+          '''
+
+          replacements = [
+              (old_create, new_create, 'createClientOnNode JSON body'),
+              (old_ensure, new_ensure, 'ensureClientOnNode error propagation'),
+              (old_download, new_download, 'downloadClientFromNode fail-fast'),
+          ]
+
+          for old, new, label in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          gofmt -w webpanel/backend/api.go
+
+      - name: Test backend
+        working-directory: webpanel/backend
+        run: go test ./...
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet -- webpanel/backend/api.go; then
+            echo 'No source change to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add webpanel/backend/api.go
+          git commit -m 'fix: create node client before subscription download'
+          git push origin HEAD:l2tp-dev
