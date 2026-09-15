@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 import psycopg2
@@ -33,18 +34,50 @@ WEBPANEL_ENV_DATA = env_load(WEBPANEL_ENV)
 
 WEBPANEL_PORT = WEBPANEL_ENV_DATA.get("WEBPANEL_PORT", "8080")
 BASE = f"http://127.0.0.1:{WEBPANEL_PORT}"
+IRANGATE_DATA_DIR = Path(
+    WEBPANEL_ENV_DATA.get("IRANGATE_DATA_DIR", "/opt/irangate").strip()
+    or "/opt/irangate"
+)
+ROOT_ADMIN_JSON = IRANGATE_DATA_DIR / "webpanel" / "admin.json"
 
 
 def b64url(data):
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+def canonical_root_username():
+    env_username = WEBPANEL_ENV_DATA.get(
+        "WEBPANEL_ADMIN_USER",
+        "",
+    ).strip()
+
+    try:
+        admin_data = json.loads(ROOT_ADMIN_JSON.read_text())
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to read canonical root admin from {ROOT_ADMIN_JSON}: {exc}"
+        ) from exc
+
+    username = str(admin_data.get("username") or "").strip()
+    if not username:
+        raise RuntimeError(
+            f"canonical root admin username is missing in {ROOT_ADMIN_JSON}"
+        )
+
+    if env_username and env_username != username:
+        print(
+            "WARNING root admin username mismatch:",
+            f"WEBPANEL_ADMIN_USER={env_username!r}",
+            f"canonical_admin={username!r};",
+            "using canonical admin.json value",
+        )
+
+    return username
+
+
 def build_local_api_token():
     secret = WEBPANEL_ENV_DATA.get("JWT_SECRET", "").strip()
-    username = WEBPANEL_ENV_DATA.get(
-        "WEBPANEL_ADMIN_USER",
-        "admin",
-    ).strip() or "admin"
+    username = canonical_root_username()
 
     if not secret:
         raise RuntimeError(
@@ -102,12 +135,31 @@ def api_clients(token):
     req.add_header("Authorization", "Bearer " + token)
     req.add_header("Cache-Control", "no-cache")
 
-    data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read(4096).decode("utf-8", "replace").strip()
+        raise RuntimeError(
+            f"GET /api/clients failed: HTTP {exc.code}: {body[:1000]}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"GET /api/clients failed: {exc.reason}"
+        ) from exc
+
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        raise RuntimeError(
+            f"GET /api/clients returned invalid JSON: {raw[:500]!r}"
+        ) from exc
 
     if isinstance(data, list):
         return data
 
     return data.get("clients") or data.get("data") or []
+
 
 def to_int(v):
     try:
@@ -116,6 +168,7 @@ def to_int(v):
         return int(float(v))
     except Exception:
         return 0
+
 
 def clean_time(v):
     if not v:
@@ -132,6 +185,7 @@ def truthy(v):
     if v is None:
         return False
     return str(v).strip().lower() in ("1", "true", "yes", "on", "active", "connected")
+
 
 def status_from_usage(raw_status, limit_bytes, total, expire_at, connected=False):
     exp = clean_time(expire_at)
@@ -150,6 +204,7 @@ def status_from_usage(raw_status, limit_bytes, total, expire_at, connected=False
         return "traffic_limit_exceeded"
 
     return "active" if truthy(connected) else "inactive"
+
 
 env = DB_ENV_DATA
 token = build_local_api_token()
