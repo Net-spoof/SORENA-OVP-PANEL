@@ -275,6 +275,7 @@ conn.autocommit = False
 migration_mode = not ACCOUNTING_V2_MARKER.exists()
 local_session_v3_migration = not ACCOUNTING_V3_MARKER.exists()
 ike_session_v4_migration = not ACCOUNTING_V4_MARKER.exists()
+ike_v4_legacy_sources_present = False
 processed = 0
 first_seen = 0
 first_sample_added = 0
@@ -286,6 +287,17 @@ added_total = 0
 active_count = 0
 
 with conn.cursor() as cur:
+    if ike_session_v4_migration:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM traffic_sources
+                WHERE source_id LIKE 'ikev2@%'
+            )
+        """)
+        row = cur.fetchone()
+        ike_v4_legacy_sources_present = bool(row and row[0])
+
     cur.execute("DELETE FROM active_sessions WHERE last_seen < now() - interval '90 seconds'")
 
     # Full snapshot sync: remove old active sessions for sources seen in this tick.
@@ -412,7 +424,7 @@ with conn.cursor() as cur:
             # Baseline only that ambiguous first observation. Fresh clients
             # (aggregate=0) and all future sources after the marker is created
             # charge their first sample exactly once.
-            if source == "ikev2" and ike_session_v4_migration:
+            if source == "ikev2" and ike_session_v4_migration and ike_v4_legacy_sources_present:
                 # v3 keyed IKEv2 epochs by connected_since. v4 prefers the
                 # stable strongSwan SA identity. Baseline active SAs once so
                 # changing key formats cannot charge the same bytes twice.
@@ -615,6 +627,7 @@ print("mode =", "APPLY" if args.apply else "DRY-RUN")
 print("accounting_v2_migration_mode =", migration_mode)
 print("accounting_v3_local_migration_mode =", local_session_v3_migration)
 print("accounting_v4_ikev2_migration_mode =", ike_session_v4_migration)
+print("accounting_v4_legacy_ikev2_sources =", ike_v4_legacy_sources_present)
 print("processed =", processed)
 print("active =", active_count)
 print("first_seen =", first_seen)
