@@ -27,13 +27,16 @@
             inputs.forEach((input) => {
                 input.checked = true;
                 input.disabled = true;
+                input.setAttribute('aria-checked', 'true');
+                input.style.opacity = '1';
 
                 const label = input.closest('label');
                 if (label) {
-                    label.hidden = true;
-                    label.style.display = 'none';
-                    label.setAttribute('aria-hidden', 'true');
-                    label.dataset.implicitMasterLocation = 'true';
+                    label.hidden = false;
+                    label.style.removeProperty('display');
+                    label.removeAttribute('aria-hidden');
+                    delete label.dataset.implicitMasterLocation;
+                    label.dataset.mandatoryMasterLocation = 'true';
                 }
             });
         });
