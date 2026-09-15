@@ -97,7 +97,14 @@ def parse_time(v):
 
 def session_of(x):
     parts = []
-    for k in ("connected_since", "real_address", "virtual_ip", "virtual_address"):
+    for k in (
+        "session_id",
+        "ike_id",
+        "connected_since",
+        "real_address",
+        "virtual_ip",
+        "virtual_address",
+    ):
         v = x.get(k)
         if v:
             parts.append(f"{k}={v}")
@@ -127,9 +134,13 @@ def counter_epoch_key(source, x, session):
     ).strip()
 
     if source.lower() == "ikev2":
-        # One IKE SA is a counter epoch. connected_since is stable even if a
-        # MOBIKE/NAT address changes while the SA remains alive.
-        seed = connected_since or session or "unknown_session"
+        # One IKE SA is one counter epoch. Prefer the strongSwan IKE id,
+        # which is stable for the life of the SA and separates simultaneous
+        # SAs even when connected_since timestamps fall in the same second.
+        stable_session_id = str(
+            x.get("session_id") or x.get("ike_id") or ""
+        ).strip()
+        seed = stable_session_id or connected_since or session or "unknown_session"
     else:
         # OpenVPN has one row per live session. connected_since + peer address
         # separates simultaneous sessions of the same CN and remains stable on
@@ -196,6 +207,21 @@ def self_test_accounting_identity():
     assert key_a != key_b, (key_a, key_b)
     assert key_a == counter_epoch_key("local", dict(local_a), "replay")
     assert counter_epoch_key("turkey", local_a, "a") == "turkey"
+
+    ike_a = {
+        "ike_id": "101",
+        "session_id": "ike:101",
+        "connected_since": "2026-09-15T10:00:00Z",
+    }
+    ike_b = {
+        "ike_id": "102",
+        "session_id": "ike:102",
+        "connected_since": "2026-09-15T10:00:00Z",
+    }
+    ike_key_a = counter_epoch_key("ikev2", ike_a, "same-fallback")
+    ike_key_b = counter_epoch_key("ikev2", ike_b, "same-fallback")
+    assert ike_key_a != ike_key_b, (ike_key_a, ike_key_b)
+    assert ike_key_a == counter_epoch_key("ikev2", dict(ike_a), "replay")
     print("accounting_identity_self_test = PASS")
 
 ap = argparse.ArgumentParser()

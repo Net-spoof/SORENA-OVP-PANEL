@@ -172,6 +172,8 @@ def parse():
 
         items.append({
             "source_id": "ikev2",
+            "ike_id": ike_id,
+            "session_id": f"ike:{ike_id}",
             "client_name": user,
             "current_received": rx,
             "current_sent": tx,
