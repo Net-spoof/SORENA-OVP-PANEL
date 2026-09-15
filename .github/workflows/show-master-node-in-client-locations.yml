@@ -1,0 +1,147 @@
+name: Show Germany master in client locations
+
+on:
+  push:
+    paths:
+      - .github/workflows/show-master-node-in-client-locations.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout l2tp-dev
+        uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Patch mandatory master visibility
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          portal = Path('webpanel/frontend/js/delegated-portal.js')
+          text = portal.read_text(encoding='utf-8')
+
+          old = '''            inputs.forEach((input) => {
+                input.checked = true;
+                input.disabled = true;
+
+                const label = input.closest('label');
+                if (label) {
+                    label.hidden = true;
+                    label.style.display = 'none';
+                    label.setAttribute('aria-hidden', 'true');
+                    label.dataset.implicitMasterLocation = 'true';
+                }
+            });'''
+
+          new = '''            inputs.forEach((input) => {
+                // Germany Master is mandatory for every client: keep it selected,
+                // visible to the operator, and non-removable.
+                input.checked = true;
+                input.disabled = true;
+                input.setAttribute('aria-checked', 'true');
+                input.style.opacity = '1';
+
+                const label = input.closest('label');
+                if (label) {
+                    label.hidden = false;
+                    label.style.removeProperty('display');
+                    label.removeAttribute('aria-hidden');
+                    delete label.dataset.implicitMasterLocation;
+                    label.dataset.mandatoryMasterLocation = 'true';
+                }
+            });'''
+
+          if new in text:
+              print('master visibility already patched')
+          else:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one master visibility block, got {text.count(old)}')
+              text = text.replace(old, new, 1)
+              portal.write_text(text, encoding='utf-8')
+
+          clients = Path('webpanel/frontend/clients.html')
+          html = clients.read_text(encoding='utf-8')
+          old_asset = 'js/delegated-portal.js?v=delegated-portal-20260915-v4'
+          new_asset = 'js/delegated-portal.js?v=delegated-portal-20260915-v5'
+          if new_asset not in html:
+              if html.count(old_asset) != 1:
+                  raise SystemExit(f'expected one old asset reference, got {html.count(old_asset)}')
+              html = html.replace(old_asset, new_asset, 1)
+              clients.write_text(html, encoding='utf-8')
+          PY
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq "label.hidden = false;" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "label.style.removeProperty('display');" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "label.dataset.mandatoryMasterLocation = 'true';" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "input.checked = true;" webpanel/frontend/js/delegated-portal.js
+          grep -Fq "input.disabled = true;" webpanel/frontend/js/delegated-portal.js
+          grep -Fq 'js/delegated-portal.js?v=delegated-portal-20260915-v5' webpanel/frontend/clients.html
+          git diff --check
+
+      - name: Commit portal file through GitHub API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          PORTAL_SHA="$(git rev-parse HEAD:webpanel/frontend/js/delegated-portal.js)"
+          export PORTAL_SHA
+          python3 - <<'PY' > /tmp/portal.json
+          import base64, json, os
+          from pathlib import Path
+          raw = Path('webpanel/frontend/js/delegated-portal.js').read_bytes()
+          print(json.dumps({
+              'message': 'fix(clients): show mandatory Germany master location',
+              'content': base64.b64encode(raw).decode('ascii'),
+              'sha': os.environ['PORTAL_SHA'],
+              'branch': 'l2tp-dev',
+          }))
+          PY
+          curl --fail-with-body -sS -L \
+            -X PUT \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/webpanel/frontend/js/delegated-portal.js" \
+            --data-binary @/tmp/portal.json \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("portal commit:", d["commit"]["sha"])'
+
+      - name: Commit clients cache-buster through GitHub API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          CLIENTS_SHA="$(git rev-parse HEAD:webpanel/frontend/clients.html)"
+          export CLIENTS_SHA
+          python3 - <<'PY' > /tmp/clients.json
+          import base64, json, os
+          from pathlib import Path
+          raw = Path('webpanel/frontend/clients.html').read_bytes()
+          print(json.dumps({
+              'message': 'fix(clients): refresh visible master location asset',
+              'content': base64.b64encode(raw).decode('ascii'),
+              'sha': os.environ['CLIENTS_SHA'],
+              'branch': 'l2tp-dev',
+          }))
+          PY
+          curl --fail-with-body -sS -L \
+            -X PUT \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/webpanel/frontend/clients.html" \
+            --data-binary @/tmp/clients.json \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("clients commit:", d["commit"]["sha"])'
