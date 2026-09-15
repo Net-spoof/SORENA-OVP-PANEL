@@ -13,6 +13,7 @@ IKEV2 = Path("/opt/irangate/traffic/ikev2_current_stats.json")
 GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
 ACCOUNTING_V2_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v2.marker")
 ACCOUNTING_V3_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v3.marker")
+ACCOUNTING_V4_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v4.marker")
 
 
 def load_env():
@@ -190,6 +191,23 @@ def write_accounting_v3_marker():
     tmp.replace(ACCOUNTING_V3_MARKER)
 
 
+def write_accounting_v4_marker():
+    ACCOUNTING_V4_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNTING_V4_MARKER.with_suffix(".marker.tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "activated_at": datetime.now(timezone.utc).isoformat(),
+                "policy": "ikev2 stable SA identity rollout baseline",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+    )
+    tmp.replace(ACCOUNTING_V4_MARKER)
+
+
 def self_test_accounting_identity():
     local_a = {
         "connected_since": "2026-09-15 10:00:00",
@@ -256,6 +274,7 @@ conn.autocommit = False
 
 migration_mode = not ACCOUNTING_V2_MARKER.exists()
 local_session_v3_migration = not ACCOUNTING_V3_MARKER.exists()
+ike_session_v4_migration = not ACCOUNTING_V4_MARKER.exists()
 processed = 0
 first_seen = 0
 first_sample_added = 0
@@ -393,7 +412,13 @@ with conn.cursor() as cur:
             # Baseline only that ambiguous first observation. Fresh clients
             # (aggregate=0) and all future sources after the marker is created
             # charge their first sample exactly once.
-            if source == "local" and local_session_v3_migration:
+            if source == "ikev2" and ike_session_v4_migration:
+                # v3 keyed IKEv2 epochs by connected_since. v4 prefers the
+                # stable strongSwan SA identity. Baseline active SAs once so
+                # changing key formats cannot charge the same bytes twice.
+                migration_baselines += 1
+                action = "FIRST_IKEV2_V4_BASELINE_ONLY"
+            elif source == "local" and local_session_v3_migration:
                 # v2 stored every simultaneous local session in source_id=local.
                 # Baseline each live local session exactly once during v3
                 # rollout so already-accounted bytes are not charged again.
@@ -527,6 +552,9 @@ if args.apply:
     if local_session_v3_migration:
         write_accounting_v3_marker()
 
+    if ike_session_v4_migration:
+        write_accounting_v4_marker()
+
     try:
         mirror = {"last": {}, "totals": {}, "blocked": {}}
 
@@ -585,6 +613,8 @@ conn.close()
 
 print("mode =", "APPLY" if args.apply else "DRY-RUN")
 print("accounting_v2_migration_mode =", migration_mode)
+print("accounting_v3_local_migration_mode =", local_session_v3_migration)
+print("accounting_v4_ikev2_migration_mode =", ike_session_v4_migration)
 print("processed =", processed)
 print("active =", active_count)
 print("first_seen =", first_seen)
