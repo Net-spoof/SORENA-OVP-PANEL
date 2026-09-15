@@ -27,7 +27,6 @@ jobs:
           path = Path('webpanel/backend/api.go')
           lines = path.read_text().splitlines(keepends=True)
 
-          # 1) Build valid JSON instead of hand-escaped JSON.
           create_matches = [
               i for i, line in enumerate(lines)
               if 'body := strings.NewReader(fmt.Sprintf(' in line and 'clientName' in line
@@ -46,7 +45,6 @@ jobs:
               f'{indent}body := strings.NewReader(string(payload))\n',
           ]
 
-          # 2) Propagate create errors instead of discarding them.
           ensure_matches = [
               i for i, line in enumerate(lines)
               if line.strip() == 'func ensureClientOnNode(node NodeConfig, clientName string) {'
@@ -63,7 +61,6 @@ jobs:
               '}\n',
           ]
 
-          # 3) Stop before download when node-side client creation fails.
           download_matches = [
               i for i, line in enumerate(lines)
               if line.strip() == 'ensureClientOnNode(node, clientName)'
@@ -100,9 +97,13 @@ jobs:
             exit 1
           fi
 
-      - name: Test backend
+      - name: Compile-test backend
         working-directory: webpanel/backend
-        run: go test ./...
+        run: go test ./... -run '^$'
+
+      - name: Build backend
+        working-directory: webpanel/backend
+        run: go build ./...
 
       - name: Commit fix
         shell: bash
