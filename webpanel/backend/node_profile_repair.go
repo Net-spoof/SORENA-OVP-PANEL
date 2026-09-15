@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // nodeProfileRepairTransport keeps remote-node profile provisioning reliable.
@@ -16,6 +17,11 @@ import (
 // existing clients can have node ACL metadata without the corresponding .ovpn
 // file on the remote node. This transport fixes the create payload and, for a
 // node-profile download, provisions the profile with valid JSON before the GET.
+//
+// A missing node profile is treated as a recoverable state. The transport
+// provisions the client and retries the download a few times before returning a
+// diagnostic error. This keeps subscription links self-healing after node
+// migration/reinstall or when an older master binary created only the ACL entry.
 type nodeProfileRepairTransport struct {
 	base http.RoundTripper
 }
@@ -73,7 +79,10 @@ func (t *nodeProfileRepairTransport) roundTripFixedCreate(req *http.Request) (*h
 }
 
 func (t *nodeProfileRepairTransport) roundTripEnsuredDownload(req *http.Request, name string) (*http.Response, error) {
-	provisionErr := t.provisionProfileForDownload(req, name)
+	// Provision first so the common case succeeds with a single GET. This is
+	// intentionally done through t.base to avoid recursively re-entering this
+	// RoundTripper.
+	lastProvisionErr := t.provisionProfileForDownload(req, name)
 
 	resp, err := t.base.RoundTrip(req.Clone(req.Context()))
 	if err != nil {
@@ -96,25 +105,54 @@ func (t *nodeProfileRepairTransport) roundTripEnsuredDownload(req *http.Request,
 		return resp, nil
 	}
 
-	// If the pre-flight provision failed, try one explicit repair once more. This
-	// also handles a transient failure between client creation and first download.
-	if provisionErr != nil {
-		provisionErr = t.provisionProfileForDownload(req, name)
-	}
+	// The node explicitly says the .ovpn file is missing. Re-provision and retry
+	// a few times. The node client helper is synchronous, but the short retry
+	// window also covers filesystem/service timing during migrations and restores.
+	lastBody := body
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := t.provisionProfileForDownload(req, name); err != nil {
+			lastProvisionErr = err
+			time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+			continue
+		}
 
-	if provisionErr == nil {
+		lastProvisionErr = nil
+		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
+
 		retry, retryErr := t.base.RoundTrip(req.Clone(req.Context()))
 		if retryErr != nil {
-			return nil, retryErr
+			lastProvisionErr = retryErr
+			continue
 		}
-		return retry, nil
+
+		if retry.StatusCode != http.StatusNotFound {
+			return retry, nil
+		}
+
+		retryBody, retryReadErr := io.ReadAll(io.LimitReader(retry.Body, 64*1024))
+		_ = retry.Body.Close()
+		if retryReadErr != nil {
+			lastProvisionErr = retryReadErr
+			continue
+		}
+
+		lastBody = retryBody
+		if !nodeConfigMissingBody(retryBody) {
+			retry.Body = io.NopCloser(bytes.NewReader(retryBody))
+			retry.ContentLength = int64(len(retryBody))
+			return retry, nil
+		}
+	}
+
+	if lastProvisionErr == nil {
+		lastProvisionErr = fmt.Errorf("node accepted provisioning but the profile is still missing")
 	}
 
 	message := fmt.Sprintf(
-		"Node profile provisioning failed for %s: %v; original download response: %s",
+		"Node profile provisioning failed for %s: %v; last download response: %s",
 		name,
-		provisionErr,
-		strings.TrimSpace(string(body)),
+		lastProvisionErr,
+		strings.TrimSpace(string(lastBody)),
 	)
 	return nodeRepairErrorResponse(req, http.StatusBadGateway, message), nil
 }
