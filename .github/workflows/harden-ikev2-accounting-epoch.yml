@@ -67,7 +67,7 @@ jobs:
           new = '''    if source.lower() == "ikev2":
                   # One IKE SA is one counter epoch. Prefer the strongSwan IKE id,
                   # which is stable for the life of the SA and separates simultaneous
-                  # SAs even when their connected_since timestamps fall in the same second.
+                  # SAs even when connected_since timestamps fall in the same second.
                   stable_session_id = str(
                       x.get("session_id") or x.get("ike_id") or ""
                   ).strip()
@@ -102,18 +102,6 @@ jobs:
           '''
           if old not in text:
               raise SystemExit('self-test source pattern not found')
-          text = text.replace(old, new, 1)
-
-          old = '''            # local and node inputs are cumulative counters. IKEv2 counters are
-                  # per-SA, but each SA has its own accounting_source epoch key, so the
-                  # same monotonic/reset math is safe for every persisted stream.
-          '''
-          new = '''            # Every persisted accounting_source is one monotonic counter stream:
-                  # local OpenVPN sessions and IKEv2 SAs each have their own epoch key,
-                  # while each remote node/client keeps one cumulative source key.
-          '''
-          if old not in text:
-              raise SystemExit('counter stream comment pattern not found')
           text = text.replace(old, new, 1)
           usage.write_text(text, encoding='utf-8')
 
