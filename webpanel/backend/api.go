@@ -4442,6 +4442,7 @@ func main() {
 	api.HandleFunc("/delegated-admins/{username}/password", resetDelegatedAdminPasswordHandler).Methods("POST")
 	api.HandleFunc("/delegated-admins/{username}/disable", disableDelegatedAdminHandler).Methods("POST")
 	api.HandleFunc("/delegated-admins/{username}/enable", enableDelegatedAdminHandler).Methods("POST")
+	api.HandleFunc("/delegated-admins/{username}", deleteDelegatedAdminHandler).Methods("DELETE")
 	api.HandleFunc("/clients", delegatedGetClientsHandler).Methods("GET")
 	api.HandleFunc("/clients", delegatedCreateClientHandler).Methods("POST")
 	api.HandleFunc("/clients/{name}", updateClientWithGlobalResetHandler).Methods("PUT")
