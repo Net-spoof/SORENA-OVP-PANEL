@@ -727,7 +727,7 @@ func stampDelegatedClientOwner(name, username string) error {
 	if admins[idx].UsageSnapshots == nil {
 		admins[idx].UsageSnapshots = map[string]int64{}
 	}
-	admins[idx].UsageSnapshots[strings.ToLower(name)] = current
+	admins[idx].UsageSnapshots[name] = current
 	admins[idx].UpdatedAt = time.Now().UTC()
 	return saveDelegatedAdminsLocked(admins)
 }
@@ -1117,6 +1117,7 @@ func createDelegatedAdminHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	req.TrafficLimitBytes = canonicalTrafficQuotaBytes(req.TrafficLimitBytes)
 	req.Username = strings.TrimSpace(req.Username)
 	if !delegatedUsernameRE.MatchString(req.Username) {
 		sendError(w, "Username must be 3-64 characters: letters, numbers, dot, underscore or hyphen", http.StatusBadRequest)
@@ -1256,6 +1257,7 @@ func addDelegatedAdminTrafficHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Positive traffic bytes are required", http.StatusBadRequest)
 		return
 	}
+	req.Bytes = canonicalTrafficQuotaBytes(req.Bytes)
 	username := strings.TrimSpace(mux.Vars(r)["username"])
 
 	delegatedAdminsMu.Lock()
