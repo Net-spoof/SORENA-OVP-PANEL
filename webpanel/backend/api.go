@@ -735,6 +735,10 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keep all human-facing traffic quotas on the NET SPOOF decimal-SI
+	// contract, while accepting legacy callers that still send MiB/GiB/TiB.
+	req.TrafficLimitBytes = canonicalTrafficQuotaBytes(req.TrafficLimitBytes)
+
 	// IRANGATE_CASE_SAFE_CREATE_V1
 	req.Name = canonicalClientNameForCreate(req.Name)
 	clientCreateIdentityMu.Lock()
@@ -1205,6 +1209,11 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	if req.TrafficLimitBytes != nil {
+		normalized := canonicalTrafficQuotaBytes(*req.TrafficLimitBytes)
+		req.TrafficLimitBytes = &normalized
 	}
 
 	clientPath := filepath.Join(DataBaseDir, "database", "clients", name+".json")
@@ -4379,6 +4388,17 @@ func main() {
 	if err := initDatabases(); err != nil {
 		log.Fatal("Failed to initialize databases:", err)
 	}
+
+	if migrated, err := migrateLegacyTrafficQuotaUnits(); err != nil {
+		log.Printf("Traffic quota unit migration warning: %v", err)
+	} else if migrated.DelegatedAdmins > 0 || migrated.Clients > 0 {
+		log.Printf(
+			"Traffic quota unit migration completed: delegated_admins=%d clients=%d",
+			migrated.DelegatedAdmins,
+			migrated.Clients,
+		)
+	}
+
 	go hub.run()
 	go startStatsBroadcaster()
 	go startSystemResourcesBroadcaster()
