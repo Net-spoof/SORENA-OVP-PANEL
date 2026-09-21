@@ -1,5 +1,30 @@
 // Sidebar Component for IranGate Web Panel
 
+// IRANGATE_SIDEBAR_LAYOUT_CACHE_BUST_V2
+(function refreshSidebarLayoutStylesheet() {
+    const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+    const existing = links.find(link => {
+        try {
+            const url = new URL(link.href, window.location.href);
+            return /\/css\/sidebar\.css$/.test(url.pathname);
+        } catch (_) {
+            return false;
+        }
+    });
+
+    if (existing) {
+        const url = new URL(existing.href, window.location.href);
+        url.searchParams.set('v', 'sidebar-layout-20260921-v2');
+        existing.href = url.toString();
+        return;
+    }
+
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'css/sidebar.css?v=sidebar-layout-20260921-v2';
+    document.head.appendChild(link);
+})();
+
 // Shared UI refresh loader v1
 (function loadSharedUIRefresh() {
     if (document.getElementById('irangate-ui-refresh')) return;
