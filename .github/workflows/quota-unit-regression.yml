@@ -1,0 +1,39 @@
+name: Quota unit regression
+
+on:
+  push:
+    paths:
+      - .github/workflows/quota-unit-regression.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: l2tp-dev
+          fetch-depth: 0
+
+      - name: Go tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd webpanel/backend
+          go test ./... -run 'Test(CanonicalTrafficQuotaBytes|MigrateLegacyTrafficQuotaUnits|ExactGlobalUsagePreservesClientCase|CreateClientRejectsCaseInsensitiveCollision|CanonicalNewClientNameIsLowercase)$' -count=1
+          go test ./... -run '^$'
+
+      - name: Verify quota contract wiring
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq 'req.TrafficLimitBytes = canonicalTrafficQuotaBytes(req.TrafficLimitBytes)' webpanel/backend/api.go
+          grep -Fq 'normalized := canonicalTrafficQuotaBytes(*req.TrafficLimitBytes)' webpanel/backend/api.go
+          grep -Fq 'req.TrafficLimitBytes = canonicalTrafficQuotaBytes(req.TrafficLimitBytes)' webpanel/backend/delegated_admins.go
+          grep -Fq 'req.Bytes = canonicalTrafficQuotaBytes(req.Bytes)' webpanel/backend/delegated_admins.go
+          grep -Fq 'migrateLegacyTrafficQuotaUnits()' webpanel/backend/api.go
+          ! grep -Fq 'UsageSnapshots[strings.ToLower(name)]' webpanel/backend/delegated_admins.go
+          grep -Fq 'return 1000 * 1000 * 1000;' webpanel/frontend/clients.html
+          grep -Fq "if (unit === 'GB') return 1000 * 1000 * 1000;" webpanel/frontend/admins.html
