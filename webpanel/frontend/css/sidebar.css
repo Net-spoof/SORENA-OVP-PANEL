@@ -377,3 +377,59 @@
     flex-shrink: 0;
     display: block;
 }
+
+/* IRANGATE_SIDEBAR_VIEWPORT_FOOTER_V2
+ *
+ * Keep the sidebar itself inside the visible viewport and let only the menu
+ * scroll. Without min-height:0 on the flex child, long menus can push the
+ * footer below the viewport (especially in mobile browsers with dynamic
+ * address/navigation bars).
+ */
+.sidebar {
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.sidebar-header {
+    flex: 0 0 auto;
+}
+
+.sidebar-menu {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+}
+
+.sidebar-menu::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar-menu::-webkit-scrollbar-thumb {
+    background: var(--accent-color, rgba(100, 255, 218, 0.3));
+    border-radius: 3px;
+}
+
+.sidebar-footer {
+    flex: 0 0 auto;
+    margin-top: 0;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom)) !important;
+}
+
+/* On narrow/mobile viewports the same fixed-footer layout is mandatory. */
+@media (max-width: 1024px) {
+    .sidebar {
+        height: 100vh;
+        height: 100dvh;
+        max-height: 100vh;
+        max-height: 100dvh;
+    }
+}
+
