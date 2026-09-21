@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestCanonicalTrafficQuotaBytes(t *testing.T) {
 	tests := []struct {
@@ -24,5 +29,87 @@ func TestCanonicalTrafficQuotaBytes(t *testing.T) {
 				t.Fatalf("canonicalTrafficQuotaBytes(%d) = %d, want %d", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMigrateLegacyTrafficQuotaUnits(t *testing.T) {
+	oldDataBaseDir := DataBaseDir
+	oldDelegatedAdminsDBPath := DelegatedAdminsDBPath
+	defer func() {
+		DataBaseDir = oldDataBaseDir
+		DelegatedAdminsDBPath = oldDelegatedAdminsDBPath
+	}()
+
+	root := t.TempDir()
+	DataBaseDir = root
+	DelegatedAdminsDBPath = filepath.Join(root, "webpanel", "delegated_admins.json")
+
+	if err := os.MkdirAll(filepath.Dir(DelegatedAdminsDBPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "database", "clients"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	admins := []DelegatedAdmin{{
+		Username:          "res_test",
+		TrafficLimitBytes: 100 * (1 << 30),
+		UsageSnapshots:    map[string]int64{},
+	}}
+	adminData, err := json.Marshal(admins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(DelegatedAdminsDBPath, adminData, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	clientPath := filepath.Join(root, "database", "clients", "client.json")
+	clientData := []byte(`{"name":"client","traffic_limit_bytes":53687091200,"traffic_used_bytes":12345}`)
+	if err := os.WriteFile(clientPath, clientData, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := migrateLegacyTrafficQuotaUnits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DelegatedAdmins != 1 || result.Clients != 1 {
+		t.Fatalf("migration result = %+v, want delegated_admins=1 clients=1", result)
+	}
+
+	var gotAdmins []DelegatedAdmin
+	raw, err := os.ReadFile(DelegatedAdminsDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &gotAdmins); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAdmins) != 1 || gotAdmins[0].TrafficLimitBytes != 100_000_000_000 {
+		t.Fatalf("delegated quota after migration = %+v", gotAdmins)
+	}
+
+	var gotClient map[string]interface{}
+	raw, err = os.ReadFile(clientPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &gotClient); err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(gotClient["traffic_limit_bytes"].(float64)); got != 50_000_000_000 {
+		t.Fatalf("client quota after migration = %d, want 50000000000", got)
+	}
+	if got := int64(gotClient["traffic_used_bytes"].(float64)); got != 12345 {
+		t.Fatalf("usage counter changed during quota migration: got %d", got)
+	}
+
+	again, err := migrateLegacyTrafficQuotaUnits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.DelegatedAdmins != 0 || again.Clients != 0 {
+		t.Fatalf("migration is not idempotent: second result = %+v", again)
 	}
 }
