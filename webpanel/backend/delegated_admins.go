@@ -1167,6 +1167,86 @@ func createDelegatedAdminHandler(w http.ResponseWriter, r *http.Request) {
 	sendSuccess(w, "Admin created", delegatedAdminToView(admin))
 }
 
+func deleteDelegatedAdminHandler(w http.ResponseWriter, r *http.Request) {
+	if !delegatedRootOnly(w, r) {
+		return
+	}
+
+	username := strings.TrimSpace(mux.Vars(r)["username"])
+	if username == "" {
+		sendError(w, "Admin username is required", http.StatusBadRequest)
+		return
+	}
+
+	admin, exists, err := getDelegatedAdmin(username)
+	if err != nil {
+		sendError(w, "Failed to load delegated admin", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		sendError(w, "Admin not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete every client owned by this delegated admin first.  If any client
+	// cannot be removed, keep the admin record so the operation is retryable and
+	// no orphaned owner_admin reference is intentionally created.
+	ownedClients := delegatedOwnedClientNames(admin.Username)
+	deletedClients := 0
+	for _, clientName := range ownedClients {
+		req := httptest.NewRequest(
+			http.MethodDelete,
+			"/api/clients/"+url.PathEscape(clientName),
+			nil,
+		)
+		req = mux.SetURLVars(req, map[string]string{"name": clientName})
+		rec := httptest.NewRecorder()
+		deleteClientHandler(rec, req)
+		if rec.Code < 200 || rec.Code >= 300 {
+			log.Printf(
+				"Delegated admin delete aborted: admin=%s client=%s status=%d body=%s",
+				admin.Username,
+				clientName,
+				rec.Code,
+				strings.TrimSpace(rec.Body.String()),
+			)
+			sendError(
+				w,
+				fmt.Sprintf("Failed to remove owned client %s; delegated admin was kept", clientName),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+		deletedClients++
+	}
+
+	delegatedAdminsMu.Lock()
+	admins, loadErr := loadDelegatedAdminsLocked()
+	if loadErr != nil {
+		delegatedAdminsMu.Unlock()
+		sendError(w, "Failed to load delegated admins", http.StatusInternalServerError)
+		return
+	}
+	idx := delegatedAdminIndex(admins, username)
+	if idx < 0 {
+		delegatedAdminsMu.Unlock()
+		sendError(w, "Admin not found", http.StatusNotFound)
+		return
+	}
+	admins = append(admins[:idx], admins[idx+1:]...)
+	saveErr := saveDelegatedAdminsLocked(admins)
+	delegatedAdminsMu.Unlock()
+	if saveErr != nil {
+		sendError(w, "Failed to delete delegated admin", http.StatusInternalServerError)
+		return
+	}
+
+	sendSuccess(w, "Delegated admin deleted", map[string]interface{}{
+		"username":        admin.Username,
+		"deleted_clients": deletedClients,
+	})
+}
+
 func addDelegatedAdminTrafficHandler(w http.ResponseWriter, r *http.Request) {
 	if !delegatedRootOnly(w, r) {
 		return
