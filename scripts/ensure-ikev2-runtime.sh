@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 CONNECTION_FILE="/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf"
+L2TP_CONNECTION_FILE="/etc/swanctl/conf.d/irangate-l2tp.conf"
 VICI_CONF="/etc/strongswan.d/charon/vici.conf"
 SWANCTL_MAIN="/etc/swanctl/swanctl.conf"
 
@@ -163,6 +164,13 @@ grep -q 'irangate-ikev2-mschapv2' <<<"$CONNECTIONS" || {
     log "IranGate IKEv2 connection was not loaded ❌"
     exit 1
 }
+
+if [ -f "$L2TP_CONNECTION_FILE" ]; then
+    grep -q 'irangate-l2tp' <<<"$CONNECTIONS" || {
+        log "IranGate L2TP connection file exists but was not loaded ❌"
+        exit 1
+    }
+fi
 
 ss -lunp |
 grep -Eq ':(500|4500)[[:space:]]' || {
