@@ -73,8 +73,26 @@ fi
 
 chmod 0644 "$SWANCTL_MAIN"
 
-systemctl disable --now strongswan-starter.service \
+# IranGate deliberately uses a single strongSwan backend:
+# charon-systemd + swanctl for both IKEv2 and L2TP/IPSec.
+#
+# Disabling strongswan-starter is not sufficient. ipsec.service is an alias
+# for the legacy starter unit and may still be started explicitly while the
+# unit is disabled, which creates a second charon process competing for
+# UDP/500 and UDP/4500. Stop and mask the legacy backend so this cannot recur.
+systemctl stop \
+    strongswan-starter.service \
+    ipsec.service \
     >/dev/null 2>&1 || true
+
+systemctl disable strongswan-starter.service \
+    >/dev/null 2>&1 || true
+
+systemctl mask strongswan-starter.service \
+    >/dev/null 2>&1 || {
+        log "Unable to mask legacy strongswan-starter backend ❌"
+        exit 1
+    }
 
 systemctl unmask strongswan.service \
     >/dev/null 2>&1 || true
@@ -83,6 +101,22 @@ systemctl enable strongswan.service \
     >/dev/null
 
 systemctl restart strongswan.service
+
+if systemctl is-active --quiet strongswan-starter.service; then
+    log "Legacy strongswan-starter is still active ❌"
+    exit 1
+fi
+
+if pgrep -x charon >/dev/null 2>&1; then
+    log "Legacy charon process is still running ❌"
+    ps -ef | grep -E '[c]haron|[s]tarter' || true
+    exit 1
+fi
+
+if ! pgrep -x charon-systemd >/dev/null 2>&1; then
+    log "charon-systemd is not running ❌"
+    exit 1
+fi
 
 VICI_SOCKET=""
 
