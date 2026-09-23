@@ -3520,6 +3520,21 @@ irangate_update_health() {
         fi
     done
 
+    # IKEv2/L2TP must share the single charon-systemd backend. A running
+    # strongswan-starter/charon instance means UDP/500,4500 are owned by two
+    # daemons and the update must not be reported healthy.
+    if systemctl is-active --quiet strongswan-starter.service ||
+       pgrep -x charon >/dev/null 2>&1
+    then
+        echo -e "strongSwan backend: ${RED}DUPLICATE LEGACY CHARON ACTIVE${NC}"
+        failed=true
+    elif pgrep -x charon-systemd >/dev/null 2>&1; then
+        echo -e "strongSwan backend: ${GREEN}single charon-systemd${NC}"
+    else
+        echo -e "strongSwan backend: ${RED}charon-systemd missing${NC}"
+        failed=true
+    fi
+
     panel_port="$(get_env WEBPANEL_PORT)"
     panel_port="${panel_port:-8080}"
 
