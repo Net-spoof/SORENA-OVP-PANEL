@@ -172,10 +172,18 @@ if [ -f "$L2TP_CONNECTION_FILE" ]; then
     }
 fi
 
-ss -lunp |
-grep -Eq ':(500|4500)[[:space:]]' || {
-    log "UDP 500/4500 listeners are missing ❌"
-    exit 1
-}
+SOCKETS="$(ss -lunpH 2>/dev/null || true)"
 
-log "VICI enabled and IKEv2 configuration loaded ✅"
+for port in 500 4500; do
+    if ! grep -Eq \
+        "[:.]${port}[[:space:]].*charon-systemd" \
+        <<<"$SOCKETS"
+    then
+        log "UDP $port is not owned by charon-systemd ❌"
+        printf '%s\n' "$SOCKETS" |
+            grep -E ':(500|4500)[[:space:]]' || true
+        exit 1
+    fi
+done
+
+log "VICI enabled, IKEv2/L2TP loaded, UDP 500/4500 owned by charon-systemd ✅"
