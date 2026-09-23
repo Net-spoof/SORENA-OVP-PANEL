@@ -395,12 +395,47 @@ EOF
     systemctl daemon-reload
     sysctl --system >/dev/null
 
-    # Use only the swanctl/charon-systemd service.
-    # Running strongswan-starter simultaneously creates duplicate daemons.
-    systemctl disable --now strongswan-starter.service \
+    # IranGate uses one strongSwan backend for both IKEv2 and L2TP/IPSec:
+    # charon-systemd + swanctl. "disable" alone is not sufficient because
+    # ipsec.service aliases the legacy starter unit and may still be started
+    # explicitly, creating a second charon that competes for UDP/500,4500.
+    systemctl stop \
+        strongswan-starter.service \
+        ipsec.service \
         >/dev/null 2>&1 || true
 
-    systemctl enable --now strongswan.service
+    systemctl disable strongswan-starter.service \
+        >/dev/null 2>&1 || true
+
+    systemctl mask strongswan-starter.service \
+        >/dev/null 2>&1 || {
+            echo "Unable to mask legacy strongswan-starter backend" >&2
+            exit 1
+        }
+
+    systemctl unmask strongswan.service \
+        >/dev/null 2>&1 || true
+
+    systemctl enable strongswan.service \
+        >/dev/null
+
+    systemctl restart strongswan.service
+
+    if systemctl is-active --quiet strongswan-starter.service; then
+        echo "Legacy strongswan-starter is still active" >&2
+        exit 1
+    fi
+
+    if pgrep -x charon >/dev/null 2>&1; then
+        echo "Legacy charon process is still running" >&2
+        ps -ef | grep -E '[c]haron|[s]tarter' || true
+        exit 1
+    fi
+
+    if ! pgrep -x charon-systemd >/dev/null 2>&1; then
+        echo "charon-systemd is not running" >&2
+        exit 1
+    fi
 
     /usr/local/sbin/irangate-ikev2 reload
 
