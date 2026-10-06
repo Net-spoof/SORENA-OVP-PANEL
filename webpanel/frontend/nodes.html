@@ -634,9 +634,25 @@ async function loadNodes() {
                 </td>
                 <td class="p-4 text-sm text-gray-600">${esc(node.agent_url)}</td>
                 <td class="p-4">
-                    <span class="px-2 py-1 rounded text-sm font-semibold ${node.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
-                        ${node.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
+                    ${node.is_local ? `
+                        <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-700" title="Local master stays enabled">
+                            <span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+                            ON
+                        </span>
+                    ` : `
+                        <button
+                            id="toggle-${esc(node.id)}"
+                            type="button"
+                            onclick="toggleNodeEnabled('${esc(node.id)}', ${node.enabled ? 'false' : 'true'})"
+                            class="inline-flex min-w-[72px] items-center justify-center gap-2 px-3 py-1 rounded-full text-sm font-semibold transition-colors ${node.enabled
+                                ? 'bg-green-600 hover:bg-green-700 text-white'
+                                : 'bg-gray-300 hover:bg-gray-400 text-gray-800'}"
+                            title="${node.enabled ? 'Disable this node' : 'Enable this node'}"
+                        >
+                            <span class="inline-block w-2 h-2 rounded-full ${node.enabled ? 'bg-white' : 'bg-gray-600'}"></span>
+                            ${node.enabled ? 'ON' : 'OFF'}
+                        </button>
+                    `}
                 </td>
                 <td class="p-4 text-right">
                     <button id="ping-${esc(node.id)}" onclick="pingNode('${esc(node.id)}')" class="ping-btn bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors">
@@ -676,6 +692,68 @@ function setPingButtonState(id, state, text) {
 
     btn.className = base + (colors[state] || colors.idle);
     btn.textContent = text || 'Ping';
+}
+
+async function toggleNodeEnabled(id, enabled) {
+    const node = currentNodes.find(n => n.id === id);
+
+    if (!node) {
+        showMessage('Node not found: ' + id, 'error');
+        return;
+    }
+
+    if (node.is_local) {
+        showMessage('Local master node stays enabled', 'warning');
+        return;
+    }
+
+    const button = document.getElementById('toggle-' + id);
+
+    if (button) {
+        button.disabled = true;
+        button.classList.add('opacity-60', 'cursor-wait');
+    }
+
+    const payload = {
+        id: node.id,
+        name: node.name || node.id,
+        flag: node.flag || '',
+        location: node.location || '',
+        public_ip: node.public_ip || '',
+        agent_url: node.agent_url || '',
+        token: node.token || '',
+        enabled: !!enabled,
+        is_local: false
+    };
+
+    try {
+        await apiRequest(
+            '/nodes/' + encodeURIComponent(id),
+            {
+                method: 'PUT',
+                body: JSON.stringify(payload)
+            }
+        );
+
+        showMessage(
+            'Node "' +
+                (node.name || node.id) +
+                '" turned ' +
+                (enabled ? 'ON' : 'OFF')
+        );
+
+        await loadNodes();
+    } catch (err) {
+        showMessage(err.message, 'error');
+
+        if (button) {
+            button.disabled = false;
+            button.classList.remove(
+                'opacity-60',
+                'cursor-wait'
+            );
+        }
+    }
 }
 
 async function pingNode(id, silent = false) {
