@@ -1015,7 +1015,7 @@
                     throw new Error(result.message || 'Failed to load nodes');
                 }
 
-                availableClientNodes = (result.data || []).filter(node => !node.is_local && node.enabled);
+                availableClientNodes = (result.data || []).filter(node => !node.is_local && node.enabled !== false);
 
                 if (!availableClientNodes.length) {
                     box.innerHTML = '<div class="text-xs text-gray-500">No remote nodes enabled</div>';
@@ -1224,7 +1224,7 @@
                         ? result.data
                         : []
                 ).filter(
-                    node => node.enabled
+                    node => node.enabled !== false
                 );
 
                 const selectedNodes =
@@ -2241,7 +2241,7 @@
                         node =>
                             node &&
                             !node.is_local &&
-                            node.enabled
+                            node.enabled !== false
                     );
 
                 const enabledPorts =
@@ -2362,7 +2362,7 @@
                     nodes.filter(
                         node =>
                             node &&
-                            node.enabled
+                            node.enabled !== false
                     );
 
                 const enabledPorts =
