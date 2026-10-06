@@ -643,14 +643,14 @@ async function loadNodes() {
                         <button
                             id="toggle-${esc(node.id)}"
                             type="button"
-                            onclick="toggleNodeEnabled('${esc(node.id)}', ${node.enabled ? 'false' : 'true'})"
-                            class="inline-flex min-w-[72px] items-center justify-center gap-2 px-3 py-1 rounded-full text-sm font-semibold transition-colors ${node.enabled
+                            onclick="toggleNodeEnabled('${esc(node.id)}', ${node.enabled !== false ? 'false' : 'true'})"
+                            class="inline-flex min-w-[72px] items-center justify-center gap-2 px-3 py-1 rounded-full text-sm font-semibold transition-colors ${node.enabled !== false
                                 ? 'bg-green-600 hover:bg-green-700 text-white'
                                 : 'bg-gray-300 hover:bg-gray-400 text-gray-800'}"
-                            title="${node.enabled ? 'Disable this node' : 'Enable this node'}"
+                            title="${node.enabled !== false ? 'Disable this node' : 'Enable this node'}"
                         >
-                            <span class="inline-block w-2 h-2 rounded-full ${node.enabled ? 'bg-white' : 'bg-gray-600'}"></span>
-                            ${node.enabled ? 'ON' : 'OFF'}
+                            <span class="inline-block w-2 h-2 rounded-full ${node.enabled !== false ? 'bg-white' : 'bg-gray-600'}"></span>
+                            ${node.enabled !== false ? 'ON' : 'OFF'}
                         </button>
                     `}
                 </td>
@@ -715,13 +715,8 @@ async function toggleNodeEnabled(id, enabled) {
     }
 
     const payload = {
+        ...node,
         id: node.id,
-        name: node.name || node.id,
-        flag: node.flag || '',
-        location: node.location || '',
-        public_ip: node.public_ip || '',
-        agent_url: node.agent_url || '',
-        token: node.token || '',
         enabled: !!enabled,
         is_local: false
     };
