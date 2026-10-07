@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -41,17 +42,33 @@ func extractBackupV2JSONPayload(output []byte) []byte {
 }
 
 func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
-	// Manual export, scheduled backup and Telegram backup must all share the
-	// same in-process coordinator. The external flock remains as a second
-	// safety layer for callers outside the webpanel process.
+	// All backup routes share this coordinator. A short wait handles
+	// normal contention with scheduled/Telegram exports without an instant
+	// "already running" error. Never wait indefinitely on an HTTP request.
 	if !backupExecutionMu.TryLock() {
-		sendError(
-			w,
-			"Another IranGate backup is already running",
-			http.StatusConflict,
-		)
-		return
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		deadline := time.NewTimer(30 * time.Second)
+		defer deadline.Stop()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-deadline.C:
+				sendError(w,
+					"Another IranGate backup is still running; please retry after it finishes",
+					http.StatusConflict)
+				return
+			case <-ticker.C:
+				if backupExecutionMu.TryLock() {
+					goto backupLockAcquired
+				}
+			}
+		}
 	}
+
+backupLockAcquired:
 
 	backupPath, err := func() (string, error) {
 		defer backupExecutionMu.Unlock()
