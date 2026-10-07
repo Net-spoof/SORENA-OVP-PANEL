@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V4_STANDALONE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V5_STANDALONE
 (() => {
     'use strict';
 
@@ -490,6 +490,28 @@
                 text-align: left !important;
                 unicode-bidi: plaintext;
             }
+            #irangate-language-toggle.sidebar-language-btn {
+                margin-inline-start: auto;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 38px;
+                height: 34px;
+                padding: 0 10px;
+                border-radius: 9px;
+                border: 1px solid rgba(100,255,218,.35);
+                background: rgba(17,34,64,.88);
+                color: #e6f1ff;
+                font-size: 12px;
+                font-weight: 800;
+                line-height: 1;
+                cursor: pointer;
+                flex: 0 0 auto;
+            }
+            #irangate-language-toggle.sidebar-language-btn:hover {
+                border-color: rgba(100,255,218,.8);
+                background: rgba(30,58,95,.95);
+            }
             .irangate-language-floating {
                 position: fixed;
                 top: 16px;
@@ -625,7 +647,7 @@
         // DOM watcher, and no dependency on sidebar.js.
         setLanguage(getLanguage(), { emit: false });
 
-        for (const delay of [150, 500, 1200, 3000, 6000]) {
+        for (const delay of [150, 500, 1200, 3000, 6000, 10000]) {
             window.setTimeout(() => {
                 if (!document.body) return;
                 ensureLanguageControl();
