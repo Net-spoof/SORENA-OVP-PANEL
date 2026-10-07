@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/amiridev-org/irangate-ov/pkg/utils"
@@ -97,6 +98,32 @@ func bindWebPanelListener(portStr string) net.Listener {
 	)
 
 	return nil
+}
+
+// acquireWebPanelInstanceLock guarantees that only one long-running web-panel
+// process can exist on the host. The admin credential sync subcommand bypasses
+// this lock so installation/credential maintenance can still run while the
+// service is online.
+func acquireWebPanelInstanceLock() *os.File {
+	const lockPath = "/run/irangate-webpanel.lock"
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		log.Fatalf("Failed to open web panel instance lock %s: %v", lockPath, err)
+	}
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		log.Fatalf("Another irangate-webpanel instance is already running: %v", err)
+	}
+
+	if err := lockFile.Truncate(0); err == nil {
+		_, _ = lockFile.Seek(0, 0)
+		_, _ = fmt.Fprintf(lockFile, "%d\n", os.Getpid())
+	}
+
+	log.Printf("✅ Web panel single-instance lock acquired (pid=%d)", os.Getpid())
+	return lockFile
 }
 
 type Admin struct {
@@ -4438,6 +4465,12 @@ func main() {
 
 		return
 	}
+
+	instanceLock := acquireWebPanelInstanceLock()
+	defer func() {
+		_ = syscall.Flock(int(instanceLock.Fd()), syscall.LOCK_UN)
+		_ = instanceLock.Close()
+	}()
 
 	if err := initDatabases(); err != nil {
 		log.Fatal("Failed to initialize databases:", err)
