@@ -14,14 +14,14 @@
 
     if (existing) {
         const url = new URL(existing.href, window.location.href);
-        url.searchParams.set('v', 'sidebar-i18n-20261007-v3');
+        url.searchParams.set('v', 'sidebar-i18n-20261007-v4');
         existing.href = url.toString();
         return;
     }
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v3';
+    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v4';
     document.head.appendChild(link);
 })();
 
@@ -35,34 +35,44 @@
     document.head.appendChild(link);
 })();
 
-// Authoritative auth-role bootstrap v3
+// Authoritative auth-role bootstrap v4
 (function bootstrapAuthoritativeRole() {
     const token = localStorage.getItem('token');
     const cachedRole = localStorage.getItem('role') || 'root';
+    const allowedDelegatedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
 
-    // Hide protected pages briefly while /api/me resolves so a stale cached role
-    // cannot render root navigation for a delegated admin.
+    const clearAuthGuard = () => {
+        document.documentElement.classList.remove('irangate-auth-resolving');
+    };
+
+    // Hide protected pages only briefly while /api/me resolves. A hard
+    // fail-safe prevents a slow/broken role request from leaving the whole UI
+    // permanently blank on mobile browsers.
+    let guardFailSafe = null;
     if (token) {
         const style = document.createElement('style');
         style.id = 'irangate-auth-guard-style';
         style.textContent = 'html.irangate-auth-resolving body{visibility:hidden!important}';
         document.head.appendChild(style);
         document.documentElement.classList.add('irangate-auth-resolving');
+        guardFailSafe = window.setTimeout(clearAuthGuard, 4500);
     }
-
-    const allowedDelegatedPages = new Set(['dealer-dashboard.html', 'clients.html', 'usage.html']);
 
     window.irangateAuthState = (async () => {
         if (!token) {
-            document.documentElement.classList.remove('irangate-auth-resolving');
+            clearAuthGuard();
             return { role: cachedRole, redirected: false };
         }
+
+        const controller = new AbortController();
+        const requestTimeout = window.setTimeout(() => controller.abort(), 3500);
 
         try {
             const response = await fetch('/api/me', {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${token}` },
-                cache: 'no-store'
+                cache: 'no-store',
+                signal: controller.signal
             });
 
             if (response.status === 401) {
@@ -94,20 +104,23 @@
             return { role, redirected: false };
         } catch (error) {
             console.error('IranGate authoritative role check failed:', error);
-            // Fail closed for a session that is already known to be delegated.
+
             const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
             if (cachedRole === 'delegated_admin' && !allowedDelegatedPages.has(page)) {
                 window.location.replace('dealer-dashboard.html');
                 return { role: cachedRole, redirected: true };
             }
+
             return { role: cachedRole, redirected: false, error: true };
         } finally {
-            document.documentElement.classList.remove('irangate-auth-resolving');
+            window.clearTimeout(requestTimeout);
+            if (guardFailSafe !== null) window.clearTimeout(guardFailSafe);
+            clearAuthGuard();
         }
     })();
 })();
 
-// IRANGATE_SIDEBAR_I18N_V3
+// IRANGATE_SIDEBAR_I18N_V4
 const IRANGATE_SIDEBAR_I18N = Object.freeze({
     en: Object.freeze({
         resellerPanel: 'Reseller Panel', myPanel: 'My Panel', main: 'Main', dashboard: 'Dashboard',
