@@ -41,81 +41,30 @@ func extractBackupV2JSONPayload(output []byte) []byte {
 }
 
 func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
-	cmd := exec.Command(
-		"/usr/local/bin/irangate-backup-v2-export",
-	)
+	// Manual export, scheduled backup and Telegram backup must all share the
+	// same in-process coordinator. The external flock remains as a second
+	// safety layer for callers outside the webpanel process.
+	if !backupExecutionMu.TryLock() {
+		sendError(
+			w,
+			"Another IranGate backup is already running",
+			http.StatusConflict,
+		)
+		return
+	}
+	defer backupExecutionMu.Unlock()
 
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	output, err := cmd.Output()
-
+	backupPath, err := runBackupV2Export()
 	if err != nil {
-		message := strings.TrimSpace(
-			stderr.String(),
-		)
-
-		if message == "" {
-			message = err.Error()
-		}
-
 		sendError(
 			w,
-			"Backup v2 export failed: "+message,
+			"Backup v2 export failed: "+err.Error(),
 			http.StatusInternalServerError,
 		)
-
 		return
 	}
 
-	backupPath := filepath.Clean(
-		extractBackupV2ArchivePath(string(output)),
-	)
-
-	root := filepath.Clean(
-		backupV2Root,
-	)
-
-	rel, relErr := filepath.Rel(
-		root,
-		backupPath,
-	)
-
-	if relErr != nil ||
-		rel == "." ||
-		strings.HasPrefix(rel, "..") ||
-		filepath.IsAbs(rel) {
-
-		sendError(
-			w,
-			"Backup v2 exporter returned an invalid path",
-			http.StatusInternalServerError,
-		)
-
-		return
-	}
-
-	info, statErr := os.Stat(
-		backupPath,
-	)
-
-	if statErr != nil ||
-		!info.Mode().IsRegular() ||
-		info.Size() == 0 {
-
-		sendError(
-			w,
-			"Backup v2 archive is missing or empty",
-			http.StatusInternalServerError,
-		)
-
-		return
-	}
-
-	filename := filepath.Base(
-		backupPath,
-	)
+	filename := filepath.Base(backupPath)
 
 	w.Header().Set(
 		"Content-Type",
