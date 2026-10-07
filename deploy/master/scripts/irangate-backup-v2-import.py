@@ -2090,6 +2090,18 @@ def restore_filesystem(
         )
 
 
+    # These files were not present in legacy v2 archives. Preserve the
+    # destination on a legacy restore instead of deleting live settings.
+    for name in (
+        "telegram_config.json",
+        "telegram_backup_schedule.json",
+    ):
+        restore_optional_file(
+            webpanel_source / name,
+            webpanel_destination / name,
+            remove_if_missing=False,
+        )
+
     templates_source = (
         webpanel_source
         / "templates"
