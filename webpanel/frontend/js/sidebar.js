@@ -14,14 +14,14 @@
 
     if (existing) {
         const url = new URL(existing.href, window.location.href);
-        url.searchParams.set('v', 'sidebar-i18n-20261007-v1');
+        url.searchParams.set('v', 'sidebar-i18n-20261007-v2');
         existing.href = url.toString();
         return;
     }
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v1';
+    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v2';
     document.head.appendChild(link);
 })();
 
@@ -107,7 +107,7 @@
     })();
 })();
 
-// IRANGATE_SIDEBAR_I18N_V1
+// IRANGATE_SIDEBAR_I18N_V2
 const IRANGATE_SIDEBAR_I18N = Object.freeze({
     en: Object.freeze({
         resellerPanel: 'Reseller Panel', myPanel: 'My Panel', main: 'Main', dashboard: 'Dashboard',
@@ -130,8 +130,29 @@ const IRANGATE_SIDEBAR_I18N = Object.freeze({
 });
 
 function getSidebarLanguage() {
-    return localStorage.getItem('irangate_sidebar_language') === 'fa' ? 'fa' : 'en';
+    const saved = localStorage.getItem('irangate_language') || localStorage.getItem('irangate_sidebar_language');
+    return saved === 'fa' ? 'fa' : 'en';
 }
+
+function persistSidebarLanguage(language) {
+    const normalized = language === 'fa' ? 'fa' : 'en';
+    localStorage.setItem('irangate_language', normalized);
+    // Keep the old key in sync for compatibility with the first sidebar-i18n release.
+    localStorage.setItem('irangate_sidebar_language', normalized);
+    return normalized;
+}
+
+function applySidebarLanguageState(language = getSidebarLanguage()) {
+    const normalized = language === 'fa' ? 'fa' : 'en';
+    const root = document.documentElement;
+    root.lang = normalized === 'fa' ? 'fa' : 'en';
+    root.dataset.irangateLang = normalized;
+    root.classList.toggle('irangate-menu-rtl', normalized === 'fa');
+    return normalized;
+}
+
+// Apply the saved direction before the sidebar is rendered to avoid a left/right flash.
+applySidebarLanguageState();
 
 function sidebarTr(key, language = getSidebarLanguage()) {
     const dictionary = IRANGATE_SIDEBAR_I18N[language] || IRANGATE_SIDEBAR_I18N.en;
@@ -156,19 +177,41 @@ function createSidebarLanguageButton(language) {
 
 async function toggleSidebarLanguage(event) {
     if (event) { event.preventDefault(); event.stopPropagation(); }
-    const next = getSidebarLanguage() === 'fa' ? 'en' : 'fa';
-    localStorage.setItem('irangate_sidebar_language', next);
+
+    const next = persistSidebarLanguage(getSidebarLanguage() === 'fa' ? 'en' : 'fa');
+    applySidebarLanguageState(next);
+
     const currentSidebar = document.getElementById('sidebar');
     const wasOpen = Boolean(currentSidebar && currentSidebar.classList.contains('open'));
-    const activePage = window.irangateSidebarActivePage || (currentSidebar && currentSidebar.dataset.activePage) || 'dashboard';
+    const activePage = window.irangateSidebarActivePage ||
+        (currentSidebar && currentSidebar.dataset.activePage) ||
+        'dashboard';
+
     await initSidebar(activePage);
+
     if (wasOpen && window.innerWidth <= 1024) {
         const sidebar = document.getElementById('sidebar');
         const overlay = document.querySelector('.sidebar-overlay');
         if (sidebar) sidebar.classList.add('open');
         if (overlay) overlay.classList.add('active');
     }
+
+    window.dispatchEvent(new CustomEvent('irangate:language-changed', {
+        detail: { language: next }
+    }));
 }
+
+window.getIranGateLanguage = getSidebarLanguage;
+window.setIranGateLanguage = async function setIranGateLanguage(language) {
+    const normalized = persistSidebarLanguage(language);
+    applySidebarLanguageState(normalized);
+    const currentSidebar = document.getElementById('sidebar');
+    const activePage = window.irangateSidebarActivePage ||
+        (currentSidebar && currentSidebar.dataset.activePage) ||
+        'dashboard';
+    await initSidebar(activePage);
+    return normalized;
+};
 
 
 function createSidebar(activePage) {
