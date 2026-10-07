@@ -10,7 +10,6 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/amiridev-org/irangate-ov/pkg/utils"
@@ -45,128 +43,6 @@ func readEnvOrDefault(key, def string) string {
 		return def
 	}
 	return v
-}
-
-
-// bindWebPanelListener reserves the HTTP port before any startup worker runs.
-// Several workers execute system/CLI helpers during their first reconciliation.
-// Reserving the socket first prevents a helper or accidental second panel
-// process from winning the startup race and forcing the systemd process into
-// EADDRINUSE/restart loops.
-func bindWebPanelListener(portStr string) net.Listener {
-	unixSocket := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET"))
-	if unixSocket != "" {
-		if !filepath.IsAbs(unixSocket) {
-			log.Fatalf("WEBPANEL_UNIX_SOCKET must be an absolute path: %s", unixSocket)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(unixSocket), 0755); err != nil {
-			log.Fatalf("Failed to create web panel socket directory: %v", err)
-		}
-
-		// A Unix socket file can survive an unclean shutdown even though no
-		// process owns it. Removing the stale filesystem entry is safe after
-		// the single-instance lock has been acquired.
-		if err := os.Remove(unixSocket); err != nil && !os.IsNotExist(err) {
-			log.Fatalf("Failed to remove stale web panel socket %s: %v", unixSocket, err)
-		}
-
-		listener, err := net.Listen("unix", unixSocket)
-		if err != nil {
-			log.Fatalf("Failed to bind web panel Unix socket %s: %v", unixSocket, err)
-		}
-
-		// nginx usually runs as www-data while the panel runs as root. The
-		// API remains authenticated; this mode only grants local socket access.
-		if err := os.Chmod(unixSocket, 0666); err != nil {
-			_ = listener.Close()
-			_ = os.Remove(unixSocket)
-			log.Fatalf("Failed to set permissions on web panel Unix socket %s: %v", unixSocket, err)
-		}
-
-		log.Printf("✅ Web panel Unix socket reserved: %s", unixSocket)
-		return listener
-	}
-
-	if _, err := strconv.Atoi(portStr); err != nil {
-		log.Fatalf("Invalid WEBPANEL_PORT: %s", portStr)
-	}
-
-	bindHost := strings.TrimSpace(os.Getenv("WEBPANEL_BIND_HOST"))
-	addr := ":" + portStr
-	network := "tcp"
-
-	if bindHost != "" {
-		addr = net.JoinHostPort(bindHost, portStr)
-		if ip := net.ParseIP(bindHost); ip != nil && ip.To4() != nil {
-			network = "tcp4"
-		}
-	}
-
-	const (
-		listenAttempts = 40
-		listenDelay    = 250 * time.Millisecond
-	)
-
-	var listener net.Listener
-	var listenErr error
-
-	for attempt := 1; attempt <= listenAttempts; attempt++ {
-		listener, listenErr = net.Listen(network, addr)
-		if listenErr == nil {
-			log.Printf("✅ Web panel listener reserved on %s before startup workers", addr)
-			return listener
-		}
-
-		if attempt == 1 || attempt%8 == 0 || attempt == listenAttempts {
-			log.Printf(
-				"Web panel endpoint %s unavailable before worker startup (attempt %d/%d): %v",
-				addr,
-				attempt,
-				listenAttempts,
-				listenErr,
-			)
-		}
-
-		if attempt < listenAttempts {
-			time.Sleep(listenDelay)
-		}
-	}
-
-	log.Fatalf(
-		"Failed to reserve web panel endpoint %s after %d attempts: %v",
-		addr,
-		listenAttempts,
-		listenErr,
-	)
-
-	return nil
-}
-
-// acquireWebPanelInstanceLock guarantees that only one long-running web-panel
-// process can exist on the host. The admin credential sync subcommand bypasses
-// this lock so installation/credential maintenance can still run while the
-// service is online.
-func acquireWebPanelInstanceLock() *os.File {
-	const lockPath = "/run/irangate-webpanel.lock"
-
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		log.Fatalf("Failed to open web panel instance lock %s: %v", lockPath, err)
-	}
-
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = lockFile.Close()
-		log.Fatalf("Another irangate-webpanel instance is already running: %v", err)
-	}
-
-	if err := lockFile.Truncate(0); err == nil {
-		_, _ = lockFile.Seek(0, 0)
-		_, _ = fmt.Fprintf(lockFile, "%d\n", os.Getpid())
-	}
-
-	log.Printf("✅ Web panel single-instance lock acquired (pid=%d)", os.Getpid())
-	return lockFile
 }
 
 type Admin struct {
@@ -4509,12 +4385,6 @@ func main() {
 		return
 	}
 
-	instanceLock := acquireWebPanelInstanceLock()
-	defer func() {
-		_ = syscall.Flock(int(instanceLock.Fd()), syscall.LOCK_UN)
-		_ = instanceLock.Close()
-	}()
-
 	if err := initDatabases(); err != nil {
 		log.Fatal("Failed to initialize databases:", err)
 	}
@@ -4528,20 +4398,6 @@ func main() {
 			migrated.Clients,
 		)
 	}
-
-	// Critical ordering: reserve the web-panel socket BEFORE starting any
-	// background worker. Some first-run reconciliation paths execute external
-	// IranGate helpers. If a helper accidentally starts another panel process,
-	// the authoritative systemd process already owns the HTTP port and remains
-	// healthy instead of losing the bind race.
-	portStr := readEnvOrDefault("WEBPANEL_PORT", "8080")
-	listener := bindWebPanelListener(portStr)
-	defer func() {
-		_ = listener.Close()
-		if socketPath := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET")); socketPath != "" {
-			_ = os.Remove(socketPath)
-		}
-	}()
 
 	go hub.run()
 	go startStatsBroadcaster()
@@ -4576,6 +4432,10 @@ func main() {
 	}
 	if len(basePath) > 1 && strings.HasSuffix(basePath, "/") {
 		basePath = strings.TrimRight(basePath, "/")
+	}
+	portStr := readEnvOrDefault("WEBPANEL_PORT", "8080")
+	if _, err := strconv.Atoi(portStr); err != nil {
+		log.Fatalf("Invalid WEBPANEL_PORT: %s", portStr)
 	}
 	staticDir := readEnvOrDefault("WEBPANEL_STATIC_DIR", "/opt/irangate/webpanel/frontend")
 	rootRouter := mux.NewRouter()
@@ -4762,21 +4622,14 @@ func main() {
 		handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}),
 	)(rootRouter)
 	log.Println("🚀 IranGate Web Panel API Starting...")
-	if socketPath := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET")); socketPath != "" {
-		log.Printf("📍 API Server: unix://%s", socketPath)
-	} else {
-		bindHost := strings.TrimSpace(os.Getenv("WEBPANEL_BIND_HOST"))
-		if bindHost == "" {
-			bindHost = "0.0.0.0"
-		}
-		log.Printf("📍 API Server: http://%s:%s", bindHost, portStr)
-	}
+	log.Printf("📍 API Server: http://localhost:%s", portStr)
 	log.Println("🔐 Default Login: configured via env or admin/admin123")
 	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin") == "admin123" {
 		log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
 	}
-	if err := http.Serve(listener, corsHandler); err != nil && err != http.ErrServerClosed {
-		log.Fatal("Web panel HTTP server stopped:", err)
+	addr := ":" + portStr
+	if err := http.ListenAndServe(addr, corsHandler); err != nil {
+		log.Fatal("Failed to start server:", err)
 	}
 }
 func getCurrentTrafficHandler(w http.ResponseWriter, r *http.Request) {
