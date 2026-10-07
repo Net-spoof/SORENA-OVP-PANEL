@@ -40,6 +40,28 @@
         });
     }
 
+    function installTranslatedDialogs() {
+        if (window.__irangateI18nDialogsInstalled) return;
+        window.__irangateI18nDialogsInstalled = true;
+
+        const nativeAlert = window.alert.bind(window);
+        const nativeConfirm = window.confirm.bind(window);
+        const nativePrompt = window.prompt.bind(window);
+
+        window.alert = message => nativeAlert(
+            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message
+        );
+
+        window.confirm = message => nativeConfirm(
+            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message
+        );
+
+        window.prompt = (message, defaultValue) => nativePrompt(
+            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message,
+            defaultValue
+        );
+    }
+
     window.IranGateI18n = Object.freeze({
                 disabled: true,
                 getLanguage: () => 'en',
@@ -326,7 +348,23 @@
         // User management
         'User Management':'مدیریت کاربران مدیریتی','Manage admin users and roles':'مدیریت کاربران مدیر و نقش‌ها',
         'Add User':'افزودن کاربر','Add New User':'افزودن کاربر جدید','Admin - Full Access':'مدیر - دسترسی کامل',
-        'Moderator - Manage Clients':'ناظر - مدیریت کاربران','Viewer - Read Only':'مشاهده‌گر - فقط خواندنی'
+        'Moderator - Manage Clients':'ناظر - مدیریت کاربران','Viewer - Read Only':'مشاهده‌گر - فقط خواندنی',
+
+        // Remaining shared/static labels found by the full-page translation audit
+        'User':'کاربر','Client':'کاربر','Cipher':'رمزنگاری','Ping':'پینگ','Port':'پورت',
+        'loading...':'در حال بارگذاری...','REMAINING':'باقی‌مانده','single':'تکی','failover':'Failover',
+        'Selected Inbound':'ورودی انتخاب‌شده','Mode / Strategy':'حالت / استراتژی','Active Route':'مسیر فعال',
+        'Outbound selector for this inbound':'انتخاب‌گر خروجی برای این ورودی',
+        'No client data available.':'داده‌ای از کاربران موجود نیست.',
+        'Untick a node to remove it from this client\'s subscription and access list.':'برای حذف نود از اشتراک و فهرست دسترسی این کاربر، تیک آن را بردارید.',
+        'Revoke old Master/Node credentials, rotate IKEv2 password, and issue a new subscription token':'اطلاعات قبلی Master/Node را لغو، رمز IKEv2 را تغییر و توکن اشتراک جدید صادر می‌کند',
+        '- Get OpenVPN config':'- دریافت کانفیگ OpenVPN','- Server statistics':'- آمار سرور',
+        '- Server status':'- وضعیت سرور','- Restart OpenVPN':'- راه‌اندازی مجدد OpenVPN',
+        '- List admin users':'- فهرست مدیران','- Create admin user':'- ساخت مدیر',
+        '- List client groups':'- فهرست گروه‌های کاربران','- Create group':'- ساخت گروه',
+        '- Export backup':'- خروجی بکاپ','- Import backup':'- واردکردن بکاپ',
+        'Like Sanaei: Least Ping is active with sing-box URLTest. Random/RoundRobin/LeastLoad need Xray engine for exact behavior.':'مانند ثنایی: Least Ping با URLTest در sing-box فعال است. حالت‌های Random/RoundRobin/LeastLoad برای رفتار دقیق به موتور Xray نیاز دارند.',
+        '💫 Coming Soon':'💫 به‌زودی'
     });
 
     const titleFA = Object.freeze({
@@ -374,10 +412,29 @@
 
     function dynamicTranslate(value) {
         let out = value;
+
         out = out.replace(/^(\d+)\s+days remaining$/i, '$1 روز باقی‌مانده');
+        out = out.replace(/^(\d+)\s+day\(s\)$/i, '$1 روز');
+        out = out.replace(/^(\d+)\s+days? left$/i, '$1 روز باقی‌مانده');
         out = out.replace(/^(\d+)\s+owned users$/i, '$1 کاربر تحت مدیریت');
         out = out.replace(/^(\d+)\s+selected outbounds$/i, '$1 خروجی انتخاب‌شده');
         out = out.replace(/^Loading\s+(.+)\.\.\.$/i, 'در حال بارگذاری $1...');
+        out = out.replace(/^Updated\s+(.+)$/i, 'به‌روزرسانی: $1');
+        out = out.replace(/^Expires\s+(.+)$/i, 'انقضا: $1');
+        out = out.replace(/^Failed to load\s+(.+)$/i, 'بارگذاری $1 ناموفق بود');
+        out = out.replace(/^Failed to load\s+(.+):$/i, 'بارگذاری $1 ناموفق بود:');
+        out = out.replace(/^Failed to save\s+(.+)$/i, 'ذخیره $1 ناموفق بود');
+        out = out.replace(/^Failed to update\s+(.+)$/i, 'به‌روزرسانی $1 ناموفق بود');
+        out = out.replace(/^Failed to delete\s+(.+)$/i, 'حذف $1 ناموفق بود');
+        out = out.replace(/^Failed to create\s+(.+)$/i, 'ساخت $1 ناموفق بود');
+        out = out.replace(/^No\s+(.+)\s+found\.?$/i, '$1 پیدا نشد');
+        out = out.replace(/^No\s+(.+)\s+configured\.?$/i, '$1 پیکربندی نشده است');
+        out = out.replace(/^No\s+(.+)\s+enabled$/i, '$1 فعالی وجود ندارد');
+        out = out.replace(/^Downloading\s+(.+)$/i, 'در حال دانلود $1');
+        out = out.replace(/^Delete\s+(.+)\?$/i, 'حذف $1؟');
+        out = out.replace(/^Enable\s+(.+)\?$/i, 'فعال‌کردن $1؟');
+        out = out.replace(/^Disable\s+(.+)\?$/i, 'غیرفعال‌کردن $1؟');
+
         return out;
     }
 
@@ -702,6 +759,7 @@
         // One-time/bounded translation only: no MutationObserver, no permanent
         // DOM watcher, and no dependency on sidebar.js.
         setLanguage(getLanguage(), { emit: false });
+        installTranslatedDialogs();
 
         for (const delay of [250, 1500, 5000]) {
             window.setTimeout(() => {
