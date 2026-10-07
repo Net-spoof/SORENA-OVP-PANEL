@@ -1289,6 +1289,10 @@ def main() -> int:
                 "admin.json",
                 "delegated_admins.json",
                 "telegram.json",
+                # Keep the Telegram notification credentials and backup
+                # schedule together with the rest of the panel state.
+                "telegram_config.json",
+                "telegram_backup_schedule.json",
                 "server.json",
                 "subscriptions.json",
                 "users.json",
