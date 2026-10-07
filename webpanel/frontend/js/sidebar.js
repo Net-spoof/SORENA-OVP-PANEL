@@ -122,12 +122,6 @@ function createSidebar(activePage) {
                     <div class="sidebar-logo">
                         <div class="sidebar-logo-icon"><img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg"></div>
                         <span class="sidebar-logo-text">NET SPOOF</span>
-                        <button type="button"
-                            id="irangate-language-toggle"
-                            class="sidebar-language-btn"
-                            onclick="if(window.IranGateI18n){window.IranGateI18n.toggleLanguage();} return false;"
-                            title="فارسی"
-                            aria-label="Change language to Persian">فا</button>
                     </div>
                     <div class="sidebar-user">
                         <div class="flex items-center gap-2">
@@ -178,12 +172,6 @@ function createSidebar(activePage) {
                         <img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg">
                     </div>
                     <span class="sidebar-logo-text">NET SPOOF</span>
-                    <button type="button"
-                            id="irangate-language-toggle"
-                            class="sidebar-language-btn"
-                            onclick="if(window.IranGateI18n){window.IranGateI18n.toggleLanguage();} return false;"
-                            title="فارسی"
-                            aria-label="Change language to Persian">فا</button>
                 </div>
                 <div class="sidebar-user">
                     <div class="flex items-center gap-2">
