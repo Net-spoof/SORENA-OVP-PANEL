@@ -240,14 +240,25 @@ if [[ "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]]; then
     echo
     echo "Testing nginx subscription listener on port $SUBSCRIPTION_PORT..."
 
+    ERROR_LOG="/var/log/nginx/error.log"
+    BEFORE_LINES=0
+    if [[ -f "$ERROR_LOG" ]]; then
+        BEFORE_LINES="$(wc -l < "$ERROR_LOG" 2>/dev/null || echo 0)"
+    fi
+
     PUBLIC_SUB_CODE="$(
-        curl -k -sS             -o /dev/null             -w '%{http_code}'             --max-time 8             "https://127.0.0.1:${SUBSCRIPTION_PORT}/sub/__invalid_test_token__"             2>/dev/null || true
+        curl -k -sS             --resolve "subo.konkuriran.sbs:${SUBSCRIPTION_PORT}:127.0.0.1"             -o /dev/null             -w '%{http_code}'             --max-time 8             "https://subo.konkuriran.sbs:${SUBSCRIPTION_PORT}/sub/__invalid_test_token__"             2>/dev/null || true
     )"
 
     echo "Nginx subscription HTTP: $PUBLIC_SUB_CODE"
 
     if [[ -z "$PUBLIC_SUB_CODE" || "$PUBLIC_SUB_CODE" == "000" || "$PUBLIC_SUB_CODE" == "502" ]]; then
         echo "ERROR: nginx subscription listener is still unhealthy" >&2
+        if [[ -f "$ERROR_LOG" ]]; then
+            echo
+            echo "New nginx error log lines:"
+            tail -n "+$((BEFORE_LINES + 1))" "$ERROR_LOG" 2>/dev/null | tail -80 || true
+        fi
         exit 1
     fi
 fi
