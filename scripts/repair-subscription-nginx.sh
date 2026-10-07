@@ -200,17 +200,55 @@ fi
 
 echo
 echo "Current subscription proxy_pass directives:"
-nginx -T 2>/dev/null |
-    awk '
-        /location[^\n]*\/sub\// { in_sub=1; depth=0 }
-        in_sub {
-            print
-            opens=gsub(/\{/, "{")
-            closes=gsub(/\}/, "}")
-            depth += opens - closes
-            if (depth <= 0 && closes > 0) in_sub=0
-        }
-    ' |
-    grep -E 'location|proxy_pass' || true
+LIVE_SUB_LINES="$(
+    nginx -T 2>/dev/null |
+        awk '
+            /location[^\n]*\/sub\// { in_sub=1; depth=0 }
+            in_sub {
+                print
+                opens=gsub(/\{/, "{")
+                closes=gsub(/\}/, "}")
+                depth += opens - closes
+                if (depth <= 0 && closes > 0) in_sub=0
+            }
+        ' |
+        grep -E 'location|proxy_pass' || true
+)"
+printf '%s\n' "$LIVE_SUB_LINES"
 
-echo "Subscription nginx repair complete."
+EXPECTED_PROXY="proxy_pass http://127.0.0.1:$WEBPANEL_PORT/sub/;"
+if ! grep -Fq "$EXPECTED_PROXY" <<<"$LIVE_SUB_LINES"; then
+    echo "ERROR: live nginx config does not contain expected subscription upstream:" >&2
+    echo "  $EXPECTED_PROXY" >&2
+    exit 1
+fi
+
+echo
+echo "Testing subscription route directly on backend..."
+DIRECT_SUB_CODE="$(
+    curl -sS         -o /dev/null         -w '%{http_code}'         --max-time 5         "http://127.0.0.1:${WEBPANEL_PORT}/sub/__invalid_test_token__"         2>/dev/null || true
+)"
+echo "Direct subscription HTTP: $DIRECT_SUB_CODE"
+
+if [[ -z "$DIRECT_SUB_CODE" || "$DIRECT_SUB_CODE" == "000" || "$DIRECT_SUB_CODE" == "502" ]]; then
+    echo "ERROR: direct backend subscription route is unhealthy" >&2
+    exit 1
+fi
+
+if [[ "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]]; then
+    echo
+    echo "Testing nginx subscription listener on port $SUBSCRIPTION_PORT..."
+
+    PUBLIC_SUB_CODE="$(
+        curl -k -sS             -o /dev/null             -w '%{http_code}'             --max-time 8             "https://127.0.0.1:${SUBSCRIPTION_PORT}/sub/__invalid_test_token__"             2>/dev/null || true
+    )"
+
+    echo "Nginx subscription HTTP: $PUBLIC_SUB_CODE"
+
+    if [[ -z "$PUBLIC_SUB_CODE" || "$PUBLIC_SUB_CODE" == "000" || "$PUBLIC_SUB_CODE" == "502" ]]; then
+        echo "ERROR: nginx subscription listener is still unhealthy" >&2
+        exit 1
+    fi
+fi
+
+echo "Subscription nginx repair complete and verified."
