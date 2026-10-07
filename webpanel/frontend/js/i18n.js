@@ -1,68 +1,16 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V7_COMPLETE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V8_CLEAN
 (() => {
     'use strict';
 
-    // Emergency escape hatch: append ?no_i18n=1 to any panel URL to run the
-    // original English UI without executing translation logic.
+    const STORAGE_KEY = 'irangate_language';
+    const LEGACY_KEY = 'irangate_sidebar_language';
+
     try {
         if (new URLSearchParams(window.location.search).get('no_i18n') === '1') {
-            function startDynamicTranslationObserver() {
-        if (dynamicObserver || !document.body) return;
-
-        const root = document.querySelector('.main-content') || document.body;
-
-        dynamicObserver = new MutationObserver(mutations => {
-            if (getLanguage() !== 'fa') return;
-
-            let hasAddedContent = false;
-            for (const mutation of mutations) {
-                if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
-                    hasAddedContent = true;
-                    break;
-                }
-            }
-            if (!hasAddedContent) return;
-
-            window.clearTimeout(dynamicRefreshTimer);
-            dynamicRefreshTimer = window.setTimeout(() => {
-                if (getLanguage() === 'fa') {
-                    translateTree(root, 'fa', true);
-                    syncControls();
-                }
-            }, 120);
-        });
-
-        // childList only: text/attribute changes made by i18n itself are not
-        // observed, so there is no self-trigger feedback loop.
-        dynamicObserver.observe(root, {
-            subtree: true,
-            childList: true
-        });
-    }
-
-    function installTranslatedDialogs() {
-        if (window.__irangateI18nDialogsInstalled) return;
-        window.__irangateI18nDialogsInstalled = true;
-
-        const nativeAlert = window.alert.bind(window);
-        const nativeConfirm = window.confirm.bind(window);
-        const nativePrompt = window.prompt.bind(window);
-
-        window.alert = message => nativeAlert(
-            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message
-        );
-
-        window.confirm = message => nativeConfirm(
-            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message
-        );
-
-        window.prompt = (message, defaultValue) => nativePrompt(
-            getLanguage() === 'fa' ? translateValue(String(message ?? '')) : message,
-            defaultValue
-        );
-    }
-
-    window.IranGateI18n = Object.freeze({
+            document.documentElement.lang = 'en';
+            document.documentElement.dir = 'ltr';
+            document.documentElement.dataset.irangateLang = 'en';
+            window.IranGateI18n = Object.freeze({
                 disabled: true,
                 getLanguage: () => 'en',
                 setLanguage: () => 'en',
@@ -74,13 +22,7 @@
             });
             return;
         }
-    } catch (_) {
-        // If URL parsing is unavailable for any reason, continue normally.
-    }
-
-    const STORAGE_KEY = 'irangate_language';
-    const LEGACY_KEY = 'irangate_sidebar_language';
-
+    } catch (_) {}
     const FA = Object.freeze({
         // Global/common
         'Dashboard':'داشبورد','Clients':'کاربران','Analytics':'آمار و تحلیل','Users':'کاربران مدیریتی',
@@ -386,21 +328,40 @@
         'NET SPOOF - Login':'NET SPOOF - ورود'
     });
 
+
+    const EXTRA_FA = Object.freeze({
+        'Creation timeline window':'بازه خط زمانی ایجاد',
+        'Analytics summary':'خلاصه آمار',
+        'Tabs':'تب‌ها',
+        'Search logs...':'جستجوی لاگ‌ها...',
+        '0 2 * * * (daily at 2 AM)':'0 2 * * * (روزانه ساعت ۲ بامداد)',
+        "Reset used traffic to 0 - فقط اگر می‌خواهی مصرف قبلی پاک شود تیک بزن":'بازنشانی ترافیک مصرف‌شده به ۰ - فقط اگر می‌خواهید مصرف قبلی پاک شود تیک بزنید',
+        'For bot test: https://api.telegram.org/botTOKEN/getMe':'برای تست ربات: https://api.telegram.org/botTOKEN/getMe',
+        'Something amazing is coming:':'قابلیت‌های جذابی در راه است:',
+        'Automatic tunnel creation based on traffic patterns':'ساخت خودکار تونل بر اساس الگوی ترافیک',
+        'Intelligent routing rule generation':'ساخت هوشمند قوانین مسیریابی',
+        'Automated client provisioning':'ساخت و آماده‌سازی خودکار کاربران',
+        'Dynamic bandwidth allocation':'تخصیص پویای پهنای باند',
+        '🎁 Stay tuned for the surprise!':'🎁 منتظر قابلیت‌های جدید باشید!',
+        '💫 Wait for the surprise!':'💫 منتظر قابلیت جدید باشید!',
+        'Got it':'متوجه شدم'
+    });
+
     const originalText = new WeakMap();
     const renderedText = new WeakMap();
     const originalAttrs = new WeakMap();
     const renderedAttrs = new WeakMap();
-    let applying = false;
-    let dynamicObserver = null;
-    let dynamicRefreshTimer = null;
+    let observer = null;
 
     function normalizeLang(lang) {
         return lang === 'fa' ? 'fa' : 'en';
     }
 
     function getLanguage() {
-        const value = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_KEY);
-        return normalizeLang(value);
+        return normalizeLang(
+            localStorage.getItem(STORAGE_KEY) ||
+            localStorage.getItem(LEGACY_KEY)
+        );
     }
 
     function rememberLanguage(lang) {
@@ -412,50 +373,34 @@
 
     function dynamicTranslate(value) {
         let out = value;
-
         out = out.replace(/^(\d+)\s+days remaining$/i, '$1 روز باقی‌مانده');
-        out = out.replace(/^(\d+)\s+day\(s\)$/i, '$1 روز');
-        out = out.replace(/^(\d+)\s+days? left$/i, '$1 روز باقی‌مانده');
         out = out.replace(/^(\d+)\s+owned users$/i, '$1 کاربر تحت مدیریت');
         out = out.replace(/^(\d+)\s+selected outbounds$/i, '$1 خروجی انتخاب‌شده');
         out = out.replace(/^Loading\s+(.+)\.\.\.$/i, 'در حال بارگذاری $1...');
-        out = out.replace(/^Updated\s+(.+)$/i, 'به‌روزرسانی: $1');
-        out = out.replace(/^Expires\s+(.+)$/i, 'انقضا: $1');
-        out = out.replace(/^Failed to load\s+(.+)$/i, 'بارگذاری $1 ناموفق بود');
-        out = out.replace(/^Failed to load\s+(.+):$/i, 'بارگذاری $1 ناموفق بود:');
-        out = out.replace(/^Failed to save\s+(.+)$/i, 'ذخیره $1 ناموفق بود');
-        out = out.replace(/^Failed to update\s+(.+)$/i, 'به‌روزرسانی $1 ناموفق بود');
-        out = out.replace(/^Failed to delete\s+(.+)$/i, 'حذف $1 ناموفق بود');
-        out = out.replace(/^Failed to create\s+(.+)$/i, 'ساخت $1 ناموفق بود');
-        out = out.replace(/^No\s+(.+)\s+found\.?$/i, '$1 پیدا نشد');
-        out = out.replace(/^No\s+(.+)\s+configured\.?$/i, '$1 پیکربندی نشده است');
-        out = out.replace(/^No\s+(.+)\s+enabled$/i, '$1 فعالی وجود ندارد');
-        out = out.replace(/^Downloading\s+(.+)$/i, 'در حال دانلود $1');
-        out = out.replace(/^Delete\s+(.+)\?$/i, 'حذف $1؟');
-        out = out.replace(/^Enable\s+(.+)\?$/i, 'فعال‌کردن $1؟');
-        out = out.replace(/^Disable\s+(.+)\?$/i, 'غیرفعال‌کردن $1؟');
-
+        out = out.replace(/^(\d+)\s+users?$/i, '$1 کاربر');
         return out;
     }
 
     function translateValue(value) {
-        const trimmed = String(value).trim();
-        if (!trimmed) return value;
+        const raw = String(value);
+        const trimmed = raw.trim();
+        if (!trimmed) return raw;
 
-        const exact = FA[trimmed];
+        const exact = FA[trimmed] || EXTRA_FA[trimmed];
         const translated = exact || dynamicTranslate(trimmed);
-        if (translated === trimmed) return value;
+        if (translated === trimmed) return raw;
 
-        const leading = String(value).match(/^\s*/)?.[0] || '';
-        const trailing = String(value).match(/\s*$/)?.[0] || '';
+        const leading = raw.match(/^\s*/)?.[0] || '';
+        const trailing = raw.match(/\s*$/)?.[0] || '';
         return leading + translated + trailing;
     }
 
     function skipTextNode(node) {
-        const p = node.parentElement;
-        if (!p) return true;
-        if (p.closest('script,style,code,pre,textarea,[data-i18n-skip="true"]')) return true;
-        return false;
+        const parent = node.parentElement;
+        if (!parent) return true;
+        return Boolean(parent.closest(
+            'script,style,code,pre,textarea,[data-i18n-skip="true"],#irangate-language-toggle'
+        ));
     }
 
     function processText(node, lang, refreshOriginal = false) {
@@ -472,23 +417,21 @@
         const source = originalText.get(node);
         const target = lang === 'fa' ? translateValue(source) : source;
 
-        if (node.nodeValue !== target) {
-            node.nodeValue = target;
-        }
+        if (node.nodeValue !== target) node.nodeValue = target;
         renderedText.set(node, target);
     }
 
-    function attrState(element) {
+    function attrMaps(element) {
         if (!originalAttrs.has(element)) originalAttrs.set(element, new Map());
         if (!renderedAttrs.has(element)) renderedAttrs.set(element, new Map());
         return [originalAttrs.get(element), renderedAttrs.get(element)];
     }
 
     function processAttribute(element, attr, lang, refreshOriginal = false) {
-        if (!element.hasAttribute(attr)) return;
-        if (element.closest('[data-i18n-skip="true"]')) return;
+        if (!(element instanceof Element) || !element.hasAttribute(attr)) return;
+        if (element.closest('[data-i18n-skip="true"],#irangate-language-toggle')) return;
 
-        const [original, rendered] = attrState(element);
+        const [original, rendered] = attrMaps(element);
         const current = element.getAttribute(attr) ?? '';
 
         if (refreshOriginal) {
@@ -520,33 +463,31 @@
     function translateTree(root, lang = getLanguage(), refreshOriginal = false) {
         if (!root) return;
 
-        applying = true;
-        try {
-            if (root.nodeType === Node.TEXT_NODE) {
-                processText(root, lang, refreshOriginal);
-                return;
+        if (root.nodeType === Node.TEXT_NODE) {
+            processText(root, lang, refreshOriginal);
+            return;
+        }
+
+        if (!(root instanceof Element) && root !== document) return;
+
+        if (root instanceof Element) processElement(root, lang, refreshOriginal);
+
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT
+        );
+
+        let node;
+        while ((node = walker.nextNode())) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                processText(node, lang, refreshOriginal);
+            } else {
+                processElement(node, lang, refreshOriginal);
             }
-
-            if (!(root instanceof Element) && root !== document) return;
-
-            if (root instanceof Element) processElement(root, lang, refreshOriginal);
-
-            const walker = document.createTreeWalker(
-                root,
-                NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT
-            );
-
-            let node;
-            while ((node = walker.nextNode())) {
-                if (node.nodeType === Node.TEXT_NODE) processText(node, lang, refreshOriginal);
-                else processElement(node, lang, refreshOriginal);
-            }
-        } finally {
-            applying = false;
         }
     }
 
-    function injectRTLStyles() {
+    function injectStyles() {
         if (document.getElementById('irangate-i18n-styles')) return;
 
         const style = document.createElement('style');
@@ -561,8 +502,22 @@
             html[dir="rtl"] .sidebar {
                 left: auto !important;
                 right: 0 !important;
+                direction: rtl;
                 border-right: 0 !important;
                 border-left: 1px solid var(--sidebar-border, rgba(100,255,218,.2)) !important;
+            }
+            html[dir="rtl"] .sidebar-logo { direction: ltr; }
+            html[dir="rtl"] .sidebar-user,
+            html[dir="rtl"] .sidebar-menu,
+            html[dir="rtl"] .menu-section-title,
+            html[dir="rtl"] .menu-item,
+            html[dir="rtl"] .logout-btn {
+                direction: rtl;
+                text-align: right;
+            }
+            html[dir="rtl"] .menu-item::before {
+                left: auto !important;
+                right: 0 !important;
             }
             html[dir="rtl"] .sidebar-toggle {
                 left: auto !important;
@@ -573,23 +528,13 @@
                 margin-left: 0 !important;
                 margin-right: 80px !important;
             }
-            @media (max-width: 1024px) {
-                html[dir="rtl"] .sidebar {
-                    transform: translateX(100%) !important;
-                }
-                html[dir="rtl"] .sidebar.open {
-                    transform: translateX(0) !important;
-                }
-                html[dir="rtl"] .main-content {
-                    margin-left: 0 !important;
-                    margin-right: 0 !important;
-                }
-            }
             html[dir="rtl"] .text-left { text-align: right !important; }
             html[dir="rtl"] .text-right { text-align: left !important; }
+
             html[dir="rtl"] input:not([type="url"]):not([type="number"]):not(.font-mono),
             html[dir="rtl"] select,
             html[dir="rtl"] textarea { text-align: right; }
+
             html[dir="rtl"] code,
             html[dir="rtl"] pre,
             html[dir="rtl"] .font-mono,
@@ -603,47 +548,51 @@
                 text-align: left !important;
                 unicode-bidi: plaintext;
             }
-            #irangate-language-toggle.sidebar-language-btn {
-                margin-inline-start: auto;
+
+            #irangate-language-toggle {
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                min-width: 38px;
+                min-width: 54px;
                 height: 34px;
-                padding: 0 10px;
+                padding: 0 9px;
+                margin-inline-start: auto;
+                border: 1px solid rgba(100,255,218,.42);
                 border-radius: 9px;
-                border: 1px solid rgba(100,255,218,.35);
-                background: rgba(17,34,64,.88);
+                background: rgba(17,34,64,.92);
                 color: #e6f1ff;
                 font-size: 12px;
                 font-weight: 800;
                 line-height: 1;
                 cursor: pointer;
+                white-space: nowrap;
                 flex: 0 0 auto;
+                box-shadow: 0 3px 14px rgba(0,0,0,.18);
             }
-            #irangate-language-toggle.sidebar-language-btn:hover {
-                border-color: rgba(100,255,218,.8);
-                background: rgba(30,58,95,.95);
+            #irangate-language-toggle:hover {
+                border-color: rgba(100,255,218,.9);
+                background: rgba(30,58,95,.98);
             }
-            .irangate-language-floating {
+            #irangate-language-toggle.irangate-language-floating {
                 position: fixed;
                 top: 16px;
                 inset-inline-end: 16px;
                 z-index: 9999;
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                min-height: 38px;
-                padding: 7px 12px;
-                border-radius: 10px;
-                border: 1px solid rgba(100,255,218,.35);
-                background: rgba(17,34,64,.95);
-                color: #e6f1ff;
-                box-shadow: 0 6px 24px rgba(0,0,0,.25);
-                cursor: pointer;
-                font-weight: 700;
+                margin: 0;
             }
-            .irangate-language-floating:hover { border-color: rgba(100,255,218,.8); }
+
+            @media (max-width: 1024px) {
+                html[dir="rtl"] .sidebar {
+                    transform: translateX(100%) !important;
+                }
+                html[dir="rtl"] .sidebar.open {
+                    transform: translateX(0) !important;
+                }
+                html[dir="rtl"] .main-content {
+                    margin-left: 0 !important;
+                    margin-right: 0 !important;
+                }
+            }
         `;
         document.head.appendChild(style);
     }
@@ -653,29 +602,40 @@
         root.lang = lang === 'fa' ? 'fa' : 'en';
         root.dir = lang === 'fa' ? 'rtl' : 'ltr';
         root.dataset.irangateLang = lang;
-        root.classList.toggle('irangate-menu-rtl', lang === 'fa');
     }
 
     function syncTitle(lang) {
-        if (!document.title) return;
         if (!document.documentElement.dataset.irangateOriginalTitle) {
-            document.documentElement.dataset.irangateOriginalTitle = document.title;
+            document.documentElement.dataset.irangateOriginalTitle = document.title || '';
         }
         const original = document.documentElement.dataset.irangateOriginalTitle;
         document.title = lang === 'fa' ? (titleFA[original] || original) : original;
     }
 
-    function ensureLanguageControl() {
-        let button = document.getElementById('irangate-language-toggle');
-        const sidebarLogo = document.querySelector('.sidebar-logo');
+    function syncControl() {
+        const button = document.getElementById('irangate-language-toggle');
+        if (!button) return;
 
-        // Prefer the requested location beside NET SPOOF. On the login page or
-        // before the sidebar is rendered, fall back to a small floating button.
+        const lang = getLanguage();
+        const text = lang === 'fa' ? '🌐 EN' : '🌐 فا';
+        const title = lang === 'fa' ? 'English' : 'فارسی';
+
+        if (button.textContent !== text) button.textContent = text;
+        if (button.title !== title) button.title = title;
+        button.setAttribute(
+            'aria-label',
+            lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian'
+        );
+    }
+
+    function ensureLanguageControl() {
+        if (!document.body) return null;
+
+        let button = document.getElementById('irangate-language-toggle');
         if (!button) {
             button = document.createElement('button');
             button.id = 'irangate-language-toggle';
             button.type = 'button';
-            button.className = 'sidebar-language-btn';
             button.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -683,38 +643,29 @@
             });
         }
 
-        if (sidebarLogo) {
-            if (button.parentElement !== sidebarLogo) sidebarLogo.appendChild(button);
-            button.className = 'sidebar-language-btn';
-        } else if (document.body && button.parentElement !== document.body) {
+        const logo = document.querySelector('.sidebar-logo');
+
+        if (logo) {
+            if (button.parentElement !== logo) logo.appendChild(button);
+            button.className = '';
+        } else {
+            if (button.parentElement !== document.body) document.body.appendChild(button);
             button.className = 'irangate-language-floating';
-            document.body.appendChild(button);
         }
 
-        syncControls();
+        syncControl();
         return button;
-    }
-
-    function syncControls() {
-        const lang = getLanguage();
-        const button = document.getElementById('irangate-language-toggle');
-        if (!button) return;
-
-        const desiredText = lang === 'fa' ? 'EN' : 'فا';
-        const desiredTitle = lang === 'fa' ? 'English' : 'فارسی';
-        const desiredAria = lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian';
-
-        if (button.textContent !== desiredText) button.textContent = desiredText;
-        if (button.getAttribute('title') !== desiredTitle) button.setAttribute('title', desiredTitle);
-        if (button.getAttribute('aria-label') !== desiredAria) button.setAttribute('aria-label', desiredAria);
     }
 
     function setLanguage(lang, options = {}) {
         const normalized = rememberLanguage(lang);
         syncDirection(normalized);
         syncTitle(normalized);
-        translateTree(document.body, normalized, false);
-        syncControls();
+
+        if (document.body) translateTree(document.body, normalized, false);
+
+        ensureLanguageControl();
+        syncControl();
 
         if (options.emit !== false) {
             window.dispatchEvent(new CustomEvent('irangate:language-changed', {
@@ -729,48 +680,83 @@
         return setLanguage(getLanguage() === 'fa' ? 'en' : 'fa');
     }
 
-
-    function refreshCurrentLanguage() {
+    function refresh() {
         const lang = getLanguage();
-        translateTree(document.body, lang, true);
-        syncControls();
+        if (document.body) translateTree(document.body, lang, true);
+        ensureLanguageControl();
+        syncControl();
         return lang;
     }
 
+    function startObserver() {
+        if (observer || !document.body) return;
+
+        observer = new MutationObserver(mutations => {
+            const lang = getLanguage();
+
+            for (const mutation of mutations) {
+                if (mutation.type !== 'childList') continue;
+
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType !== Node.ELEMENT_NODE &&
+                        node.nodeType !== Node.TEXT_NODE) continue;
+
+                    const element = node.nodeType === Node.ELEMENT_NODE
+                        ? node
+                        : node.parentElement;
+
+                    if (element && element.closest &&
+                        element.closest('#irangate-language-toggle')) {
+                        continue;
+                    }
+
+                    translateTree(node, lang, true);
+
+                    if (node.nodeType === Node.ELEMENT_NODE &&
+                        (node.matches?.('.sidebar, .sidebar-logo') ||
+                         node.querySelector?.('.sidebar-logo'))) {
+                        ensureLanguageControl();
+                    }
+                }
+            }
+
+            syncControl();
+        });
+
+        // Only child additions/removals are observed. i18n changes text-node
+        // values and attributes, so its own translations do not retrigger this.
+        observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: false,
+            attributes: false
+        });
+    }
 
     window.IranGateI18n = Object.freeze({
         getLanguage,
         setLanguage,
         toggleLanguage,
-        translateTree,
-        refresh: refreshCurrentLanguage,
+        refresh,
         ensureControl: ensureLanguageControl,
+        translateTree,
         t(value) {
             return getLanguage() === 'fa' ? translateValue(value) : value;
         }
     });
 
-    // Apply direction immediately, before DOMContentLoaded, to avoid LTR/RTL flash.
-    injectRTLStyles();
+    injectStyles();
     syncDirection(getLanguage());
     syncTitle(getLanguage());
 
-    const boot = () => {
-        // One-time/bounded translation only: no MutationObserver, no permanent
-        // DOM watcher, and no dependency on sidebar.js.
+    function boot() {
         setLanguage(getLanguage(), { emit: false });
-        installTranslatedDialogs();
+        startObserver();
 
-        for (const delay of [250, 1500, 5000]) {
-            window.setTimeout(() => {
-                if (!document.body) return;
-                ensureLanguageControl();
-                refreshCurrentLanguage();
-            }, delay);
+        for (const delay of [300, 1200, 3500]) {
+            window.setTimeout(refresh, delay);
         }
-
-        startDynamicTranslationObserver();
-    };
+    }
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', boot, { once: true });
