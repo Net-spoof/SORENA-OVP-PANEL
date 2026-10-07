@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V2
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V3
 (() => {
     'use strict';
 
@@ -299,7 +299,6 @@
     const originalAttrs = new WeakMap();
     const renderedAttrs = new WeakMap();
     let applying = false;
-    let observer = null;
 
     function normalizeLang(lang) {
         return lang === 'fa' ? 'fa' : 'en';
@@ -509,9 +508,7 @@
         document.querySelectorAll('.sidebar-language-btn').forEach(btn => {
             const span = btn.querySelector('span');
 
-            // Idempotent writes are essential here: this function is also
-            // called from MutationObserver. Writing an unchanged value would
-            // create another mutation and can lock the page in an observer loop.
+            // Keep writes idempotent so repeated bounded refreshes stay cheap.
             if (span && span.textContent !== desiredText) {
                 span.textContent = desiredText;
             }
@@ -570,78 +567,21 @@
         return setLanguage(getLanguage() === 'fa' ? 'en' : 'fa');
     }
 
-    function startObserver() {
-        if (observer || !document.body) return;
 
-        observer = new MutationObserver(mutations => {
-            if (applying) return;
-            const lang = getLanguage();
-            let sidebarStructureChanged = false;
-
-            applying = true;
-            try {
-                for (const mutation of mutations) {
-                    const targetElement = mutation.target instanceof Element
-                        ? mutation.target
-                        : mutation.target.parentElement;
-
-                    const isLanguageControl = Boolean(
-                        targetElement &&
-                        targetElement.closest &&
-                        targetElement.closest('.sidebar-language-btn, #irangate-language-floating')
-                    );
-
-                    if (mutation.type === 'characterData') {
-                        if (!isLanguageControl) {
-                            processText(mutation.target, lang, true);
-                        }
-                        continue;
-                    }
-
-                    if (mutation.type === 'attributes') {
-                        if (!isLanguageControl) {
-                            processAttribute(mutation.target, mutation.attributeName, lang, true);
-                        }
-                        continue;
-                    }
-
-                    for (const node of mutation.addedNodes) {
-                        if (node instanceof Element &&
-                            (node.matches('.sidebar, .sidebar-language-btn') ||
-                             node.querySelector?.('.sidebar-language-btn'))) {
-                            sidebarStructureChanged = true;
-                        }
-
-                        const nodeIsLanguageControl = node instanceof Element &&
-                            (node.matches('.sidebar-language-btn, #irangate-language-floating') ||
-                             node.closest?.('.sidebar-language-btn, #irangate-language-floating'));
-
-                        if (!nodeIsLanguageControl) {
-                            translateTree(node, lang, true);
-                        }
-                    }
-                }
-            } finally {
-                applying = false;
-            }
-
-            if (sidebarStructureChanged) syncControls();
-        });
-
-        observer.observe(document.body, {
-            subtree: true,
-            childList: true,
-            characterData: true,
-            attributes: true,
-            attributeFilter: ['placeholder', 'title', 'aria-label', 'value']
-        });
+    function refreshCurrentLanguage() {
+        const lang = getLanguage();
+        translateTree(document.body, lang, true);
+        syncControls();
+        return lang;
     }
+
 
     window.IranGateI18n = Object.freeze({
         getLanguage,
         setLanguage,
         toggleLanguage,
         translateTree,
+        refresh: refreshCurrentLanguage,
         t(value) {
             return getLanguage() === 'fa' ? translateValue(value) : value;
         }
@@ -653,8 +593,19 @@
     syncTitle(getLanguage());
 
     const boot = () => {
+        // Translate once at startup. Do NOT attach a MutationObserver here:
+        // pages such as Nodes rebuild large tables and cards asynchronously,
+        // and observing every DOM mutation can starve the browser main thread.
         setLanguage(getLanguage(), { emit: false });
-        startObserver();
+
+        // Bounded one-shot refreshes catch normal async panel rendering without
+        // creating a permanent observer or any feedback loop.
+        for (const delay of [400, 1200, 3000]) {
+            window.setTimeout(() => {
+                if (document.body) refreshCurrentLanguage();
+            }, delay);
+        }
+
         window.setTimeout(() => {
             syncControls();
             ensureFloatingControl();
