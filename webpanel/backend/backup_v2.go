@@ -52,9 +52,12 @@ func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	defer backupExecutionMu.Unlock()
 
-	backupPath, err := runBackupV2Export()
+	backupPath, err := func() (string, error) {
+		defer backupExecutionMu.Unlock()
+		return runBackupV2Export()
+	}()
+
 	if err != nil {
 		sendError(
 			w,
