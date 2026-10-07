@@ -378,17 +378,16 @@ func createTelegramScheduledBackup() (
 	return destination, nil
 }
 
-func sendTelegramBackupDocument(
+const telegramBackupMaxPartBytes int64 = 45 * 1024 * 1024
+
+func sendTelegramBackupPart(
 	credentials telegramBackupCredentials,
 	backupPath string,
+	offset int64,
+	length int64,
+	uploadName string,
+	caption string,
 ) error {
-	info, err := os.Stat(backupPath)
-	if err != nil {
-		return err
-	}
-
-	hostname, _ := os.Hostname()
-
 	reader, writer := io.Pipe()
 	multipartWriter := multipart.NewWriter(writer)
 
@@ -397,16 +396,12 @@ func sendTelegramBackupDocument(
 
 		defer func() {
 			if writeErr != nil {
-				_ = writer.CloseWithError(
-					writeErr,
-				)
-
+				_ = writer.CloseWithError(writeErr)
 				return
 			}
 
 			if err := multipartWriter.Close(); err != nil {
 				_ = writer.CloseWithError(err)
-
 				return
 			}
 
@@ -417,59 +412,41 @@ func sendTelegramBackupDocument(
 			"chat_id",
 			credentials.ChatID,
 		); err != nil {
-
 			writeErr = err
 			return
 		}
-
-		caption := fmt.Sprintf(
-			"IranGate Backup v2\nServer: %s\nCreated: %s\nSize: %.2f MB",
-			hostname,
-			time.Now().Format(
-				"2006-01-02 15:04:05 MST",
-			),
-			float64(info.Size())/
-				1024/
-				1024,
-		)
 
 		if err := multipartWriter.WriteField(
 			"caption",
 			caption,
 		); err != nil {
-
 			writeErr = err
 			return
 		}
 
 		part, err := multipartWriter.CreateFormFile(
 			"document",
-			filepath.Base(
-				backupPath,
-			),
+			uploadName,
 		)
-
 		if err != nil {
 			writeErr = err
 			return
 		}
 
-		file, err := os.Open(
-			backupPath,
-		)
-
+		file, err := os.Open(backupPath)
 		if err != nil {
 			writeErr = err
 			return
 		}
-
 		defer file.Close()
 
-		if _, err := io.Copy(
-			part,
+		section := io.NewSectionReader(
 			file,
-		); err != nil {
+			offset,
+			length,
+		)
 
+		if _, err := io.Copy(part, section); err != nil {
 			writeErr = err
 			return
 		}
@@ -485,10 +462,10 @@ func sendTelegramBackupDocument(
 		endpoint,
 		reader,
 	)
-
 	if err != nil {
 		return fmt.Errorf(
-			"failed to create Telegram request",
+			"failed to create Telegram request: %w",
+			err,
 		)
 	}
 
@@ -504,10 +481,10 @@ func sendTelegramBackupDocument(
 	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf(
-			"Telegram network request failed",
+			"Telegram network request failed: %w",
+			err,
 		)
 	}
-
 	defer response.Body.Close()
 
 	body, err := io.ReadAll(
@@ -516,10 +493,10 @@ func sendTelegramBackupDocument(
 			1024*1024,
 		),
 	)
-
 	if err != nil {
 		return fmt.Errorf(
-			"failed to read Telegram response",
+			"failed to read Telegram response: %w",
+			err,
 		)
 	}
 
@@ -532,9 +509,10 @@ func sendTelegramBackupDocument(
 		body,
 		&telegramResponse,
 	); err != nil {
-
 		return fmt.Errorf(
-			"invalid Telegram API response",
+			"invalid Telegram API response (HTTP %d): %w",
+			response.StatusCode,
+			err,
 		)
 	}
 
@@ -557,6 +535,122 @@ func sendTelegramBackupDocument(
 			"Telegram API error: %s",
 			description,
 		)
+	}
+
+	return nil
+}
+
+func sendTelegramBackupDocument(
+	credentials telegramBackupCredentials,
+	backupPath string,
+) error {
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		return err
+	}
+
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
+		return fmt.Errorf(
+			"backup archive is missing or empty",
+		)
+	}
+
+	hostname, _ := os.Hostname()
+	backupName := filepath.Base(backupPath)
+	totalSize := info.Size()
+	totalSizeMB := float64(totalSize) / 1024 / 1024
+
+	totalParts := int(
+		(totalSize + telegramBackupMaxPartBytes - 1) /
+			telegramBackupMaxPartBytes,
+	)
+	if totalParts < 1 {
+		totalParts = 1
+	}
+
+	for partIndex := 0; partIndex < totalParts; partIndex++ {
+		offset := int64(partIndex) * telegramBackupMaxPartBytes
+		partLength := telegramBackupMaxPartBytes
+
+		remaining := totalSize - offset
+		if remaining < partLength {
+			partLength = remaining
+		}
+
+		uploadName := backupName
+		caption := fmt.Sprintf(
+			"IranGate Backup v2\nServer: %s\nCreated: %s\nSize: %.2f MB",
+			hostname,
+			time.Now().Format(
+				"2006-01-02 15:04:05 MST",
+			),
+			totalSizeMB,
+		)
+
+		if totalParts > 1 {
+			uploadName = fmt.Sprintf(
+				"%s.part%03d",
+				backupName,
+				partIndex+1,
+			)
+
+			caption = fmt.Sprintf(
+				"IranGate Backup v2\nServer: %s\nCreated: %s\nTotal size: %.2f MB\nPart: %d/%d\n\nDownload all parts and concatenate them in order to restore the original .tar.gz archive.",
+				hostname,
+				time.Now().Format(
+					"2006-01-02 15:04:05 MST",
+				),
+				totalSizeMB,
+				partIndex+1,
+				totalParts,
+			)
+		}
+
+		fmt.Printf(
+			"Telegram Backup: sending %s (%d/%d, %.2f MB)\n",
+			uploadName,
+			partIndex+1,
+			totalParts,
+			float64(partLength)/1024/1024,
+		)
+
+		if err := sendTelegramBackupPart(
+			credentials,
+			backupPath,
+			offset,
+			partLength,
+			uploadName,
+			caption,
+		); err != nil {
+			return fmt.Errorf(
+				"Telegram backup part %d/%d failed: %w",
+				partIndex+1,
+				totalParts,
+				err,
+			)
+		}
+	}
+
+	if totalParts > 1 {
+		instructions := fmt.Sprintf(
+			"✅ IranGate Backup v2 sent in %d parts.\n\nReassemble on Linux:\ncat '%s.part'* > '%s'",
+			totalParts,
+			backupName,
+			backupName,
+		)
+
+		if err := sendTelegramMessage(
+			credentials.BotToken,
+			credentials.ChatID,
+			instructions,
+		); err != nil {
+			// The archive parts are already delivered. Do not mark the backup
+			// as failed only because the optional reconstruction note failed.
+			fmt.Printf(
+				"Telegram Backup: reconstruction note failed: %v\n",
+				err,
+			)
+		}
 	}
 
 	return nil
