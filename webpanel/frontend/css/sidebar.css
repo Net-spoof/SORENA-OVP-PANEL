@@ -433,3 +433,105 @@
     }
 }
 
+
+
+/* IRANGATE_SIDEBAR_I18N_RTL_V1 */
+.sidebar-logo {
+    direction: ltr;
+}
+
+.sidebar-language-btn {
+    margin-left: auto;
+    min-width: 52px;
+    height: 36px;
+    padding: 0 0.65rem;
+    border: 1px solid rgba(100, 255, 218, 0.3);
+    border-radius: 0.6rem;
+    background: rgba(30, 58, 95, 0.42);
+    color: var(--accent-color, #64ffda);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sidebar-language-btn svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.sidebar-language-btn:hover,
+.sidebar-language-btn:focus-visible {
+    background: rgba(30, 58, 95, 0.8);
+    border-color: var(--accent-color, #64ffda);
+    box-shadow: 0 0 16px rgba(100, 255, 218, 0.22);
+    outline: none;
+}
+
+.sidebar-language-btn:active {
+    transform: scale(0.97);
+}
+
+.sidebar[data-lang="fa"] {
+    direction: rtl;
+}
+
+.sidebar[data-lang="fa"] .sidebar-user,
+.sidebar[data-lang="fa"] .sidebar-role-label,
+.sidebar[data-lang="fa"] .menu-section-title,
+.sidebar[data-lang="fa"] .menu-item {
+    text-align: right;
+}
+
+.sidebar[data-lang="fa"] .menu-section-title {
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.sidebar[data-lang="fa"] .menu-item {
+    direction: rtl;
+}
+
+.sidebar[data-lang="fa"] .menu-item::before {
+    left: auto;
+    right: 0;
+}
+
+.sidebar[data-lang="fa"] .menu-badge,
+.sidebar[data-lang="fa"] .badge {
+    margin-left: 0;
+    margin-right: auto;
+}
+
+.sidebar[data-lang="fa"] .menu-item {
+    animation-name: slideInRight;
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.sidebar[data-lang="fa"] .logout-btn {
+    direction: rtl;
+}
+
+@media (max-width: 380px) {
+    .sidebar-language-btn {
+        min-width: 48px;
+        padding: 0 0.5rem;
+    }
+}
