@@ -14,14 +14,14 @@
 
     if (existing) {
         const url = new URL(existing.href, window.location.href);
-        url.searchParams.set('v', 'sidebar-i18n-20261007-v2');
+        url.searchParams.set('v', 'sidebar-i18n-20261007-v3');
         existing.href = url.toString();
         return;
     }
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v2';
+    link.href = 'css/sidebar.css?v=sidebar-i18n-20261007-v3';
     document.head.appendChild(link);
 })();
 
@@ -107,7 +107,7 @@
     })();
 })();
 
-// IRANGATE_SIDEBAR_I18N_V2
+// IRANGATE_SIDEBAR_I18N_V3
 const IRANGATE_SIDEBAR_I18N = Object.freeze({
     en: Object.freeze({
         resellerPanel: 'Reseller Panel', myPanel: 'My Panel', main: 'Main', dashboard: 'Dashboard',
@@ -130,14 +130,19 @@ const IRANGATE_SIDEBAR_I18N = Object.freeze({
 });
 
 function getSidebarLanguage() {
+    if (window.IranGateI18n) {
+        return window.IranGateI18n.getLanguage();
+    }
     const saved = localStorage.getItem('irangate_language') || localStorage.getItem('irangate_sidebar_language');
     return saved === 'fa' ? 'fa' : 'en';
 }
 
 function persistSidebarLanguage(language) {
     const normalized = language === 'fa' ? 'fa' : 'en';
+    if (window.IranGateI18n) {
+        return window.IranGateI18n.setLanguage(normalized, { emit: false });
+    }
     localStorage.setItem('irangate_language', normalized);
-    // Keep the old key in sync for compatibility with the first sidebar-i18n release.
     localStorage.setItem('irangate_sidebar_language', normalized);
     return normalized;
 }
@@ -146,6 +151,7 @@ function applySidebarLanguageState(language = getSidebarLanguage()) {
     const normalized = language === 'fa' ? 'fa' : 'en';
     const root = document.documentElement;
     root.lang = normalized === 'fa' ? 'fa' : 'en';
+    root.dir = normalized === 'fa' ? 'rtl' : 'ltr';
     root.dataset.irangateLang = normalized;
     root.classList.toggle('irangate-menu-rtl', normalized === 'fa');
     return normalized;
@@ -196,6 +202,9 @@ async function toggleSidebarLanguage(event) {
         if (overlay) overlay.classList.add('active');
     }
 
+    if (window.IranGateI18n) {
+        window.IranGateI18n.translateTree(document.body, next);
+    }
     window.dispatchEvent(new CustomEvent('irangate:language-changed', {
         detail: { language: next }
     }));
@@ -210,6 +219,9 @@ window.setIranGateLanguage = async function setIranGateLanguage(language) {
         (currentSidebar && currentSidebar.dataset.activePage) ||
         'dashboard';
     await initSidebar(activePage);
+    if (window.IranGateI18n) {
+        window.IranGateI18n.translateTree(document.body, normalized);
+    }
     return normalized;
 };
 
