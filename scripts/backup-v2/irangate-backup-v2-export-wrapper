@@ -23,9 +23,10 @@ trap cleanup EXIT
 if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE"
 
-    if ! flock -n 9; then
-        echo             "Another IranGate backup is already running"             >&2
-
+    # A scheduled run may finish shortly after the user clicks Export.
+    # Wait briefly rather than failing immediately on normal contention.
+    if ! flock -w "${IRANGATE_BACKUP_LOCK_WAIT:-30}" 9; then
+        echo "Another IranGate backup is still running (lock wait expired)" >&2
         exit 75
     fi
 fi
@@ -53,10 +54,11 @@ if command -v timeout >/dev/null 2>&1; then
             else
                 exec nice -n 10 "$BASE" "$@"
             fi
-        ' _ "$BASE" "$@"         >"$STDOUT_FILE"
+        ' _ "$BASE" "$@" 9>&- >"$STDOUT_FILE"
     RC=$?
 else
-    run_exporter "$@" >"$STDOUT_FILE"
+    # FD 9 belongs only to this coordinator, never to its child process.
+    run_exporter "$@" 9>&- >"$STDOUT_FILE"
     RC=$?
 fi
 set -e
