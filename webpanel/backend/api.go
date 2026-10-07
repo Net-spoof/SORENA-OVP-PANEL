@@ -54,11 +54,54 @@ func readEnvOrDefault(key, def string) string {
 // process from winning the startup race and forcing the systemd process into
 // EADDRINUSE/restart loops.
 func bindWebPanelListener(portStr string) net.Listener {
+	unixSocket := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET"))
+	if unixSocket != "" {
+		if !filepath.IsAbs(unixSocket) {
+			log.Fatalf("WEBPANEL_UNIX_SOCKET must be an absolute path: %s", unixSocket)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(unixSocket), 0755); err != nil {
+			log.Fatalf("Failed to create web panel socket directory: %v", err)
+		}
+
+		// A Unix socket file can survive an unclean shutdown even though no
+		// process owns it. Removing the stale filesystem entry is safe after
+		// the single-instance lock has been acquired.
+		if err := os.Remove(unixSocket); err != nil && !os.IsNotExist(err) {
+			log.Fatalf("Failed to remove stale web panel socket %s: %v", unixSocket, err)
+		}
+
+		listener, err := net.Listen("unix", unixSocket)
+		if err != nil {
+			log.Fatalf("Failed to bind web panel Unix socket %s: %v", unixSocket, err)
+		}
+
+		// nginx usually runs as www-data while the panel runs as root. The
+		// API remains authenticated; this mode only grants local socket access.
+		if err := os.Chmod(unixSocket, 0666); err != nil {
+			_ = listener.Close()
+			_ = os.Remove(unixSocket)
+			log.Fatalf("Failed to set permissions on web panel Unix socket %s: %v", unixSocket, err)
+		}
+
+		log.Printf("✅ Web panel Unix socket reserved: %s", unixSocket)
+		return listener
+	}
+
 	if _, err := strconv.Atoi(portStr); err != nil {
 		log.Fatalf("Invalid WEBPANEL_PORT: %s", portStr)
 	}
 
+	bindHost := strings.TrimSpace(os.Getenv("WEBPANEL_BIND_HOST"))
 	addr := ":" + portStr
+	network := "tcp"
+
+	if bindHost != "" {
+		addr = net.JoinHostPort(bindHost, portStr)
+		if ip := net.ParseIP(bindHost); ip != nil && ip.To4() != nil {
+			network = "tcp4"
+		}
+	}
 
 	const (
 		listenAttempts = 40
@@ -69,7 +112,7 @@ func bindWebPanelListener(portStr string) net.Listener {
 	var listenErr error
 
 	for attempt := 1; attempt <= listenAttempts; attempt++ {
-		listener, listenErr = net.Listen("tcp", addr)
+		listener, listenErr = net.Listen(network, addr)
 		if listenErr == nil {
 			log.Printf("✅ Web panel listener reserved on %s before startup workers", addr)
 			return listener
@@ -77,8 +120,8 @@ func bindWebPanelListener(portStr string) net.Listener {
 
 		if attempt == 1 || attempt%8 == 0 || attempt == listenAttempts {
 			log.Printf(
-				"Web panel port %s unavailable before worker startup (attempt %d/%d): %v",
-				portStr,
+				"Web panel endpoint %s unavailable before worker startup (attempt %d/%d): %v",
+				addr,
 				attempt,
 				listenAttempts,
 				listenErr,
@@ -91,8 +134,8 @@ func bindWebPanelListener(portStr string) net.Listener {
 	}
 
 	log.Fatalf(
-		"Failed to reserve web panel port %s after %d attempts: %v",
-		portStr,
+		"Failed to reserve web panel endpoint %s after %d attempts: %v",
+		addr,
 		listenAttempts,
 		listenErr,
 	)
@@ -4493,7 +4536,12 @@ func main() {
 	// healthy instead of losing the bind race.
 	portStr := readEnvOrDefault("WEBPANEL_PORT", "8080")
 	listener := bindWebPanelListener(portStr)
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+		if socketPath := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET")); socketPath != "" {
+			_ = os.Remove(socketPath)
+		}
+	}()
 
 	go hub.run()
 	go startStatsBroadcaster()
@@ -4714,7 +4762,15 @@ func main() {
 		handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}),
 	)(rootRouter)
 	log.Println("🚀 IranGate Web Panel API Starting...")
-	log.Printf("📍 API Server: http://localhost:%s", portStr)
+	if socketPath := strings.TrimSpace(os.Getenv("WEBPANEL_UNIX_SOCKET")); socketPath != "" {
+		log.Printf("📍 API Server: unix://%s", socketPath)
+	} else {
+		bindHost := strings.TrimSpace(os.Getenv("WEBPANEL_BIND_HOST"))
+		if bindHost == "" {
+			bindHost = "0.0.0.0"
+		}
+		log.Printf("📍 API Server: http://%s:%s", bindHost, portStr)
+	}
 	log.Println("🔐 Default Login: configured via env or admin/admin123")
 	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin") == "admin123" {
 		log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
