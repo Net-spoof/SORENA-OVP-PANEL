@@ -435,7 +435,7 @@
 
 
 
-/* IRANGATE_SIDEBAR_I18N_RTL_V1 */
+/* IRANGATE_SIDEBAR_I18N_RTL_V2 */
 .sidebar-logo {
     direction: ltr;
 }
@@ -533,5 +533,70 @@
     .sidebar-language-btn {
         min-width: 48px;
         padding: 0 0.5rem;
+    }
+}
+
+
+/* IRANGATE_SIDEBAR_LAYOUT_RTL_V2
+   Persian mode mirrors the navigation shell itself while keeping page data,
+   IP addresses, protocol names and form values untouched. */
+html[data-irangate-lang="fa"] .sidebar {
+    left: auto;
+    right: 0;
+    border-right: 0;
+    border-left: 1px solid var(--sidebar-border, rgba(100, 255, 218, 0.2));
+}
+
+html[data-irangate-lang="fa"] .main-content {
+    margin-left: 0 !important;
+    margin-right: 280px;
+    transition:
+        margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-irangate-lang="fa"] .sidebar-toggle {
+    left: auto;
+    right: 1rem;
+}
+
+html[data-irangate-lang="fa"] .sidebar.compact ~ .main-content,
+html[data-irangate-lang="fa"] .sidebar.compact + .main-content {
+    margin-left: 0 !important;
+    margin-right: 80px;
+}
+
+html[data-irangate-lang="fa"] .sidebar[data-lang="fa"] .sidebar-user > .flex {
+    direction: rtl;
+}
+
+html[data-irangate-lang="fa"] .sidebar[data-lang="fa"] .menu-item svg,
+html[data-irangate-lang="fa"] .sidebar[data-lang="fa"] .logout-btn svg {
+    flex: 0 0 auto;
+}
+
+html[data-irangate-lang="fa"] .sidebar[data-lang="fa"] .menu-item[title]:hover::after {
+    left: auto;
+    right: 100%;
+    margin-left: 0;
+    margin-right: 0.5rem;
+    direction: rtl;
+    text-align: right;
+}
+
+@media (max-width: 1024px) {
+    html[data-irangate-lang="fa"] .sidebar {
+        left: auto;
+        right: 0;
+        transform: translateX(100%);
+    }
+
+    html[data-irangate-lang="fa"] .sidebar.open {
+        transform: translateX(0);
+    }
+
+    html[data-irangate-lang="fa"] .main-content {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
     }
 }
