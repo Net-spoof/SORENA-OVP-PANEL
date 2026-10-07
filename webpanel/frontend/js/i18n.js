@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V3
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V4_STANDALONE
 (() => {
     'use strict';
 
@@ -440,7 +440,38 @@
         style.id = 'irangate-i18n-styles';
         style.textContent = `
             html[dir="rtl"] body { direction: rtl; }
-            html[dir="rtl"] .main-content { direction: rtl; }
+            html[dir="rtl"] .main-content {
+                direction: rtl;
+                margin-left: 0 !important;
+                margin-right: 280px !important;
+            }
+            html[dir="rtl"] .sidebar {
+                left: auto !important;
+                right: 0 !important;
+                border-right: 0 !important;
+                border-left: 1px solid var(--sidebar-border, rgba(100,255,218,.2)) !important;
+            }
+            html[dir="rtl"] .sidebar-toggle {
+                left: auto !important;
+                right: 1rem !important;
+            }
+            html[dir="rtl"] .sidebar.compact + .main-content,
+            html[dir="rtl"] .sidebar.compact ~ .main-content {
+                margin-left: 0 !important;
+                margin-right: 80px !important;
+            }
+            @media (max-width: 1024px) {
+                html[dir="rtl"] .sidebar {
+                    transform: translateX(100%) !important;
+                }
+                html[dir="rtl"] .sidebar.open {
+                    transform: translateX(0) !important;
+                }
+                html[dir="rtl"] .main-content {
+                    margin-left: 0 !important;
+                    margin-right: 0 !important;
+                }
+            }
             html[dir="rtl"] .text-left { text-align: right !important; }
             html[dir="rtl"] .text-right { text-align: left !important; }
             html[dir="rtl"] input:not([type="url"]):not([type="number"]):not(.font-mono),
@@ -499,46 +530,48 @@
         document.title = lang === 'fa' ? (titleFA[original] || original) : original;
     }
 
+    function ensureLanguageControl() {
+        let button = document.getElementById('irangate-language-toggle');
+        const sidebarLogo = document.querySelector('.sidebar-logo');
+
+        // Prefer the requested location beside NET SPOOF. On the login page or
+        // before the sidebar is rendered, fall back to a small floating button.
+        if (!button) {
+            button = document.createElement('button');
+            button.id = 'irangate-language-toggle';
+            button.type = 'button';
+            button.className = 'sidebar-language-btn';
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleLanguage();
+            });
+        }
+
+        if (sidebarLogo) {
+            if (button.parentElement !== sidebarLogo) sidebarLogo.appendChild(button);
+            button.className = 'sidebar-language-btn';
+        } else if (document.body && button.parentElement !== document.body) {
+            button.className = 'irangate-language-floating';
+            document.body.appendChild(button);
+        }
+
+        syncControls();
+        return button;
+    }
+
     function syncControls() {
         const lang = getLanguage();
+        const button = document.getElementById('irangate-language-toggle');
+        if (!button) return;
+
         const desiredText = lang === 'fa' ? 'EN' : 'فا';
         const desiredTitle = lang === 'fa' ? 'English' : 'فارسی';
         const desiredAria = lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian';
 
-        document.querySelectorAll('.sidebar-language-btn').forEach(btn => {
-            const span = btn.querySelector('span');
-
-            // Keep writes idempotent so repeated bounded refreshes stay cheap.
-            if (span && span.textContent !== desiredText) {
-                span.textContent = desiredText;
-            }
-            if (btn.getAttribute('title') !== desiredTitle) {
-                btn.setAttribute('title', desiredTitle);
-            }
-            if (btn.getAttribute('aria-label') !== desiredAria) {
-                btn.setAttribute('aria-label', desiredAria);
-            }
-        });
-
-        const sidebarButton = document.querySelector('.sidebar-language-btn');
-        const floating = document.getElementById('irangate-language-floating');
-        if (sidebarButton && floating) floating.remove();
-    }
-
-    function ensureFloatingControl() {
-        if (document.querySelector('.sidebar-language-btn')) return;
-        if (document.getElementById('irangate-language-floating')) return;
-
-        const button = document.createElement('button');
-        button.id = 'irangate-language-floating';
-        button.type = 'button';
-        button.className = 'irangate-language-floating';
-        button.addEventListener('click', () => toggleLanguage());
-        document.body.appendChild(button);
-
-        const lang = getLanguage();
-        const desired = lang === 'fa' ? 'EN · English' : 'فا · فارسی';
-        if (button.textContent !== desired) button.textContent = desired;
+        if (button.textContent !== desiredText) button.textContent = desiredText;
+        if (button.getAttribute('title') !== desiredTitle) button.setAttribute('title', desiredTitle);
+        if (button.getAttribute('aria-label') !== desiredAria) button.setAttribute('aria-label', desiredAria);
     }
 
     function setLanguage(lang, options = {}) {
@@ -547,12 +580,6 @@
         syncTitle(normalized);
         translateTree(document.body, normalized, false);
         syncControls();
-
-        const floating = document.getElementById('irangate-language-floating');
-        if (floating) {
-            const desired = normalized === 'fa' ? 'EN · English' : 'فا · فارسی';
-            if (floating.textContent !== desired) floating.textContent = desired;
-        }
 
         if (options.emit !== false) {
             window.dispatchEvent(new CustomEvent('irangate:language-changed', {
@@ -582,6 +609,7 @@
         toggleLanguage,
         translateTree,
         refresh: refreshCurrentLanguage,
+        ensureControl: ensureLanguageControl,
         t(value) {
             return getLanguage() === 'fa' ? translateValue(value) : value;
         }
@@ -593,23 +621,17 @@
     syncTitle(getLanguage());
 
     const boot = () => {
-        // Translate once at startup. Do NOT attach a MutationObserver here:
-        // pages such as Nodes rebuild large tables and cards asynchronously,
-        // and observing every DOM mutation can starve the browser main thread.
+        // One-time/bounded translation only: no MutationObserver, no permanent
+        // DOM watcher, and no dependency on sidebar.js.
         setLanguage(getLanguage(), { emit: false });
 
-        // Bounded one-shot refreshes catch normal async panel rendering without
-        // creating a permanent observer or any feedback loop.
-        for (const delay of [400, 1200, 3000]) {
+        for (const delay of [150, 500, 1200, 3000, 6000]) {
             window.setTimeout(() => {
-                if (document.body) refreshCurrentLanguage();
+                if (!document.body) return;
+                ensureLanguageControl();
+                refreshCurrentLanguage();
             }, delay);
         }
-
-        window.setTimeout(() => {
-            syncControls();
-            ensureFloatingControl();
-        }, 500);
     };
 
     if (document.readyState === 'loading') {
