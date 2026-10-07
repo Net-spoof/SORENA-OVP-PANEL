@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V8_CLEAN
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V9_COMPLETE
 (() => {
     'use strict';
 
@@ -330,6 +330,7 @@
 
 
     const EXTRA_FA = Object.freeze({
+        // Static QA completion
         'Creation timeline window':'بازه خط زمانی ایجاد',
         'Analytics summary':'خلاصه آمار',
         'Tabs':'تب‌ها',
@@ -337,6 +338,8 @@
         '0 2 * * * (daily at 2 AM)':'0 2 * * * (روزانه ساعت ۲ بامداد)',
         "Reset used traffic to 0 - فقط اگر می‌خواهی مصرف قبلی پاک شود تیک بزن":'بازنشانی ترافیک مصرف‌شده به ۰ - فقط اگر می‌خواهید مصرف قبلی پاک شود تیک بزنید',
         'For bot test: https://api.telegram.org/botTOKEN/getMe':'برای تست ربات: https://api.telegram.org/botTOKEN/getMe',
+
+        // Sidebar / coming soon
         'Something amazing is coming:':'قابلیت‌های جذابی در راه است:',
         'Automatic tunnel creation based on traffic patterns':'ساخت خودکار تونل بر اساس الگوی ترافیک',
         'Intelligent routing rule generation':'ساخت هوشمند قوانین مسیریابی',
@@ -345,18 +348,157 @@
         '🎁 Stay tuned for the surprise!':'🎁 منتظر قابلیت‌های جدید باشید!',
         '💫 Wait for the surprise!':'💫 منتظر قابلیت جدید باشید!',
         'Got it':'متوجه شدم',
-        'Server running':'سرور در حال اجراست',
-        'Server stopped':'سرور متوقف است',
-        'Authentication required':'نیاز به ورود مجدد',
-        'Cleanup failed':'پاک‌سازی ناموفق بود',
-        'admin':'مدیر',
-        'moderator':'ناظر',
-        'viewer':'مشاهده‌گر',
-        'Admin':'مدیر',
-        'Moderator':'ناظر',
-        'Viewer':'مشاهده‌گر'
-    });
 
+        // Dashboard
+        'Needs attention':'نیازمند بررسی',
+        'No quota':'بدون سهمیه',
+        'Traffic finished':'ترافیک تمام شده',
+        'No expiry':'بدون انقضا',
+        'Failed to load clients':'بارگذاری کاربران ناموفق بود',
+        'orphaned certificates':'گواهی‌های بدون رکورد',
+        'server status':'وضعیت سرور',
+        'Some dashboard metrics could not be refreshed':'برخی شاخص‌های داشبورد به‌روزرسانی نشدند',
+        'Failed to load dashboard':'بارگذاری داشبورد ناموفق بود',
+        'Revoke all orphaned certificates?':'همه گواهی‌های بدون رکورد لغو شوند؟',
+        'Orphaned certificates cleaned up':'گواهی‌های بدون رکورد پاک‌سازی شدند',
+
+        // Users / Admins
+        'User deleted':'کاربر حذف شد',
+        'Failed to load client details':'بارگذاری جزئیات کاربران ناموفق بود',
+        'Creating...':'در حال ساخت...',
+        'Use a value like 50 GB, 500 MB or 1 TB':'مقداری مانند 50 GB، 500 MB یا 1 TB وارد کنید',
+        'Enter a positive number of days':'تعداد روز باید عددی مثبت باشد',
+        'Password must be at least 8 characters':'رمز عبور باید حداقل ۸ کاراکتر باشد',
+
+        // Clients
+        'all status':'همه وضعیت‌ها',
+        'Failed to update client connections:':'به‌روزرسانی اتصال کاربران ناموفق بود:',
+        'Unlimited traffic':'ترافیک نامحدود',
+        'No expiry info':'اطلاعات انقضا موجود نیست',
+        'No traffic limit':'بدون محدودیت ترافیک',
+        'Reseller workspace':'فضای کاری نمایندگی',
+        'Root workspace':'فضای کاری Root',
+        'Subscription token not ready for node downloads':'توکن اشتراک برای دانلود نودها هنوز آماده نیست',
+        'Failed to download configs:':'دانلود کانفیگ‌ها ناموفق بود:',
+        'No auth token available':'توکن احراز هویت موجود نیست',
+        'Failed to load inbound configurations:':'بارگذاری تنظیمات Inbound ناموفق بود:',
+        'Client not found':'کاربر پیدا نشد',
+        'Connection limit must be between 1 and 100':'محدودیت اتصال باید بین ۱ تا ۱۰۰ باشد',
+        'Failed to update client':'به‌روزرسانی کاربر ناموفق بود',
+        'Client name is required':'نام کاربر الزامی است',
+        'Client name can only contain letters, numbers, underscore, and hyphen':'نام کاربر فقط می‌تواند شامل حروف، اعداد، زیرخط و خط تیره باشد',
+        'Client name must be between 3 and 50 characters':'نام کاربر باید بین ۳ تا ۵۰ کاراکتر باشد',
+        'Invalid email format':'فرمت ایمیل نامعتبر است',
+        'Please select a server configuration':'لطفاً یک تنظیم سرور انتخاب کنید',
+        'Failed to create client':'ساخت کاربر ناموفق بود',
+        'Failed to activate client':'فعال‌سازی کاربر ناموفق بود',
+        'Failed to deactivate client':'غیرفعال‌سازی کاربر ناموفق بود',
+        'Failed to remove client':'حذف کاربر ناموفق بود',
+        '✓ Client can connect':'✓ کاربر امکان اتصال دارد',
+        '✗ Client is blocked':'✗ کاربر مسدود است',
+        '⚠ Check certificate':'⚠ گواهی را بررسی کنید',
+        'Failed to check certificate status':'بررسی وضعیت گواهی ناموفق بود',
+        'Subscription link is not ready. Try again.':'لینک اشتراک هنوز آماده نیست. دوباره تلاش کنید.',
+        'Not assigned':'تخصیص داده نشده',
+        'Orphaned certificates revoked successfully!':'گواهی‌های بدون رکورد با موفقیت لغو شدند!',
+        '✓ No orphaned certificates found. System is secure!':'✓ گواهی بدون رکوردی پیدا نشد. سیستم امن است!',
+        'Failed to check orphaned certificates':'بررسی گواهی‌های بدون رکورد ناموفق بود',
+        'Just now':'همین الآن',
+
+        // Analytics
+        '24 hours':'۲۴ ساعت',
+        'last 12 months':'۱۲ ماه اخیر',
+        'New clients':'کاربران جدید',
+        'Clients API failed':'API کاربران خطا داد',
+        'Failed to load analytics:':'بارگذاری آمار ناموفق بود:',
+        'Failed to load analytics data':'بارگذاری داده‌های آماری ناموفق بود',
+        'Analytics CSV exported':'فایل CSV آمار خروجی گرفته شد',
+
+        // Nodes
+        'Node not found:':'نود پیدا نشد:',
+        'Request failed':'درخواست ناموفق بود',
+        'Local master node stays enabled':'نود مستر محلی فعال باقی می‌ماند',
+        'Runtime apply failed':'اعمال Runtime ناموفق بود',
+        'completed successfully':'با موفقیت انجام شد',
+        'Port location not found:':'موقعیت پورت پیدا نشد:',
+        'Port location update':'به‌روزرسانی موقعیت پورت',
+        'Port location deletion':'حذف موقعیت پورت',
+        'All OpenVPN port locations applied successfully':'همه موقعیت‌های پورت OpenVPN با موفقیت اعمال شدند',
+        'Runtime apply failed:':'اعمال Runtime ناموفق بود:',
+        'Port location creation':'ساخت موقعیت پورت',
+
+        // Routing
+        'Reachable ✅':'در دسترس ✅',
+        'Unreachable ❌':'خارج از دسترس ❌',
+        'هیچ outbound تیک نخورده.':'هیچ خروجی‌ای انتخاب نشده است.',
+        'برای failover حداقل ۲ outbound را تیک بزن.':'برای Failover حداقل ۲ خروجی را انتخاب کنید.',
+        'Routing bind updated':'Bind مسیریابی به‌روزرسانی شد',
+        'Step 1/3: Bind...':'مرحله ۱/۳: Bind...',
+        'Step 2/3: Generate...':'مرحله ۲/۳: تولید...',
+        'Step 3/3: Apply...':'مرحله ۳/۳: اعمال...',
+        'Activated behind OpenVPN UDP':'پشت OpenVPN UDP فعال شد',
+        'Routing activated':'مسیریابی فعال شد',
+        'Outbound deleted':'خروجی حذف شد',
+        'Delete checked outbounds?':'خروجی‌های انتخاب‌شده حذف شوند؟',
+        'Disable outbound routing and remove TPROXY rules? Use this for foreign/GOST mode.':'مسیریابی خروجی و قوانین TPROXY غیرفعال شوند؟ برای حالت Foreign/GOST از این گزینه استفاده کنید.',
+        'Bypass requested. If API does not support this yet, use CLI bypass command.':'درخواست Bypass ارسال شد. اگر API هنوز پشتیبانی نمی‌کند از دستور CLI مربوط به Bypass استفاده کنید.',
+        'No outbound selected. Traffic uses the server default route.':'هیچ خروجی‌ای انتخاب نشده؛ ترافیک از مسیر پیش‌فرض سرور استفاده می‌کند.',
+        'Port-location routing list failed':'دریافت فهرست مسیریابی موقعیت‌های پورت ناموفق بود',
+        'Route the primary VPN and each OpenVPN port location through independent outbound strategies.':'VPN اصلی و هر موقعیت پورت OpenVPN را از طریق خروجی‌های مستقل مسیریابی کنید.',
+
+        // Server checker
+        'Please log in first':'لطفاً ابتدا وارد شوید',
+        'Please enter an IP address':'لطفاً یک آدرس IP وارد کنید',
+        'Ping check initiated successfully':'بررسی پینگ با موفقیت شروع شد',
+        'Failed to start ping check':'شروع بررسی پینگ ناموفق بود',
+        'Network error:':'خطای شبکه:',
+        'Status check failed:':'بررسی وضعیت ناموفق بود:',
+        'Failed to load history:':'بارگذاری تاریخچه ناموفق بود:',
+
+        // Settings
+        'Running':'در حال اجرا',
+        'Stopped':'متوقف',
+        'Failed to load settings:':'بارگذاری تنظیمات ناموفق بود:',
+        'New passwords do not match!':'رمزهای عبور جدید یکسان نیستند!',
+        'Password must be at least 8 characters!':'رمز عبور باید حداقل ۸ کاراکتر باشد!',
+        'Password changed successfully!':'رمز عبور با موفقیت تغییر کرد!',
+        'Failed to change password':'تغییر رمز عبور ناموفق بود',
+        'Server settings saved! All client configs will use this server address.':'تنظیمات سرور ذخیره شد! همه کانفیگ‌های کاربران از این آدرس استفاده می‌کنند.',
+        'Failed to save settings':'ذخیره تنظیمات ناموفق بود',
+        'Failed to save server settings':'ذخیره تنظیمات سرور ناموفق بود',
+        'Telegram settings saved!':'تنظیمات تلگرام ذخیره شد!',
+        'Failed to save Telegram settings':'ذخیره تنظیمات تلگرام ناموفق بود',
+        'Failed to save backup schedule':'ذخیره برنامه بکاپ ناموفق بود',
+        'Backup schedule saved!':'برنامه بکاپ ذخیره شد!',
+        'Create a complete Backup v2, store it on the server, and send it to Telegram now?':'یک Backup v2 کامل ساخته، روی سرور ذخیره و همین الآن به تلگرام ارسال شود؟',
+        '⏳ Creating and sending backup...':'⏳ در حال ساخت و ارسال بکاپ...',
+        'Failed to start Telegram backup':'شروع بکاپ تلگرام ناموفق بود',
+        'Backup started. Waiting for completion...':'بکاپ شروع شد. منتظر تکمیل عملیات...',
+        'Backup saved and sent to Telegram successfully!':'بکاپ با موفقیت ذخیره و به تلگرام ارسال شد!',
+        'Backup is still processing. Status will update after refresh.':'بکاپ هنوز در حال پردازش است. پس از به‌روزرسانی وضعیت نمایش داده می‌شود.',
+        'Backup exported successfully!':'بکاپ با موفقیت خروجی گرفته شد!',
+        'Failed to export backup':'خروجی گرفتن بکاپ ناموفق بود',
+        'Please select a backup file':'لطفاً یک فایل بکاپ انتخاب کنید',
+        'Importing a backup will overwrite all current data. Continue?':'واردکردن بکاپ همه داده‌های فعلی را بازنویسی می‌کند. ادامه می‌دهید؟',
+        'Backup imported successfully! Reloading...':'بکاپ با موفقیت وارد شد! در حال بارگذاری مجدد...',
+        'Failed to import backup':'واردکردن بکاپ ناموفق بود',
+        'Theme settings saved!':'تنظیمات پوسته ذخیره شد!',
+        'Failed to save theme settings':'ذخیره تنظیمات پوسته ناموفق بود',
+        'Reset theme to default? This will remove all custom CSS and JavaScript.':'پوسته به حالت پیش‌فرض برگردد؟ CSS و JavaScript سفارشی حذف می‌شوند.',
+        'Custom JavaScript execution is disabled for security reasons.':'اجرای JavaScript سفارشی به دلایل امنیتی غیرفعال است.',
+        'proxy test OK ✅':'تست پروکسی موفق بود ✅',
+        'proxy test failed ❌':'تست پروکسی ناموفق بود ❌',
+        'test failed ❌':'تست ناموفق بود ❌',
+        'Panel proxy saved. Webpanel will restart.':'پروکسی پنل ذخیره شد. وب‌پنل راه‌اندازی مجدد می‌شود.',
+        'Failed to save panel proxy':'ذخیره پروکسی پنل ناموفق بود',
+        'Disable panel proxy?':'پروکسی پنل غیرفعال شود؟',
+        'Panel proxy disabled. Webpanel will restart.':'پروکسی پنل غیرفعال شد. وب‌پنل راه‌اندازی مجدد می‌شود.',
+        'Failed to disable panel proxy':'غیرفعال‌کردن پروکسی پنل ناموفق بود',
+
+        // Usage / delegated dashboard
+        'Failed to load usage':'بارگذاری اطلاعات مصرف ناموفق بود',
+        'Panel active':'پنل فعال'
+    });
     const originalText = new WeakMap();
     const renderedText = new WeakMap();
     const originalAttrs = new WeakMap();
