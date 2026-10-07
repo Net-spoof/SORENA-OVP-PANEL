@@ -941,7 +941,12 @@
                 await api.exportBackup();
                 showToast('Backup exported successfully!', 'success');
             } catch (error) {
-                showToast('Failed to export backup', 'error');
+                const message =
+                    error && error.message
+                        ? error.message
+                        : 'Failed to export backup';
+
+                showToast(message, 'error');
             }
         }
 
