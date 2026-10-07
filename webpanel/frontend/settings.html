@@ -824,14 +824,6 @@
 
 
         async function runTelegramBackupNow(button = null) {
-            // Compare against the previous completed attempt, not stale success.
-            const previousStatus = await telegramBackupRequest(
-                '/settings/telegram-backup'
-            );
-            const previousLastRun = previousStatus.success
-                ? previousStatus.data.last_run
-                : null;
-
             if (!confirm(
                 'Create a complete Backup v2, store it on the server, and send it to Telegram now?'
             )) {
@@ -848,6 +840,16 @@
             }
 
             try {
+                // Capture the latest completed attempt before starting.
+                const previousStatus = await telegramBackupRequest(
+                    '/settings/telegram-backup'
+                );
+                if (!previousStatus.success || !previousStatus.data) {
+                    throw new Error(previousStatus.message ||
+                        'Failed to read Telegram backup status');
+                }
+                const previousLastRun = previousStatus.data.last_run || null;
+
                 const result =
                     await telegramBackupRequest(
                         '/settings/telegram-backup/run',
@@ -929,7 +931,9 @@
                 );
 
                 showToast(
-                    'Failed to start Telegram backup',
+                    error && error.message
+                        ? 'Telegram backup failed: ' + error.message
+                        : 'Telegram backup request failed',
                     'error'
                 );
 
