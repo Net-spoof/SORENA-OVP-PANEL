@@ -46,6 +46,59 @@ func readEnvOrDefault(key, def string) string {
 	return v
 }
 
+
+// bindWebPanelListener reserves the HTTP port before any startup worker runs.
+// Several workers execute system/CLI helpers during their first reconciliation.
+// Reserving the socket first prevents a helper or accidental second panel
+// process from winning the startup race and forcing the systemd process into
+// EADDRINUSE/restart loops.
+func bindWebPanelListener(portStr string) net.Listener {
+	if _, err := strconv.Atoi(portStr); err != nil {
+		log.Fatalf("Invalid WEBPANEL_PORT: %s", portStr)
+	}
+
+	addr := ":" + portStr
+
+	const (
+		listenAttempts = 40
+		listenDelay    = 250 * time.Millisecond
+	)
+
+	var listener net.Listener
+	var listenErr error
+
+	for attempt := 1; attempt <= listenAttempts; attempt++ {
+		listener, listenErr = net.Listen("tcp", addr)
+		if listenErr == nil {
+			log.Printf("✅ Web panel listener reserved on %s before startup workers", addr)
+			return listener
+		}
+
+		if attempt == 1 || attempt%8 == 0 || attempt == listenAttempts {
+			log.Printf(
+				"Web panel port %s unavailable before worker startup (attempt %d/%d): %v",
+				portStr,
+				attempt,
+				listenAttempts,
+				listenErr,
+			)
+		}
+
+		if attempt < listenAttempts {
+			time.Sleep(listenDelay)
+		}
+	}
+
+	log.Fatalf(
+		"Failed to reserve web panel port %s after %d attempts: %v",
+		portStr,
+		listenAttempts,
+		listenErr,
+	)
+
+	return nil
+}
+
 type Admin struct {
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"`
@@ -4400,6 +4453,15 @@ func main() {
 		)
 	}
 
+	// Critical ordering: reserve the web-panel socket BEFORE starting any
+	// background worker. Some first-run reconciliation paths execute external
+	// IranGate helpers. If a helper accidentally starts another panel process,
+	// the authoritative systemd process already owns the HTTP port and remains
+	// healthy instead of losing the bind race.
+	portStr := readEnvOrDefault("WEBPANEL_PORT", "8080")
+	listener := bindWebPanelListener(portStr)
+	defer listener.Close()
+
 	go hub.run()
 	go startStatsBroadcaster()
 	go startSystemResourcesBroadcaster()
@@ -4433,10 +4495,6 @@ func main() {
 	}
 	if len(basePath) > 1 && strings.HasSuffix(basePath, "/") {
 		basePath = strings.TrimRight(basePath, "/")
-	}
-	portStr := readEnvOrDefault("WEBPANEL_PORT", "8080")
-	if _, err := strconv.Atoi(portStr); err != nil {
-		log.Fatalf("Invalid WEBPANEL_PORT: %s", portStr)
 	}
 	staticDir := readEnvOrDefault("WEBPANEL_STATIC_DIR", "/opt/irangate/webpanel/frontend")
 	rootRouter := mux.NewRouter()
@@ -4628,52 +4686,6 @@ func main() {
 	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin") == "admin123" {
 		log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
 	}
-	addr := ":" + portStr
-
-	// Bind explicitly and retry transient EADDRINUSE races instead of letting
-	// systemd enter a restart loop. Some deployments run short-lived helper
-	// processes during panel startup; a direct ListenAndServe used to abort
-	// immediately if one of them briefly held the configured port.
-	const (
-		listenAttempts = 40
-		listenDelay    = 250 * time.Millisecond
-	)
-
-	var listener net.Listener
-	var listenErr error
-
-	for attempt := 1; attempt <= listenAttempts; attempt++ {
-		listener, listenErr = net.Listen("tcp", addr)
-		if listenErr == nil {
-			break
-		}
-
-		if attempt == 1 || attempt%8 == 0 || attempt == listenAttempts {
-			log.Printf(
-				"Web panel port %s is temporarily unavailable (attempt %d/%d): %v",
-				portStr,
-				attempt,
-				listenAttempts,
-				listenErr,
-			)
-		}
-
-		if attempt < listenAttempts {
-			time.Sleep(listenDelay)
-		}
-	}
-
-	if listenErr != nil {
-		log.Fatalf(
-			"Failed to bind web panel port %s after %d attempts: %v",
-			portStr,
-			listenAttempts,
-			listenErr,
-		)
-	}
-
-	log.Printf("✅ Web panel listener bound successfully on %s", addr)
-
 	if err := http.Serve(listener, corsHandler); err != nil && err != http.ErrServerClosed {
 		log.Fatal("Web panel HTTP server stopped:", err)
 	}
