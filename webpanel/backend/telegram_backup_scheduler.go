@@ -656,21 +656,9 @@ func sendTelegramBackupDocument(
 	return nil
 }
 
-func executeTelegramBackup(
+func executeTelegramBackupWithSlot(
 	trigger string,
 ) error {
-	select {
-	case telegramBackupRunSemaphore <- struct{}{}:
-		defer func() {
-			<-telegramBackupRunSemaphore
-		}()
-
-	default:
-		return fmt.Errorf(
-			"Telegram backup is already running",
-		)
-	}
-
 	fmt.Printf(
 		"Telegram Backup: starting %s run\n",
 		trigger,
@@ -702,7 +690,6 @@ func executeTelegramBackup(
 	); err != nil {
 
 		setTelegramBackupResult(err)
-
 		return err
 	}
 
@@ -716,7 +703,26 @@ func executeTelegramBackup(
 	return nil
 }
 
+func executeTelegramBackup(
+	trigger string,
+) error {
+	select {
+	case telegramBackupRunSemaphore <- struct{}{}:
+		defer func() {
+			<-telegramBackupRunSemaphore
+		}()
+	default:
+		return fmt.Errorf(
+			"Telegram backup is already running",
+		)
+	}
+
+	return executeTelegramBackupWithSlot(trigger)
+}
+
 func telegramBackupSchedulerLoop() {
+	startup := true
+
 	for {
 		cfg, err := loadTelegramBackupConfig()
 
@@ -748,6 +754,23 @@ func telegramBackupSchedulerLoop() {
 			}
 
 			continue
+		}
+
+		// After a webpanel restart, do not immediately "catch up" an overdue
+		// Telegram backup. That behavior used to start a heavy export during
+		// startup and race manual Export/Backup & Send Now requests.
+		if startup {
+			startup = false
+
+			if cfg.NextRun == nil ||
+				!cfg.NextRun.After(time.Now()) {
+
+				next := time.Now().Add(duration)
+				cfg.NextRun = &next
+
+				_ = saveTelegramBackupConfig(cfg)
+				continue
+			}
 		}
 
 		if cfg.NextRun == nil {
@@ -956,26 +979,27 @@ func runTelegramBackupNowHandler(
 			err.Error(),
 			http.StatusBadRequest,
 		)
-
 		return
 	}
 
 	select {
 	case telegramBackupRunSemaphore <- struct{}{}:
-		<-telegramBackupRunSemaphore
-
+		// Slot stays held until the background run actually completes.
 	default:
 		sendError(
 			w,
 			"Telegram backup is already running",
 			http.StatusConflict,
 		)
-
 		return
 	}
 
 	go func() {
-		if err := executeTelegramBackup(
+		defer func() {
+			<-telegramBackupRunSemaphore
+		}()
+
+		if err := executeTelegramBackupWithSlot(
 			"manual",
 		); err != nil {
 
