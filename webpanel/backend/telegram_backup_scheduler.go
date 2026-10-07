@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -48,6 +49,8 @@ var (
 		chan struct{},
 		1,
 	)
+
+	telegramBackupBusy = errors.New("Telegram backup is already running")
 )
 
 func defaultTelegramBackupConfig() TelegramBackupScheduleConfig {
@@ -380,7 +383,7 @@ func createTelegramScheduledBackup() (
 
 const telegramBackupMaxPartBytes int64 = 45 * 1024 * 1024
 
-func sendTelegramBackupPart(
+func sendTelegramBackupPartOnce(
 	credentials telegramBackupCredentials,
 	backupPath string,
 	offset int64,
@@ -389,6 +392,8 @@ func sendTelegramBackupPart(
 	caption string,
 ) error {
 	reader, writer := io.Pipe()
+	// An HTTP failure must also unblock the multipart producer goroutine.
+	defer reader.CloseWithError(io.ErrClosedPipe)
 	multipartWriter := multipart.NewWriter(writer)
 
 	go func() {
@@ -480,10 +485,9 @@ func sendTelegramBackupPart(
 
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf(
-			"Telegram network request failed: %w",
-			err,
-		)
+		return &telegramBackupRetryableError{err: fmt.Errorf(
+			"Telegram network request failed: %w", err,
+		)}
 	}
 	defer response.Body.Close()
 
@@ -503,17 +507,24 @@ func sendTelegramBackupPart(
 	var telegramResponse struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
 	}
 
 	if err := json.Unmarshal(
 		body,
 		&telegramResponse,
 	); err != nil {
-		return fmt.Errorf(
+		apiErr := fmt.Errorf(
 			"invalid Telegram API response (HTTP %d): %w",
 			response.StatusCode,
 			err,
 		)
+		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+			return &telegramBackupRetryableError{err: apiErr}
+		}
+		return apiErr
 	}
 
 	if response.StatusCode < 200 ||
@@ -531,13 +542,59 @@ func sendTelegramBackupPart(
 			)
 		}
 
-		return fmt.Errorf(
-			"Telegram API error: %s",
-			description,
-		)
+		apiErr := fmt.Errorf("Telegram API error (HTTP %d): %s",
+			response.StatusCode, description)
+		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+			return &telegramBackupRetryableError{
+				err: apiErr,
+				retryAfter: time.Duration(telegramResponse.Parameters.RetryAfter) * time.Second,
+			}
+		}
+		return apiErr
 	}
 
 	return nil
+}
+
+// Retry transient Telegram API failures without recreating the backup archive.
+type telegramBackupRetryableError struct {
+	err error
+	retryAfter time.Duration
+}
+
+func (e *telegramBackupRetryableError) Error() string { return e.err.Error() }
+
+func sendTelegramBackupPart(
+	credentials telegramBackupCredentials,
+	backupPath string,
+	offset int64,
+	length int64,
+	uploadName string,
+	caption string,
+) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := sendTelegramBackupPartOnce(
+			credentials, backupPath, offset, length, uploadName, caption,
+		)
+		if err == nil {
+			return nil
+		}
+		var temporary *telegramBackupRetryableError
+		if !errors.As(err, &temporary) || attempt == 2 {
+			return err
+		}
+		delay := time.Duration(2 << attempt) * time.Second
+		if temporary.retryAfter > delay {
+			delay = temporary.retryAfter
+		}
+		if delay > 5*time.Minute {
+			delay = 5*time.Minute
+		}
+		fmt.Printf("Telegram Backup: temporary send error, retry %d/2 after %s: %v\n",
+			attempt+1, delay, err)
+		time.Sleep(delay)
+	}
+	return fmt.Errorf("Telegram backup upload retries exhausted")
 }
 
 func sendTelegramBackupDocument(
@@ -712,9 +769,7 @@ func executeTelegramBackup(
 			<-telegramBackupRunSemaphore
 		}()
 	default:
-		return fmt.Errorf(
-			"Telegram backup is already running",
-		)
+		return telegramBackupBusy
 	}
 
 	return executeTelegramBackupWithSlot(trigger)
@@ -795,13 +850,15 @@ func telegramBackupSchedulerLoop() {
 			if err := executeTelegramBackup(
 				"scheduled",
 			); err != nil {
-
-				fmt.Printf(
-					"Telegram Backup scheduled run failed: %v\n",
-					err,
-				)
+				fmt.Printf("Telegram Backup scheduled run failed: %v\n", err)
+				if errors.Is(err, telegramBackupBusy) {
+					// Avoid a tight CPU loop while a manual upload is active.
+					select {
+					case <-telegramBackupWake:
+					case <-time.After(30 * time.Second):
+					}
+				}
 			}
-
 			continue
 		}
 
@@ -812,11 +869,13 @@ func telegramBackupSchedulerLoop() {
 			if err := executeTelegramBackup(
 				"scheduled",
 			); err != nil {
-
-				fmt.Printf(
-					"Telegram Backup scheduled run failed: %v\n",
-					err,
-				)
+				fmt.Printf("Telegram Backup scheduled run failed: %v\n", err)
+				if errors.Is(err, telegramBackupBusy) {
+					select {
+					case <-telegramBackupWake:
+					case <-time.After(30 * time.Second):
+					}
+				}
 			}
 
 		case <-telegramBackupWake:
