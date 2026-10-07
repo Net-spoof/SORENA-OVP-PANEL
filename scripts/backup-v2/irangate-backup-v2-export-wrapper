@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-# IRANGATE_BACKUP_SINGLE_PASS_V1
+# IRANGATE_BACKUP_SINGLE_PASS_V2_TIMEOUT
 BASE="/usr/local/bin/irangate-backup-v2-export.py"
 LOCK_FILE="/run/irangate-backup-v2.lock"
 STDOUT_FILE="$(mktemp)"
@@ -30,12 +30,44 @@ if command -v flock >/dev/null 2>&1; then
     fi
 fi
 
-# Lower CPU and disk scheduling priority so active VPN
-# traffic remains more important than backup compression.
-if command -v ionice >/dev/null 2>&1; then
-    ionice -c2 -n7         nice -n 10         "$BASE" "$@"         >"$STDOUT_FILE"
+# Lower CPU and disk scheduling priority so active VPN traffic remains more
+# important than backup compression. Also enforce a hard upper bound so a
+# stalled node snapshot can never hold the global backup lock forever.
+BACKUP_TIMEOUT="${IRANGATE_BACKUP_TIMEOUT:-25m}"
+
+run_exporter() {
+    if command -v ionice >/dev/null 2>&1; then
+        ionice -c2 -n7 nice -n 10 "$BASE" "$@"
+    else
+        nice -n 10 "$BASE" "$@"
+    fi
+}
+
+set +e
+if command -v timeout >/dev/null 2>&1; then
+    timeout         --signal=TERM         --kill-after=30s         "$BACKUP_TIMEOUT"         bash -c '
+            BASE="$1"
+            shift
+            if command -v ionice >/dev/null 2>&1; then
+                exec ionice -c2 -n7 nice -n 10 "$BASE" "$@"
+            else
+                exec nice -n 10 "$BASE" "$@"
+            fi
+        ' _ "$BASE" "$@"         >"$STDOUT_FILE"
+    RC=$?
 else
-    nice -n 10         "$BASE" "$@"         >"$STDOUT_FILE"
+    run_exporter "$@" >"$STDOUT_FILE"
+    RC=$?
+fi
+set -e
+
+if [[ "$RC" -eq 124 || "$RC" -eq 137 ]]; then
+    echo "IranGate Backup v2 timed out after $BACKUP_TIMEOUT" >&2
+    exit 124
+fi
+
+if [[ "$RC" -ne 0 ]]; then
+    exit "$RC"
 fi
 
 ARCHIVE="$(
