@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V2
 # Repair stale IranGate subscription reverse-proxy upstreams.
 # The authoritative backend port is read from /etc/irangate/webpanel.env.
 # Only nginx locations that proxy /sub/ to a local TCP port are changed.
@@ -42,7 +43,40 @@ if [[ ! "$WEBPANEL_PORT" =~ ^[0-9]+$ ]] ||
     exit 1
 fi
 
+echo "IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V2"
 echo "IranGate webpanel backend: 127.0.0.1:$WEBPANEL_PORT"
+
+SUBSCRIPTION_PORT="$(
+    awk -F= '
+        /^SUBSCRIPTION_PORT=/ {
+            sub(/^[^=]*=/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$ENV_FILE"
+)"
+
+if [[ ! "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]] ||
+   (( SUBSCRIPTION_PORT < 1 || SUBSCRIPTION_PORT > 65535 )); then
+    SUBSCRIPTION_PORT="$(
+        nginx -T 2>/dev/null |
+        awk '
+            /configuration file .*irangate-subscription\.conf:/ { in_file=1; next }
+            /^# configuration file / && in_file { exit }
+            in_file && /listen[[:space:]]+[0-9]+[[:space:]]+ssl;/ {
+                for (i=1; i<=NF; i++) {
+                    if ($i ~ /^[0-9]+$/) {
+                        print $i
+                        exit
+                    }
+                }
+            }
+        '
+    )"
+fi
+
+echo "IranGate subscription port: ${SUBSCRIPTION_PORT:-unknown}"
 
 # Confirm the backend is reachable before touching nginx. Any HTTP response is
 # acceptable here; connection failure is not.
