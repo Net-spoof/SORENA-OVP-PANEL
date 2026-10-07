@@ -18,6 +18,14 @@ cp -r "$SOURCE_DIR"/* "$DEST_DIR/"
 chown -R root:root "$DEST_DIR"
 chmod -R 644 "$DEST_DIR"
 find "$DEST_DIR" -type d -exec chmod 755 {} \;
+WRAPPER_INSTALLER="$SCRIPT_DIR/../scripts/install-backup-v2-extras-wrappers.sh"
+if [ -x "$WRAPPER_INSTALLER" ]; then
+    echo "🧰 Installing Backup v2 wrappers..."
+    bash "$WRAPPER_INSTALLER"
+else
+    echo "⚠️ Backup v2 wrapper installer not found: $WRAPPER_INSTALLER"
+fi
+
 echo "🔄 Restarting webpanel service..."
 systemctl restart irangate-webpanel
 if systemctl is-active --quiet irangate-webpanel; then
