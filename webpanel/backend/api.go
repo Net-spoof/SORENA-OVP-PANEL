@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -4628,8 +4629,53 @@ func main() {
 		log.Println("⚠️  CHANGE DEFAULT PASSWORD IMMEDIATELY!")
 	}
 	addr := ":" + portStr
-	if err := http.ListenAndServe(addr, corsHandler); err != nil {
-		log.Fatal("Failed to start server:", err)
+
+	// Bind explicitly and retry transient EADDRINUSE races instead of letting
+	// systemd enter a restart loop. Some deployments run short-lived helper
+	// processes during panel startup; a direct ListenAndServe used to abort
+	// immediately if one of them briefly held the configured port.
+	const (
+		listenAttempts = 40
+		listenDelay    = 250 * time.Millisecond
+	)
+
+	var listener net.Listener
+	var listenErr error
+
+	for attempt := 1; attempt <= listenAttempts; attempt++ {
+		listener, listenErr = net.Listen("tcp", addr)
+		if listenErr == nil {
+			break
+		}
+
+		if attempt == 1 || attempt%8 == 0 || attempt == listenAttempts {
+			log.Printf(
+				"Web panel port %s is temporarily unavailable (attempt %d/%d): %v",
+				portStr,
+				attempt,
+				listenAttempts,
+				listenErr,
+			)
+		}
+
+		if attempt < listenAttempts {
+			time.Sleep(listenDelay)
+		}
+	}
+
+	if listenErr != nil {
+		log.Fatalf(
+			"Failed to bind web panel port %s after %d attempts: %v",
+			portStr,
+			listenAttempts,
+			listenErr,
+		)
+	}
+
+	log.Printf("✅ Web panel listener bound successfully on %s", addr)
+
+	if err := http.Serve(listener, corsHandler); err != nil && err != http.ErrServerClosed {
+		log.Fatal("Web panel HTTP server stopped:", err)
 	}
 }
 func getCurrentTrafficHandler(w http.ResponseWriter, r *http.Request) {
