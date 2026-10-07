@@ -45,13 +45,14 @@ func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	// All backup routes share this coordinator. A short wait handles
 	// normal contention with scheduled/Telegram exports without an instant
 	// "already running" error. Never wait indefinitely on an HTTP request.
-	if !backupExecutionMu.TryLock() {
+	locked := backupExecutionMu.TryLock()
+	if !locked {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		deadline := time.NewTimer(30 * time.Second)
 		defer deadline.Stop()
 
-		for {
+		for !locked {
 			select {
 			case <-r.Context().Done():
 				return
@@ -61,14 +62,10 @@ func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 					http.StatusConflict)
 				return
 			case <-ticker.C:
-				if backupExecutionMu.TryLock() {
-					goto backupLockAcquired
-				}
+				locked = backupExecutionMu.TryLock()
 			}
 		}
 	}
-
-backupLockAcquired:
 
 	backupPath, err := func() (string, error) {
 		defer backupExecutionMu.Unlock()
