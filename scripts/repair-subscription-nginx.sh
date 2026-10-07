@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 # IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V2
+# repair stale IranGate subscription
 # Repair stale IranGate subscription reverse-proxy upstreams.
 # The authoritative backend port is read from /etc/irangate/webpanel.env.
 # Only nginx locations that proxy /sub/ to a local TCP port are changed.
