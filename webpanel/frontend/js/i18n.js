@@ -1,6 +1,26 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V5_STANDALONE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V6_STANDALONE
 (() => {
     'use strict';
+
+    // Emergency escape hatch: append ?no_i18n=1 to any panel URL to run the
+    // original English UI without executing translation logic.
+    try {
+        if (new URLSearchParams(window.location.search).get('no_i18n') === '1') {
+            window.IranGateI18n = Object.freeze({
+                disabled: true,
+                getLanguage: () => 'en',
+                setLanguage: () => 'en',
+                toggleLanguage: () => 'en',
+                refresh: () => 'en',
+                ensureControl: () => null,
+                translateTree: () => {},
+                t: value => value
+            });
+            return;
+        }
+    } catch (_) {
+        // If URL parsing is unavailable for any reason, continue normally.
+    }
 
     const STORAGE_KEY = 'irangate_language';
     const LEGACY_KEY = 'irangate_sidebar_language';
@@ -647,7 +667,7 @@
         // DOM watcher, and no dependency on sidebar.js.
         setLanguage(getLanguage(), { emit: false });
 
-        for (const delay of [150, 500, 1200, 3000, 6000, 10000]) {
+        for (const delay of [250, 1500, 5000]) {
             window.setTimeout(() => {
                 if (!document.body) return;
                 ensureLanguageControl();
