@@ -344,7 +344,17 @@
         'Dynamic bandwidth allocation':'تخصیص پویای پهنای باند',
         '🎁 Stay tuned for the surprise!':'🎁 منتظر قابلیت‌های جدید باشید!',
         '💫 Wait for the surprise!':'💫 منتظر قابلیت جدید باشید!',
-        'Got it':'متوجه شدم'
+        'Got it':'متوجه شدم',
+        'Server running':'سرور در حال اجراست',
+        'Server stopped':'سرور متوقف است',
+        'Authentication required':'نیاز به ورود مجدد',
+        'Cleanup failed':'پاک‌سازی ناموفق بود',
+        'admin':'مدیر',
+        'moderator':'ناظر',
+        'viewer':'مشاهده‌گر',
+        'Admin':'مدیر',
+        'Moderator':'ناظر',
+        'Viewer':'مشاهده‌گر'
     });
 
     const originalText = new WeakMap();
@@ -373,11 +383,34 @@
 
     function dynamicTranslate(value) {
         let out = value;
+
         out = out.replace(/^(\d+)\s+days remaining$/i, '$1 روز باقی‌مانده');
+        out = out.replace(/^(\d+)\s+day\(s\)$/i, '$1 روز');
+        out = out.replace(/^(\d+)\s+days? left$/i, '$1 روز باقی‌مانده');
         out = out.replace(/^(\d+)\s+owned users$/i, '$1 کاربر تحت مدیریت');
         out = out.replace(/^(\d+)\s+selected outbounds$/i, '$1 خروجی انتخاب‌شده');
-        out = out.replace(/^Loading\s+(.+)\.\.\.$/i, 'در حال بارگذاری $1...');
         out = out.replace(/^(\d+)\s+users?$/i, '$1 کاربر');
+
+        out = out.replace(/^Loading\s+(.+)\.\.\.$/i, 'در حال بارگذاری $1...');
+        out = out.replace(/^Updated\s+(.+)$/i, 'به‌روزرسانی: $1');
+        out = out.replace(/^Admin:\s*(.+)$/i, 'مدیر: $1');
+        out = out.replace(/^Expires\s+(.+)$/i, 'انقضا: $1');
+
+        out = out.replace(/^Failed to load\s+(.+)$/i, 'بارگذاری $1 ناموفق بود');
+        out = out.replace(/^Failed to save\s+(.+)$/i, 'ذخیره $1 ناموفق بود');
+        out = out.replace(/^Failed to update\s+(.+)$/i, 'به‌روزرسانی $1 ناموفق بود');
+        out = out.replace(/^Failed to delete\s+(.+)$/i, 'حذف $1 ناموفق بود');
+        out = out.replace(/^Failed to create\s+(.+)$/i, 'ساخت $1 ناموفق بود');
+        out = out.replace(/^Failed to (start|stop|restart) server$/i, (_, action) => ({
+            start: 'راه‌اندازی سرور ناموفق بود',
+            stop: 'توقف سرور ناموفق بود',
+            restart: 'راه‌اندازی مجدد سرور ناموفق بود'
+        })[action.toLowerCase()]);
+
+        out = out.replace(/^No\s+(.+)\s+found\.?$/i, '$1 پیدا نشد');
+        out = out.replace(/^No\s+(.+)\s+configured\.?$/i, '$1 پیکربندی نشده است');
+        out = out.replace(/^No\s+(.+)\s+enabled$/i, '$1 فعالی وجود ندارد');
+
         return out;
     }
 
