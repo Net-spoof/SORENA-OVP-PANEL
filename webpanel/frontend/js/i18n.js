@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only.
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V2
 (() => {
     'use strict';
 
@@ -502,11 +502,25 @@
 
     function syncControls() {
         const lang = getLanguage();
+        const desiredText = lang === 'fa' ? 'EN' : 'فا';
+        const desiredTitle = lang === 'fa' ? 'English' : 'فارسی';
+        const desiredAria = lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian';
+
         document.querySelectorAll('.sidebar-language-btn').forEach(btn => {
             const span = btn.querySelector('span');
-            if (span) span.textContent = lang === 'fa' ? 'EN' : 'فا';
-            btn.title = lang === 'fa' ? 'English' : 'فارسی';
-            btn.setAttribute('aria-label', lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian');
+
+            // Idempotent writes are essential here: this function is also
+            // called from MutationObserver. Writing an unchanged value would
+            // create another mutation and can lock the page in an observer loop.
+            if (span && span.textContent !== desiredText) {
+                span.textContent = desiredText;
+            }
+            if (btn.getAttribute('title') !== desiredTitle) {
+                btn.setAttribute('title', desiredTitle);
+            }
+            if (btn.getAttribute('aria-label') !== desiredAria) {
+                btn.setAttribute('aria-label', desiredAria);
+            }
         });
 
         const sidebarButton = document.querySelector('.sidebar-language-btn');
@@ -526,7 +540,8 @@
         document.body.appendChild(button);
 
         const lang = getLanguage();
-        button.textContent = lang === 'fa' ? 'EN · English' : 'فا · فارسی';
+        const desired = lang === 'fa' ? 'EN · English' : 'فا · فارسی';
+        if (button.textContent !== desired) button.textContent = desired;
     }
 
     function setLanguage(lang, options = {}) {
@@ -537,7 +552,10 @@
         syncControls();
 
         const floating = document.getElementById('irangate-language-floating');
-        if (floating) floating.textContent = normalized === 'fa' ? 'EN · English' : 'فا · فارسی';
+        if (floating) {
+            const desired = normalized === 'fa' ? 'EN · English' : 'فا · فارسی';
+            if (floating.textContent !== desired) floating.textContent = desired;
+        }
 
         if (options.emit !== false) {
             window.dispatchEvent(new CustomEvent('irangate:language-changed', {
@@ -558,24 +576,56 @@
         observer = new MutationObserver(mutations => {
             if (applying) return;
             const lang = getLanguage();
+            let sidebarStructureChanged = false;
 
-            for (const mutation of mutations) {
-                if (mutation.type === 'characterData') {
-                    processText(mutation.target, lang, true);
-                    continue;
-                }
+            applying = true;
+            try {
+                for (const mutation of mutations) {
+                    const targetElement = mutation.target instanceof Element
+                        ? mutation.target
+                        : mutation.target.parentElement;
 
-                if (mutation.type === 'attributes') {
-                    processAttribute(mutation.target, mutation.attributeName, lang, true);
-                    continue;
-                }
+                    const isLanguageControl = Boolean(
+                        targetElement &&
+                        targetElement.closest &&
+                        targetElement.closest('.sidebar-language-btn, #irangate-language-floating')
+                    );
 
-                for (const node of mutation.addedNodes) {
-                    translateTree(node, lang, true);
+                    if (mutation.type === 'characterData') {
+                        if (!isLanguageControl) {
+                            processText(mutation.target, lang, true);
+                        }
+                        continue;
+                    }
+
+                    if (mutation.type === 'attributes') {
+                        if (!isLanguageControl) {
+                            processAttribute(mutation.target, mutation.attributeName, lang, true);
+                        }
+                        continue;
+                    }
+
+                    for (const node of mutation.addedNodes) {
+                        if (node instanceof Element &&
+                            (node.matches('.sidebar, .sidebar-language-btn') ||
+                             node.querySelector?.('.sidebar-language-btn'))) {
+                            sidebarStructureChanged = true;
+                        }
+
+                        const nodeIsLanguageControl = node instanceof Element &&
+                            (node.matches('.sidebar-language-btn, #irangate-language-floating') ||
+                             node.closest?.('.sidebar-language-btn, #irangate-language-floating'));
+
+                        if (!nodeIsLanguageControl) {
+                            translateTree(node, lang, true);
+                        }
+                    }
                 }
+            } finally {
+                applying = false;
             }
 
-            syncControls();
+            if (sidebarStructureChanged) syncControls();
         });
 
         observer.observe(document.body, {
