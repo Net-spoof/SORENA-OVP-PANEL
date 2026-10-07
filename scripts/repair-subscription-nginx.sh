@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V2
+# IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V3
 # repair stale IranGate subscription
 # Repair stale IranGate subscription reverse-proxy upstreams.
 # The authoritative backend port is read from /etc/irangate/webpanel.env.
@@ -44,7 +44,7 @@ if [[ ! "$WEBPANEL_PORT" =~ ^[0-9]+$ ]] ||
     exit 1
 fi
 
-echo "IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V2"
+echo "IRANGATE_SUBSCRIPTION_NGINX_REPAIR_V3"
 echo "IranGate webpanel backend: 127.0.0.1:$WEBPANEL_PORT"
 
 SUBSCRIPTION_PORT="$(
@@ -78,6 +78,21 @@ if [[ ! "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]] ||
 fi
 
 echo "IranGate subscription port: ${SUBSCRIPTION_PORT:-unknown}"
+
+SUBSCRIPTION_DOMAIN="$(
+    nginx -T 2>/dev/null |
+    awk '
+        /configuration file .*irangate-subscription\.conf:/ { in_file=1; next }
+        /^# configuration file / && in_file { exit }
+        in_file && /^[[:space:]]*server_name[[:space:]]+/ {
+            gsub(/;/, "", $2)
+            print $2
+            exit
+        }
+    '
+)"
+SUBSCRIPTION_DOMAIN="${SUBSCRIPTION_DOMAIN:-subo.konkuriran.sbs}"
+echo "IranGate subscription domain: $SUBSCRIPTION_DOMAIN"
 
 # Confirm the backend is reachable before touching nginx. Any HTTP response is
 # acceptable here; connection failure is not.
@@ -246,18 +261,33 @@ if [[ "$SUBSCRIPTION_PORT" =~ ^[0-9]+$ ]]; then
         BEFORE_LINES="$(wc -l < "$ERROR_LOG" 2>/dev/null || echo 0)"
     fi
 
-    PUBLIC_SUB_CODE="$(
-        curl -k -sS             --resolve "subo.konkuriran.sbs:${SUBSCRIPTION_PORT}:127.0.0.1"             -o /dev/null             -w '%{http_code}'             --max-time 8             "https://subo.konkuriran.sbs:${SUBSCRIPTION_PORT}/sub/__invalid_test_token__"             2>/dev/null || true
-    )"
+    PUBLIC_SUB_CODE="000"
 
-    echo "Nginx subscription HTTP: $PUBLIC_SUB_CODE"
+    # nginx reload is graceful. For a short window, an old worker can still
+    # answer with the pre-repair upstream. Use the real SNI/Host and retry
+    # until the new workers are serving the repaired config.
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        PUBLIC_SUB_CODE="$(
+            curl -k -sS                 --resolve "${SUBSCRIPTION_DOMAIN}:${SUBSCRIPTION_PORT}:127.0.0.1"                 -o /dev/null                 -w '%{http_code}'                 --max-time 8                 "https://${SUBSCRIPTION_DOMAIN}:${SUBSCRIPTION_PORT}/sub/__invalid_test_token__"                 2>/dev/null || true
+        )"
+
+        echo "Nginx subscription HTTP (attempt $attempt/10): $PUBLIC_SUB_CODE"
+
+        if [[ -n "$PUBLIC_SUB_CODE" &&
+              "$PUBLIC_SUB_CODE" != "000" &&
+              "$PUBLIC_SUB_CODE" != "502" ]]; then
+            break
+        fi
+
+        sleep 1
+    done
 
     if [[ -z "$PUBLIC_SUB_CODE" || "$PUBLIC_SUB_CODE" == "000" || "$PUBLIC_SUB_CODE" == "502" ]]; then
-        echo "ERROR: nginx subscription listener is still unhealthy" >&2
+        echo "ERROR: nginx subscription listener is still unhealthy after reload retries" >&2
         if [[ -f "$ERROR_LOG" ]]; then
-            echo
-            echo "New nginx error log lines:"
-            tail -n "+$((BEFORE_LINES + 1))" "$ERROR_LOG" 2>/dev/null | tail -80 || true
+            echo >&2
+            echo "New nginx error log lines:" >&2
+            tail -n "+$((BEFORE_LINES + 1))" "$ERROR_LOG" 2>/dev/null | tail -80 >&2 || true
         fi
         exit 1
     fi
