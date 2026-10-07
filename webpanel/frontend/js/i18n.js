@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V10_STABLE_TOGGLE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V11_PERSISTENT
 (() => {
     'use strict';
 
@@ -509,17 +509,70 @@
         return lang === 'fa' ? 'fa' : 'en';
     }
 
+    function getCookieLanguage() {
+        try {
+            const match = document.cookie
+                .split('; ')
+                .find(row => row.startsWith(STORAGE_KEY + '='));
+            return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : '';
+        } catch (_) {
+            return '';
+        }
+    }
+
     function getLanguage() {
-        return normalizeLang(
-            localStorage.getItem(STORAGE_KEY) ||
-            localStorage.getItem(LEGACY_KEY)
-        );
+        let stored = '';
+
+        try {
+            stored = localStorage.getItem(STORAGE_KEY) || '';
+        } catch (_) {}
+
+        if (!stored) {
+            try {
+                stored = sessionStorage.getItem(STORAGE_KEY) || '';
+            } catch (_) {}
+        }
+
+        if (!stored) stored = getCookieLanguage();
+
+        if (!stored) {
+            try {
+                stored = localStorage.getItem(LEGACY_KEY) || '';
+            } catch (_) {}
+        }
+
+        const normalized = normalizeLang(stored);
+
+        // Self-heal the three persistence layers when one of them was cleared.
+        if (stored) {
+            try { localStorage.setItem(STORAGE_KEY, normalized); } catch (_) {}
+            try { sessionStorage.setItem(STORAGE_KEY, normalized); } catch (_) {}
+            try {
+                document.cookie = STORAGE_KEY + '=' + encodeURIComponent(normalized) +
+                    '; Path=/; Max-Age=31536000; SameSite=Lax';
+            } catch (_) {}
+        }
+
+        return normalized;
     }
 
     function rememberLanguage(lang) {
         const normalized = normalizeLang(lang);
-        localStorage.setItem(STORAGE_KEY, normalized);
-        localStorage.setItem(LEGACY_KEY, normalized);
+
+        try {
+            localStorage.setItem(STORAGE_KEY, normalized);
+            localStorage.setItem(LEGACY_KEY, normalized);
+        } catch (_) {}
+
+        try {
+            sessionStorage.setItem(STORAGE_KEY, normalized);
+        } catch (_) {}
+
+        try {
+            document.cookie = STORAGE_KEY + '=' + encodeURIComponent(normalized) +
+                '; Path=/; Max-Age=31536000; SameSite=Lax';
+        } catch (_) {}
+
         return normalized;
     }
 
@@ -938,11 +991,17 @@
     syncTitle(getLanguage());
 
     function boot() {
-        setLanguage(getLanguage(), { emit: false });
+        const language = getLanguage();
+        setLanguage(language, { emit: false });
         startObserver();
 
-        for (const delay of [300, 1200, 3500]) {
-            window.setTimeout(refresh, delay);
+        // Some pages render cards/tables/sidebar after their API calls. Re-run
+        // translation at bounded checkpoints so the selected language is
+        // guaranteed to cover Dashboard/Clients/Users even on slower phones.
+        for (const delay of [250, 900, 2200, 5000]) {
+            window.setTimeout(() => {
+                if (getLanguage() === language) refresh();
+            }, delay);
         }
     }
 
