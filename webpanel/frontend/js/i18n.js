@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V6_STANDALONE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V7_COMPLETE
 (() => {
     'use strict';
 
@@ -6,7 +6,41 @@
     // original English UI without executing translation logic.
     try {
         if (new URLSearchParams(window.location.search).get('no_i18n') === '1') {
-            window.IranGateI18n = Object.freeze({
+            function startDynamicTranslationObserver() {
+        if (dynamicObserver || !document.body) return;
+
+        const root = document.querySelector('.main-content') || document.body;
+
+        dynamicObserver = new MutationObserver(mutations => {
+            if (getLanguage() !== 'fa') return;
+
+            let hasAddedContent = false;
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
+                    hasAddedContent = true;
+                    break;
+                }
+            }
+            if (!hasAddedContent) return;
+
+            window.clearTimeout(dynamicRefreshTimer);
+            dynamicRefreshTimer = window.setTimeout(() => {
+                if (getLanguage() === 'fa') {
+                    translateTree(root, 'fa', true);
+                    syncControls();
+                }
+            }, 120);
+        });
+
+        // childList only: text/attribute changes made by i18n itself are not
+        // observed, so there is no self-trigger feedback loop.
+        dynamicObserver.observe(root, {
+            subtree: true,
+            childList: true
+        });
+    }
+
+    window.IranGateI18n = Object.freeze({
                 disabled: true,
                 getLanguage: () => 'en',
                 setLanguage: () => 'en',
@@ -319,6 +353,8 @@
     const originalAttrs = new WeakMap();
     const renderedAttrs = new WeakMap();
     let applying = false;
+    let dynamicObserver = null;
+    let dynamicRefreshTimer = null;
 
     function normalizeLang(lang) {
         return lang === 'fa' ? 'fa' : 'en';
@@ -674,6 +710,8 @@
                 refreshCurrentLanguage();
             }, delay);
         }
+
+        startDynamicTranslationObserver();
     };
 
     if (document.readyState === 'loading') {
