@@ -1,4 +1,4 @@
-// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V9_COMPLETE
+// IranGate panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V10_STABLE_TOGGLE
 (() => {
     'use strict';
 
@@ -725,34 +725,36 @@
             }
 
             #irangate-language-toggle {
+                width: 100%;
+                min-height: 42px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                min-width: 54px;
-                height: 34px;
-                padding: 0 9px;
-                margin-inline-start: auto;
-                border: 1px solid rgba(100,255,218,.42);
+                gap: 8px;
+                padding: 9px 12px;
+                margin: 0 0 10px 0;
+                border: 1px solid rgba(100,255,218,.34);
                 border-radius: 9px;
-                background: rgba(17,34,64,.92);
-                color: #e6f1ff;
-                font-size: 12px;
-                font-weight: 800;
+                background: rgba(30,58,95,.38);
+                color: var(--text-primary, #e6f1ff);
+                font-size: 13px;
+                font-weight: 700;
                 line-height: 1;
                 cursor: pointer;
                 white-space: nowrap;
-                flex: 0 0 auto;
-                box-shadow: 0 3px 14px rgba(0,0,0,.18);
+                transition: all .2s ease;
             }
             #irangate-language-toggle:hover {
-                border-color: rgba(100,255,218,.9);
-                background: rgba(30,58,95,.98);
+                border-color: rgba(100,255,218,.8);
+                background: rgba(30,58,95,.72);
             }
             #irangate-language-toggle.irangate-language-floating {
                 position: fixed;
                 top: 16px;
                 inset-inline-end: 16px;
                 z-index: 9999;
+                width: auto;
+                min-width: 92px;
                 margin: 0;
             }
 
@@ -792,14 +794,14 @@
         if (!button) return;
 
         const lang = getLanguage();
-        const text = lang === 'fa' ? '🌐 EN' : '🌐 فا';
-        const title = lang === 'fa' ? 'English' : 'فارسی';
+        const text = lang === 'fa' ? '🌐 English' : '🌐 فارسی';
+        const title = lang === 'fa' ? 'Switch to English' : 'تغییر زبان به فارسی';
 
         if (button.textContent !== text) button.textContent = text;
         if (button.title !== title) button.title = title;
         button.setAttribute(
             'aria-label',
-            lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'Change language to Persian'
+            lang === 'fa' ? 'تغییر زبان به انگلیسی' : 'تغییر زبان به فارسی'
         );
     }
 
@@ -818,10 +820,14 @@
             });
         }
 
-        const logo = document.querySelector('.sidebar-logo');
+        const footer = document.querySelector('.sidebar-footer');
 
-        if (logo) {
-            if (button.parentElement !== logo) logo.appendChild(button);
+        if (footer) {
+            if (button.parentElement !== footer) {
+                footer.insertBefore(button, footer.firstChild);
+            } else if (footer.firstElementChild !== button) {
+                footer.insertBefore(button, footer.firstChild);
+            }
             button.className = '';
         } else {
             if (button.parentElement !== document.body) document.body.appendChild(button);
@@ -852,7 +858,14 @@
     }
 
     function toggleLanguage() {
-        return setLanguage(getLanguage() === 'fa' ? 'en' : 'fa');
+        const next = getLanguage() === 'fa' ? 'en' : 'fa';
+        rememberLanguage(next);
+
+        // Reload from a clean DOM so pages that rebuild their dashboard/sidebar
+        // asynchronously start in the selected language from the first paint.
+        syncDirection(next);
+        window.location.reload();
+        return next;
     }
 
     function refresh() {
@@ -888,8 +901,8 @@
                     translateTree(node, lang, true);
 
                     if (node.nodeType === Node.ELEMENT_NODE &&
-                        (node.matches?.('.sidebar, .sidebar-logo') ||
-                         node.querySelector?.('.sidebar-logo'))) {
+                        (node.matches?.('.sidebar, .sidebar-footer') ||
+                         node.querySelector?.('.sidebar-footer'))) {
                         ensureLanguageControl();
                     }
                 }
