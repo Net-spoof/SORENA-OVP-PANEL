@@ -104,6 +104,14 @@ systemctl is-active --quiet "$SERVICE"
 health
 echo "Live webpanel healthy."
 
+# Never restart the webpanel while a previous restore may still be
+# replacing PostgreSQL, OpenVPN or node state.
+if ps -eo args= | grep -E '[/]usr/local/bin/irangate-backup-v2-import|[p]g_restore.*irangate' |
+    grep -v '/scripts/deploy-webpanel-backup-only-safe.sh' >/dev/null; then
+    echo "ERROR: a restore process may still be running; deployment cancelled." >&2
+    exit 1
+fi
+
 # This host previously failed on port collision. Refuse deployment if the
 # original protection has been removed, rather than risking another 502.
 if ! sysctl -n net.ipv4.ip_local_reserved_ports |
