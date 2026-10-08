@@ -77,6 +77,16 @@ for cmd in openvpn make-cadir psql pg_dump pg_restore nginx rsync curl jq       
 done
 need runuser
 
+# Optional AI support ships prebuilt Python wheels; install from the payload
+# only. Never run a pip/network resolver on the target machine.
+if [[ -f "$ROOT/pkg/ai/requirements.txt" ]]; then
+    info "Installing bundled AI Python packages from local wheelhouse"
+    python3 -m venv /opt/irangate-ai-venv
+    PIP_NO_INDEX=1 /opt/irangate-ai-venv/bin/pip install --no-index \
+        --find-links "$ROOT/offline-assets/wheelhouse" \
+        -r "$ROOT/pkg/ai/requirements.txt"
+fi
+
 info "Installing the complete source/runtime tree"
 INSTALL_ROOT="/opt/IranGate-OV-Reza"
 mkdir -p "$INSTALL_ROOT"
