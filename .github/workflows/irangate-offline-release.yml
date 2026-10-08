@@ -1,0 +1,114 @@
+name: Build and publish complete offline IranGate releases
+
+on:
+  push:
+    branches:
+      - l2tp-dev
+    paths:
+      - .github/workflows/irangate-offline-release.yml
+      - scripts/offline/**
+      - scripts/offline-install-panel.sh
+      - scripts/make-offline-panel-bundle.sh
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: irangate-offline-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Offline master - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.0'
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            webpanel/backend/go.sum
+
+      - name: Install builder prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils rsync python3-pip gh
+
+      - name: Build offline bundle and simulate offline APT dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI: 'true'
+          OUT_DIR: ${{ runner.temp }}/built
+        run: |
+          bash scripts/offline/build-release-bundle.sh
+          ls -lh "$OUT_DIR"
+
+      - name: Validate self-extracting file marker and shell header
+        env:
+          OUT_DIR: ${{ runner.temp }}/built
+        run: |
+          bash -n scripts/offline/install-master-from-bundle.sh
+          bash -n scripts/offline/build-release-bundle.sh
+          asset="$(find "$OUT_DIR" -name '*.run' -type f -print -quit)"
+          test -n "$asset"
+          bash -n "$asset" 2>/dev/null || :
+          sha256sum -c "$asset.sha256"
+
+      - name: Upload fully-built offline artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: irangate-${{ matrix.os }}-amd64
+          path: |
+            ${{ runner.temp }}/built/*.run
+            ${{ runner.temp }}/built/*.sha256
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish tagged GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: irangate-ubuntu-*-amd64
+          merge-multiple: true
+          path: dist
+
+      - name: Verify both OS bundles and checksums
+        run: |
+          set -Eeuo pipefail
+          for os in 2204 2404; do
+            name="IranGate-OV-offline-ubuntu${os}-amd64.run"
+            test -s "dist/$name"
+            (cd dist && sha256sum -c "$name.sha256")
+          done
+
+      - name: Publish only after both offline builds pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          tag="offline-${GITHUB_SHA:0:12}"
+          gh release create "$tag" dist/*.run dist/*.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "IranGate complete offline installer (${GITHUB_SHA:0:12})" \
+            --notes "Self-contained, no international network required on the destination server. Choose the asset matching Ubuntu 22.04 or 24.04 **amd64**. Single command: sudo bash IranGate-OV-offline-ubuntu2204-amd64.run (or ubuntu2404). Includes source, compiled webpanel and CLI, dependency-complete local APT pool, PostgreSQL/OpenVPN/IKEv2 installation logic, sing-box routing engine, Python wheels and Backup v2. Intended for a **fresh systemd VPS with TUN enabled**, and HTTP/IP startup. Does not replace existing IranGate installations; public TLS certificates, DNS, remote node credentials and user data are necessarily site-specific. Validate your private backup separately." \
+            --latest
