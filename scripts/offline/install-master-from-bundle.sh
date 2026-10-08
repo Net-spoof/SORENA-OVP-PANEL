@@ -23,7 +23,6 @@ need systemctl
 need tar
 need awk
 need sed
-need openssl
 [[ -f /etc/os-release ]] || die "Unsupported Linux distribution"
 . /etc/os-release
 [[ "$ID" == ubuntu && ( "$VERSION_ID" == "22.04" || "$VERSION_ID" == "24.04" ) ]] ||
@@ -76,6 +75,7 @@ for cmd in openvpn make-cadir psql pg_dump pg_restore nginx rsync curl jq       
     need "$cmd"
 done
 need runuser
+need openssl
 
 # Optional AI support ships prebuilt Python wheels; install from the payload
 # only. Never run a pip/network resolver on the target machine.

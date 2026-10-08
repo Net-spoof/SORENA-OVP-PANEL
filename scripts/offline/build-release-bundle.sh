@@ -118,12 +118,12 @@ gzip -9 -c Packages > Packages.gz
 mkdir -p "$WORK/apttest/lists/partial"
 printf 'deb [trusted=yes] file:%s ./\n' "$PAYLOAD/offline-assets/apt" > "$WORK/apttest/local.list"
 : > "$WORK/apttest/empty-status"
-apt-get -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
+sudo apt-get -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
         -o "Dir::Etc::sourceparts=-" \
         -o "Dir::State::lists=$WORK/apttest/lists" \
         -o "Dir::State::status=$WORK/apttest/empty-status" \
         -o "Acquire::Languages=none" update
-apt-get -s --no-install-recommends \
+sudo apt-get -s --no-install-recommends \
         -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
         -o "Dir::Etc::sourceparts=-" \
         -o "Dir::State::lists=$WORK/apttest/lists" \
@@ -175,6 +175,9 @@ set -Eeuo pipefail
 [[ "$(id -u)" == 0 ]] || { echo "Run with sudo/root" >&2; exit 1; }
 SELF_FILE="$(readlink -f "$0")"
 TMP="$(mktemp -d /tmp/irangate-offline-release.XXXXXX)"
+# _apt needs traversal permission to read file:// packages from this
+# otherwise-private temporary extraction directory.
+chmod 755 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 MARKER='__IRANGATE_BUNDLE_START__'
 OFFSET="$(awk -v marker="$MARKER" '$0 == marker { print NR+1; exit }' "$SELF_FILE")"
