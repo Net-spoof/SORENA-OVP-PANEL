@@ -118,12 +118,12 @@ gzip -9 -c Packages > Packages.gz
 mkdir -p "$WORK/apttest/lists/partial"
 printf 'deb [trusted=yes] file:%s ./\n' "$PAYLOAD/offline-assets/apt" > "$WORK/apttest/local.list"
 : > "$WORK/apttest/empty-status"
-apt-get -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
+sudo apt-get -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
         -o "Dir::Etc::sourceparts=-" \
         -o "Dir::State::lists=$WORK/apttest/lists" \
         -o "Dir::State::status=$WORK/apttest/empty-status" \
         -o "Acquire::Languages=none" update
-apt-get -s --no-install-recommends \
+sudo apt-get -s --no-install-recommends \
         -o "Dir::Etc::sourcelist=$WORK/apttest/local.list" \
         -o "Dir::Etc::sourceparts=-" \
         -o "Dir::State::lists=$WORK/apttest/lists" \
