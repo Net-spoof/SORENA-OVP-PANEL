@@ -322,7 +322,10 @@ class API {
         a.click();
         document.body.removeChild(a);
 
-        window.URL.revokeObjectURL(url);
+        // Give the browser time to start saving the downloaded archive.
+        // Revoking the object URL immediately can cancel downloads in
+        // some browsers, especially for larger backups.
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 60000);
 
         return {
             success: true,
