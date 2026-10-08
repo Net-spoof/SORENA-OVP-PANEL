@@ -89,7 +89,7 @@ LC_ALL=C apt-get -s --no-install-recommends \
     install "${PKGS[@]}" > "$WORK/apt-solved.txt"
 
 mapfile -t SOLVED < <(
-    sed -n -E 's/^Inst ([^ ]+) \\(([^ ]+) .*/\1=\2/p' "$WORK/apt-solved.txt" |
+    sed -n -E 's/^Inst ([^ ]+) \(([^ ]+) .*/\1=\2/p' "$WORK/apt-solved.txt" |
     sort -u
 )
 (( ${#SOLVED[@]} >= 40 )) || {
