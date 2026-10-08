@@ -195,9 +195,11 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tempPath := tempFile.Name()
-
+	removeTempOnReturn := true
 	defer func() {
-		_ = os.Remove(tempPath)
+		if removeTempOnReturn {
+			_ = os.Remove(tempPath)
+		}
 	}()
 
 	if err := tempFile.Chmod(0600); err != nil {
@@ -235,13 +237,14 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := "--restore"
-
 	if r.URL.Query().Get("validate_only") == "1" {
 		mode = "--validate-only"
-	} else {
-		// Restore mutates live PostgreSQL, clients, OpenVPN and node state.
-		// It must not race scheduled/manual exports or another restore.
-		// Validation-only is read-only and deliberately needs no lock.
+	}
+	asyncRestore := mode == "--restore" && r.URL.Query().Get("async") == "1"
+
+	if mode == "--restore" {
+		// Lock before responding so two requests cannot start overlapping
+		// destructive restores or race the scheduled/manual backup exporter.
 		if !backupExecutionMu.TryLock() {
 			sendError(
 				w,
@@ -250,7 +253,35 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
-		defer backupExecutionMu.Unlock()
+		if !asyncRestore {
+			defer backupExecutionMu.Unlock()
+		}
+	}
+
+	if asyncRestore {
+		job, jobErr := createBackupImportJob()
+		if jobErr != nil {
+			backupExecutionMu.Unlock()
+			sendError(
+				w,
+				"Failed to start tracked backup restore: " + jobErr.Error(),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+		// Ownership of the exclusive lock and uploaded archive passes to
+		// the worker, which persists completion/failure for later polling.
+		removeTempOnReturn = false
+		go runBackupImportAsync(job, tempPath)
+		sendSuccess(
+			w,
+			"Backup restore started in background",
+			map[string]interface{}{
+				"job_id": job.ID,
+				"status": "running",
+			},
+		)
+		return
 	}
 
 	cmd := exec.Command(

@@ -404,6 +404,9 @@
                     <div id="backupImportValidationStatus" role="status" class="text-sm text-gray-700 mt-2" aria-live="polite">
                         No backup validated yet.
                     </div>
+                    <button type="button" onclick="checkLastRestoreStatus()" class="text-sm text-indigo-600 underline mt-2">
+                        🔎 Check Last Restore Status (read-only)
+                    </button>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">
                         <button type="button" onclick="validateSelectedBackup(this)" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg">
                             ✅ Validate Backup (Safe)
@@ -529,7 +532,7 @@
 
     </div>
 
-    <script src="js/api.js?v=backup-import-20261008"></script>
+    <script src="js/api.js?v=backup-import-async-20261008"></script>
     <script>
         checkAuth();
 
@@ -1087,6 +1090,49 @@
             }
         }
 
+        const backupRestoreJobStorageKey = 'irangate:backupRestoreJobID';
+
+        async function checkLastRestoreStatus() {
+            const jobID = localStorage.getItem(backupRestoreJobStorageKey);
+            const status = document.getElementById('backupImportValidationStatus');
+            if (!jobID) {
+                status.textContent = 'No tracked restore job found on this device.';
+                return null;
+            }
+            try {
+                const job = await api.getBackupRestoreStatus(jobID);
+                if (job.status === 'completed' && job.restore_success) {
+                    status.textContent = '✅ Restore completed successfully at ' +
+                        (job.completed_at || 'unknown time') +
+                        '. Verify clients, nodes and VPN health.';
+                } else if (job.status === 'failed') {
+                    status.textContent = '❌ Restore failed: ' +
+                        (job.error || 'Unknown error') +
+                        '. Check the safety backup and server logs before retrying.';
+                } else if (job.status === 'interrupted') {
+                    status.textContent = '⚠️ Restore interrupted by panel restart. ' +
+                        'Check server and rollback state before retrying.';
+                } else {
+                    status.textContent = '⏳ Restore still running (job ' +
+                        jobID.slice(0, 8) + '). Refresh status later.';
+                }
+                return job;
+            } catch (error) {
+                status.textContent = '⚠️ Could not retrieve restore status: ' +
+                    (error.message || 'Network error') +
+                    '. Do not retry Restore until the existing job is checked.';
+                return null;
+            }
+        }
+
+        // Restore status is persistent on the server, so mobile browsers can
+        // return to this page and inspect a long-running job safely.
+        window.setTimeout(() => {
+            if (localStorage.getItem(backupRestoreJobStorageKey)) {
+                checkLastRestoreStatus();
+            }
+        }, 500);
+
         // Restoring is deliberately a separate, confirmed destructive action.
         async function importBackup(button = null) {
             if (button && button.disabled) return;
@@ -1129,10 +1175,51 @@
                 status.textContent = 'Restoring ' + archive.name +
                     '. Do not close this page; VPN and panel access may briefly disconnect.';
 
-                const result = await api.importBackup(archive);
-                status.textContent = '✅ Restore completed: ' + archive.name;
-                showToast(result.message || 'Backup restored successfully. Reloading...', 'success');
-                window.setTimeout(() => location.reload(), 3000);
+                const started = await api.startBackupRestore(archive);
+                const jobID = started.job_id;
+                localStorage.setItem(backupRestoreJobStorageKey, jobID);
+                status.textContent = '⏳ Restore started (job ' +
+                    jobID.slice(0, 8) + '). You may return later to check status.';
+
+                let finished = false;
+                let failedPolls = 0;
+                for (let i = 0; i < 360; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    let job;
+                    try {
+                        job = await api.getBackupRestoreStatus(jobID);
+                        failedPolls = 0;
+                    } catch (pollError) {
+                        failedPolls++;
+                        status.textContent = '⏳ Restore running or panel temporarily unavailable. ' +
+                            'Status checks failed ' + failedPolls +
+                            ' time(s); do not start another restore.';
+                        continue;
+                    }
+
+                    if (job.status === 'completed' && job.restore_success) {
+                        status.textContent = '✅ Backup restored successfully at ' +
+                            (job.completed_at || 'unknown time') +
+                            '. Verify users and VPN services.';
+                        showToast('Backup restored successfully!', 'success');
+                        finished = true;
+                        break;
+                    }
+                    if (job.status === 'failed') {
+                        throw new Error('Restore failed: ' +
+                            (job.error || 'Unknown error') +
+                            '. Safety backup: ' + (job.safety_backup || 'check server logs'));
+                    }
+                    if (job.status === 'interrupted') {
+                        throw new Error('Restore interrupted; inspect server state before retrying.');
+                    }
+                    status.textContent = '⏳ Restore in progress (job ' +
+                        jobID.slice(0, 8) + '). Do not start another restore.';
+                }
+                if (!finished) {
+                    status.textContent = '⏳ Restore status not yet confirmed. ' +
+                        'Use Check Last Restore Status; never retry blindly.';
+                }
             } catch (error) {
                 const message = error.message || 'Restore failed; inspect server logs.';
                 status.textContent = '⚠️ ' + message +

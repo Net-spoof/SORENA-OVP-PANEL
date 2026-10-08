@@ -130,6 +130,8 @@ WORKTREE_ADDED=1
 grep -Fq 'completed_run_id' "$WORK/webpanel/frontend/settings.html"
 grep -Fq 'beginTelegramBackupRun' "$WORK/webpanel/backend/telegram_backup_scheduler.go"
 grep -Fq 'validateSelectedBackup' "$WORK/webpanel/frontend/settings.html"
+grep -Fq 'startBackupRestore(archive)' "$WORK/webpanel/frontend/settings.html"
+grep -Fq 'runBackupImportAsync' "$WORK/webpanel/backend/backup_v2.go"
 
 # Optional frontend syntax checks. These run before replacing live files.
 if command -v node >/dev/null 2>&1; then
@@ -156,7 +158,7 @@ echo "===== BUILD & TEST BEFORE STOPPING PANEL ====="
     cd "$WORK/webpanel/backend"
     # GOTOOLCHAIN=auto may download Go 1.26; if unavailable, stop safely.
     export GOTOOLCHAIN=auto
-    timeout 480 go test -run '^TestTelegramBackup' -count=1 .
+    timeout 480 go test -run '^(TestTelegramBackup|TestBackupImport)' -count=1 .
     timeout 480 go build -trimpath -o "$STAGED" .
 )
 [[ -s "$STAGED" ]]
@@ -195,6 +197,7 @@ fi
 
 # Confirm the updated frontend was published.
 grep -Fq 'completed_run_id' "$FRONTEND/settings.html"
+grep -Fq 'startBackupRestore(archive)' "$FRONTEND/settings.html"
 grep -Fq 'window.setTimeout(() => window.URL.revokeObjectURL' "$FRONTEND/js/api.js"
 
 echo "===== SUCCESS ====="
