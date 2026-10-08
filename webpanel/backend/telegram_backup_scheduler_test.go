@@ -64,3 +64,28 @@ func TestTelegramBackupMultipartOverhead(t *testing.T) {
         })
     }
 }
+
+func TestTelegramBackupRunTracking(t *testing.T) {
+    runID := beginTelegramBackupRun()
+    if runID == "" {
+        t.Fatal("expected nonempty run ID")
+    }
+
+    running, activeID, _ := readTelegramBackupRunStatus()
+    if !running || activeID != runID {
+        t.Fatalf("run must be marked active: running=%v, active=%q, expected=%q", running, activeID, runID)
+    }
+
+    // A stale completion must not finalize a newer run.
+    finishTelegramBackupRun("stale-run-id")
+    running, _, _ = readTelegramBackupRunStatus()
+    if !running {
+        t.Fatal("a stale run completed the currently active run")
+    }
+
+    finishTelegramBackupRun(runID)
+    running, activeID, completedID := readTelegramBackupRunStatus()
+    if running || activeID != runID || completedID != runID {
+        t.Fatalf("incorrect completed status: running=%v, active=%q, completed=%q", running, activeID, completedID)
+    }
+}
