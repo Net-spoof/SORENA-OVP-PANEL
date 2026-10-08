@@ -33,6 +33,29 @@ NODE_EXPORT_RESPONSE_SKEW = 600
 NODE_INDEX_FORMAT = "irangate-master-node-index-v1"
 NODE_METADATA_FORMAT = "irangate-master-node-snapshot-v1"
 
+# Historical append-only records are not required to restore clients,
+# quotas, administrator limits, traffic baselines or node settings.
+# Their *schemas* are still exported so the existing v2 restore continues
+# to work. Operational counters remain in traffic_totals/traffic_sources.
+COMPACT_EXCLUDED_TABLE_DATA = (
+    "public.traffic_totals_audit",
+    "public.enforcement_events",
+    "public.active_sessions",
+)
+
+
+def backup_profile() -> str:
+    profile = os.environ.get(
+        "IRANGATE_BACKUP_PROFILE", "compact"
+    ).strip().lower()
+
+    if profile not in ("compact", "full"):
+        raise RuntimeError(
+            "IRANGATE_BACKUP_PROFILE must be compact or full"
+        )
+
+    return profile
+
 
 TIMER_UNITS = [
     "irangate-node-usage-sync.timer",
@@ -959,10 +982,22 @@ def run_pg_dump(stage: Path) -> None:
         str(dump_path),
     ]
 
-    log(
-        "creating consistent PostgreSQL "
-        "custom-format dump"
-    )
+    # Keep all essential PostgreSQL client/accounting state. Omit only
+    # historical audit/events and ephemeral sessions in compact mode.
+    # --exclude-table-data retains the table definitions for v2 restore.
+    if backup_profile() == "compact":
+        command.extend(
+            "--exclude-table-data=" + table
+            for table in COMPACT_EXCLUDED_TABLE_DATA
+        )
+        log(
+            "creating compact PostgreSQL dump "
+            "(clients, quotas, usage totals and baselines retained; "
+            "audit/event/session history omitted)"
+        )
+    else:
+        log("creating full PostgreSQL dump with history")
+
 
     result = subprocess.run(
         command,
@@ -1027,6 +1062,7 @@ def write_manifest(
         ),
         "source_hostname": socket.gethostname(),
         "source_commit": current_git_commit(),
+        "backup_profile": backup_profile(),
         "components": sorted(components),
         "migration_notes": {
             "postgres_dump_format": "custom",
@@ -1036,6 +1072,9 @@ def write_manifest(
             "openvpn_private_key_material_included": True,
             "remote_node_snapshots_included": (
                 "node-snapshots" in components
+            ),
+            "database_history_included": (
+                backup_profile() == "full"
             ),
         },
         "node_snapshot_summary": (
