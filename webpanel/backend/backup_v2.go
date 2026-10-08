@@ -69,7 +69,15 @@ func exportBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 
 	backupPath, err := func() (string, error) {
 		defer backupExecutionMu.Unlock()
-		return runBackupV2Export()
+		archive, exportErr := runBackupV2Export()
+		if exportErr != nil {
+			return "", exportErr
+		}
+		// Never offer a broken archive as a successful browser download.
+		if validateErr := validateBackupV2(archive); validateErr != nil {
+			return "", fmt.Errorf("Backup v2 validation failed: %w", validateErr)
+		}
+		return archive, nil
 	}()
 
 	if err != nil {
