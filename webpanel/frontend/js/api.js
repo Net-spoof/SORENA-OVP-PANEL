@@ -333,12 +333,17 @@ class API {
         };
     }
 
-    async importBackup(file) {
+    // Backup validation and restore use the same validated v2 importer.
+    // validateOnly never writes current VPN, database or panel state.
+    async importBackup(file, validateOnly = false) {
         const formData = new FormData();
-        formData.append('backup', file);
+        formData.append('backup', file, file.name);
 
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE}/backup/import`, {
+        const path = validateOnly
+            ? '/backup/import?validate_only=1'
+            : '/backup/import';
+        const response = await fetch(`${API_BASE}${path}`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`
@@ -346,7 +351,27 @@ class API {
             body: formData
         });
 
-        return response.json();
+        let result;
+        try {
+            result = await response.json();
+        } catch (_) {
+            throw new Error(
+                'Backup ' + (validateOnly ? 'validation' : 'restore') +
+                ' returned HTTP ' + response.status +
+                '. Check panel logs if the service restarted.'
+            );
+        }
+
+        if (!response.ok || !result.success) {
+            throw new Error(result.message ||
+                'Backup ' + (validateOnly ? 'validation' : 'restore') +
+                ' failed (HTTP ' + response.status + ')');
+        }
+        return result;
+    }
+
+    async validateBackup(file) {
+        return this.importBackup(file, true);
     }
 }
 

@@ -238,6 +238,19 @@ func importBackupV2Handler(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Query().Get("validate_only") == "1" {
 		mode = "--validate-only"
+	} else {
+		// Restore mutates live PostgreSQL, clients, OpenVPN and node state.
+		// It must not race scheduled/manual exports or another restore.
+		// Validation-only is read-only and deliberately needs no lock.
+		if !backupExecutionMu.TryLock() {
+			sendError(
+				w,
+				"Another backup or restore is already running; retry after it completes",
+				http.StatusConflict,
+			)
+			return
+		}
+		defer backupExecutionMu.Unlock()
 	}
 
 	cmd := exec.Command(
