@@ -373,6 +373,51 @@ class API {
     async validateBackup(file) {
         return this.importBackup(file, true);
     }
+
+    // The restore runs independently of the HTTP connection: no Nginx 504
+    // while restoring databases, node snapshots and OpenVPN services.
+    async startBackupRestore(file) {
+        const formData = new FormData();
+        formData.append('backup', file, file.name);
+        const response = await fetch(`${API_BASE}/backup/import?async=1`, {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('token')
+            },
+            body: formData
+        });
+        let result;
+        try {
+            result = await response.json();
+        } catch (_) {
+            throw new Error('Backup start returned HTTP ' + response.status);
+        }
+        if (!response.ok || !result.success || !result.data?.job_id) {
+            throw new Error(result.message || 'Unable to start tracked restore');
+        }
+        return result.data;
+    }
+
+    async getBackupRestoreStatus(jobID) {
+        const response = await fetch(
+            `${API_BASE}/backup/import/status/${encodeURIComponent(jobID)}`,
+            {
+                headers: {
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                }
+            }
+        );
+        let result;
+        try {
+            result = await response.json();
+        } catch (_) {
+            throw new Error('Restore status returned HTTP ' + response.status);
+        }
+        if (!response.ok || !result.success) {
+            throw new Error(result.message || 'Unable to read restore status');
+        }
+        return result.data;
+    }
 }
 
 // Global API instance
