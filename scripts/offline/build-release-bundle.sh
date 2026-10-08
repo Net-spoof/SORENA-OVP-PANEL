@@ -80,32 +80,34 @@ APT
 
 mapfile -t PKGS < "$PAYLOAD/offline-assets/apt-required.txt"
 
-# apt-cache depends is recursive and includes already-installed dependencies,
-# unlike apt-get --download-only on a preconfigured runner.
-mapfile -t DEPENDENCIES < <(
-  apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
-       --no-breaks --no-replaces --no-enhances "${PKGS[@]}" |
-  sed -n -E 's/^ *[|]?(Pre)?Depends: <?([^> ]+)>?$/\2/p' |
-  sed -E 's/:(any|native)$//' |
-  grep -E '^[a-z0-9][a-z0-9+.-]+$' |
-  sort -u
+# Resolve dependency *alternatives* via the actual APT solver with a
+# blank dpkg status database, so packages preinstalled on GitHub runners
+# are still included for a truly fresh offline Ubuntu installation.
+: > "$WORK/empty-status"
+LC_ALL=C apt-get -s --no-install-recommends \
+    -o "Dir::State::status=$WORK/empty-status" \
+    install "${PKGS[@]}" > "$WORK/apt-solved.txt"
+
+mapfile -t SOLVED < <(
+    sed -n -E 's/^Inst ([^ ]+) \\(([^ ]+) .*/\1=\2/p' "$WORK/apt-solved.txt" |
+    sort -u
 )
-printf '%s\n' "${PKGS[@]}" "${DEPENDENCIES[@]}" | sort -u > "$WORK/all-deb-candidates.txt"
+(( ${#SOLVED[@]} >= 40 )) || {
+    echo "[builder] APT solver returned an incomplete package set" >&2
+    exit 1
+}
+printf '%s\n' "${SOLVED[@]}" > "$WORK/apt-exact-versions.txt"
 
 cd "$PAYLOAD/offline-assets/apt/pool"
 downloaded=0
-while IFS= read -r pkg; do
-    # Virtual packages have no APT candidate; dependencies are satisfied by
-    # concrete alternatives included in apt-cache's recursive output.
-    version="$(apt-cache policy "$pkg" | awk '/Candidate:/ {print $2; exit}')"
-    [[ -n "$version" && "$version" != "(none)" ]] || continue
-    if apt-get download "$pkg" >/dev/null 2>>"$WORK/apt-download-warnings.txt"; then
-        downloaded=$((downloaded + 1))
-    else
-        echo "[builder] Missing concrete dependency: $pkg" >&2
+while IFS= read -r package_version; do
+    if ! apt-get download "$package_version" \
+         >/dev/null 2>>"$WORK/apt-download-warnings.txt"; then
+        echo "[builder] Failed to download resolved dependency: $package_version" >&2
         exit 1
     fi
-done < "$WORK/all-deb-candidates.txt"
+    downloaded=$((downloaded + 1))
+done < "$WORK/apt-exact-versions.txt"
 (( downloaded >= 40 )) || { echo "APT pool incomplete" >&2; exit 1; }
 cd "$PAYLOAD/offline-assets/apt"
 dpkg-scanpackages -m pool /dev/null > Packages
