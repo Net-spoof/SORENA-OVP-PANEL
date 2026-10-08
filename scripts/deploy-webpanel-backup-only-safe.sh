@@ -142,11 +142,11 @@ import sys
 from pathlib import Path
 
 html = Path(sys.argv[1]).read_text(encoding="utf-8")
-scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", html, flags=re.I | re.S)
+scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", html, flags=re.I | re.S)
 inline = [source for source in scripts if source.strip()]
 if not inline:
     raise SystemExit("Missing inline settings JavaScript")
-Path(sys.argv[2]).write_text("\\n;\\n".join(inline), encoding="utf-8")
+Path(sys.argv[2]).write_text("\n;\n".join(inline), encoding="utf-8")
 PY
     node --check "$BACK/settings.inline.js"
 fi
