@@ -129,6 +129,27 @@ WORKTREE_ADDED=1
 
 grep -Fq 'completed_run_id' "$WORK/webpanel/frontend/settings.html"
 grep -Fq 'beginTelegramBackupRun' "$WORK/webpanel/backend/telegram_backup_scheduler.go"
+grep -Fq 'validateSelectedBackup' "$WORK/webpanel/frontend/settings.html"
+
+# Optional frontend syntax checks. These run before replacing live files.
+if command -v node >/dev/null 2>&1; then
+    echo "===== CHECK BACKUP UI JAVASCRIPT ====="
+    node --check "$WORK/webpanel/frontend/js/api.js"
+
+    python3 - "$WORK/webpanel/frontend/settings.html" "$BACK/settings.inline.js" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+html = Path(sys.argv[1]).read_text(encoding="utf-8")
+scripts = re.findall(r"<script\\b[^>]*>(.*?)</script>", html, flags=re.I | re.S)
+inline = [source for source in scripts if source.strip()]
+if not inline:
+    raise SystemExit("Missing inline settings JavaScript")
+Path(sys.argv[2]).write_text("\\n;\\n".join(inline), encoding="utf-8")
+PY
+    node --check "$BACK/settings.inline.js"
+fi
 
 echo "===== BUILD & TEST BEFORE STOPPING PANEL ====="
 (
