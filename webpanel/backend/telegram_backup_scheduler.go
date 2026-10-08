@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -383,6 +384,32 @@ func createTelegramScheduledBackup() (
 
 const telegramBackupMaxPartBytes int64 = 45 * 1024 * 1024
 
+// Telegram expects an explicit Content-Length for reliable multipart uploads
+// through proxies. A dry writer computes the exact framing bytes without
+// buffering the potentially large archive part in memory.
+func telegramBackupMultipartOverhead(
+    boundary, chatID, caption, uploadName string,
+) (int64, error) {
+    var framing bytes.Buffer
+    probe := multipart.NewWriter(&framing)
+    if err := probe.SetBoundary(boundary); err != nil {
+        return 0, err
+    }
+    if err := probe.WriteField("chat_id", chatID); err != nil {
+        return 0, err
+    }
+    if err := probe.WriteField("caption", caption); err != nil {
+        return 0, err
+    }
+    if _, err := probe.CreateFormFile("document", uploadName); err != nil {
+        return 0, err
+    }
+    if err := probe.Close(); err != nil {
+        return 0, err
+    }
+    return int64(framing.Len()), nil
+}
+
 func sendTelegramBackupPartOnce(
 	credentials telegramBackupCredentials,
 	backupPath string,
@@ -478,6 +505,14 @@ func sendTelegramBackupPartOnce(
 		"Content-Type",
 		multipartWriter.FormDataContentType(),
 	)
+
+	overhead, err := telegramBackupMultipartOverhead(
+		multipartWriter.Boundary(), credentials.ChatID, caption, uploadName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to prepare Telegram multipart upload: %w", err)
+	}
+	request.ContentLength = overhead + length
 
 	client := &http.Client{
 		Timeout: 15 * time.Minute,
