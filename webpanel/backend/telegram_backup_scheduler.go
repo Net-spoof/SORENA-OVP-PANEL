@@ -31,6 +31,10 @@ type TelegramBackupScheduleConfig struct {
 	NextRun            *time.Time `json:"next_run,omitempty"`
 	StoragePath        string     `json:"storage_path"`
 	CredentialsPresent bool       `json:"credentials_present"`
+	// Ephemeral run status, populated only by the GET handler (not persisted).
+	Running            bool       `json:"running,omitempty"`
+	RunID              string     `json:"run_id,omitempty"`
+	CompletedRunID     string     `json:"completed_run_id,omitempty"`
 }
 
 type telegramBackupCredentials struct {
@@ -52,7 +56,38 @@ var (
 	)
 
 	telegramBackupBusy = errors.New("Telegram backup is already running")
+
+	telegramBackupStatusMu sync.RWMutex
+	telegramBackupRunning bool
+	telegramBackupRunID string
+	telegramBackupCompletedRunID string
 )
+
+// Run IDs let the UI verify completion of the specific manual request.
+// This state is in-memory only; it never enters backup configuration files.
+func beginTelegramBackupRun() string {
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	telegramBackupStatusMu.Lock()
+	telegramBackupRunID = id
+	telegramBackupRunning = true
+	telegramBackupStatusMu.Unlock()
+	return id
+}
+
+func finishTelegramBackupRun(id string) {
+	telegramBackupStatusMu.Lock()
+	defer telegramBackupStatusMu.Unlock()
+	if telegramBackupRunID == id {
+		telegramBackupRunning = false
+		telegramBackupCompletedRunID = id
+	}
+}
+
+func readTelegramBackupRunStatus() (bool, string, string) {
+	telegramBackupStatusMu.RLock()
+	defer telegramBackupStatusMu.RUnlock()
+	return telegramBackupRunning, telegramBackupRunID, telegramBackupCompletedRunID
+}
 
 func defaultTelegramBackupConfig() TelegramBackupScheduleConfig {
 	return TelegramBackupScheduleConfig{
@@ -800,7 +835,9 @@ func executeTelegramBackup(
 ) error {
 	select {
 	case telegramBackupRunSemaphore <- struct{}{}:
+		runID := beginTelegramBackupRun()
 		defer func() {
+			finishTelegramBackupRun(runID)
 			<-telegramBackupRunSemaphore
 		}()
 	default:
@@ -943,6 +980,7 @@ func getTelegramBackupSettingsHandler(
 	cfg.StoragePath = scheduledBackupDir()
 	cfg.CredentialsPresent =
 		telegramBackupCredentialsPresent()
+	cfg.Running, cfg.RunID, cfg.CompletedRunID = readTelegramBackupRunStatus()
 
 	sendSuccess(
 		w,
@@ -1076,9 +1114,11 @@ func runTelegramBackupNowHandler(
 		return
 	}
 
+	var runID string
 	select {
 	case telegramBackupRunSemaphore <- struct{}{}:
 		// Slot stays held until the background run actually completes.
+		runID = beginTelegramBackupRun()
 	default:
 		sendError(
 			w,
@@ -1090,6 +1130,7 @@ func runTelegramBackupNowHandler(
 
 	go func() {
 		defer func() {
+			finishTelegramBackupRun(runID)
 			<-telegramBackupRunSemaphore
 		}()
 
@@ -1109,6 +1150,7 @@ func runTelegramBackupNowHandler(
 		"Telegram backup started",
 		map[string]interface{}{
 			"status": "started",
+			"run_id": runID,
 		},
 	)
 }
