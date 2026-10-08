@@ -65,8 +65,10 @@ jobs:
           bash -n scripts/offline/build-release-bundle.sh
           asset="$(find "$OUT_DIR" -name '*.run' -type f -print -quit)"
           test -n "$asset"
-          bash -n "$asset" 2>/dev/null || :
-          sha256sum -c "$asset.sha256"
+          marker_line="$(awk '$0=="__IRANGATE_BUNDLE_START__" {print NR; exit}' "$asset")"
+          test -n "$marker_line"
+          head -n "$((marker_line-1))" "$asset" | bash -n
+          (cd "$OUT_DIR" && sha256sum -c "$(basename "$asset").sha256")
 
       - name: Upload fully-built offline artifacts
         uses: actions/upload-artifact@v4
