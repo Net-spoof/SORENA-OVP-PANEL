@@ -371,7 +371,7 @@
 
                     <button
                         type="button"
-                        onclick="runTelegramBackupNow()"
+                        onclick="runTelegramBackupNow(this)"
                         class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg"
                     >
                         📦 Backup & Send Now
@@ -823,9 +823,7 @@
         });
 
 
-        async function runTelegramBackupNow() {
-            const button = event?.currentTarget || null;
-
+        async function runTelegramBackupNow(button = null) {
             if (!confirm(
                 'Create a complete Backup v2, store it on the server, and send it to Telegram now?'
             )) {
@@ -842,6 +840,16 @@
             }
 
             try {
+                // Capture the latest completed attempt before starting.
+                const previousStatus = await telegramBackupRequest(
+                    '/settings/telegram-backup'
+                );
+                if (!previousStatus.success || !previousStatus.data) {
+                    throw new Error(previousStatus.message ||
+                        'Failed to read Telegram backup status');
+                }
+                const previousLastRun = previousStatus.data.last_run || null;
+
                 const result =
                     await telegramBackupRequest(
                         '/settings/telegram-backup/run',
@@ -883,23 +891,27 @@
                         status.data
                     );
 
+                    // LastSuccess can refer to an old backup. Only accept
+                    // a result after LastRun changes for THIS request.
+                    if (!status.data.last_run ||
+                        status.data.last_run === previousLastRun) {
+                        continue;
+                    }
+
                     if (status.data.last_error) {
                         showToast(
-                            'Telegram backup failed: ' +
-                            status.data.last_error,
+                            'Telegram backup failed: ' + status.data.last_error,
                             'error'
                         );
-
                         completed = true;
                         break;
                     }
 
-                    if (status.data.last_success) {
+                    if (status.data.last_success === status.data.last_run) {
                         showToast(
                             'Backup saved and sent to Telegram successfully!',
                             'success'
                         );
-
                         completed = true;
                         break;
                     }
@@ -919,7 +931,9 @@
                 );
 
                 showToast(
-                    'Failed to start Telegram backup',
+                    error && error.message
+                        ? 'Telegram backup failed: ' + error.message
+                        : 'Telegram backup request failed',
                     'error'
                 );
 
