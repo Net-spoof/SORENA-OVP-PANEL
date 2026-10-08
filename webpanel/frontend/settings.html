@@ -389,7 +389,7 @@
             <h2 class="text-xl font-semibold text-gray-800 mb-4">Backup & Restore</h2>
             <div class="space-y-4">
                 <div>
-                    <button onclick="exportBackup()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg w-full">
+                    <button onclick="exportBackup(this)" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg w-full">
                         📥 Export Backup
                     </button>
                     <p class="text-sm text-gray-600 mt-2">Download complete Backup v2 with PostgreSQL, users, nodes, usage state, and OpenVPN PKI</p>
@@ -554,8 +554,16 @@
             }
 
             const response = await fetch('/api' + path, options);
-            const result = await response.json();
-
+            const raw = await response.text();
+            let result;
+            try {
+                result = JSON.parse(raw);
+            } catch (_) {
+                throw new Error('Backup API returned HTTP ' + response.status);
+            }
+            if (!response.ok && result.success !== false) {
+                throw new Error(result.message || 'HTTP ' + response.status);
+            }
             return result;
         }
 
@@ -598,7 +606,9 @@
             document.getElementById('telegramBackupLastError').textContent =
                 data.last_error || '—';
 
-            let status = data.enabled ? 'Enabled' : 'Disabled';
+            let status = data.running
+                ? 'Backup running / sending to Telegram...'
+                : (data.enabled ? 'Enabled' : 'Disabled');
 
             if (!data.credentials_present) {
                 status += ' — Bot Token / Chat ID missing';
@@ -848,8 +858,6 @@
                     throw new Error(previousStatus.message ||
                         'Failed to read Telegram backup status');
                 }
-                const previousLastRun = previousStatus.data.last_run || null;
-
                 const result =
                     await telegramBackupRequest(
                         '/settings/telegram-backup/run',
@@ -866,9 +874,14 @@
                     return;
                 }
 
+                const launchedRunID = result.data && result.data.run_id;
+                if (!launchedRunID) {
+                    throw new Error('Backup API did not return a run ID; restart the updated backend');
+                }
+
                 showToast(
-                    'Backup started. Waiting for completion...',
-                    'success'
+                    'Backup started. Waiting for Telegram delivery...',
+                    'info'
                 );
 
                 let completed = false;
@@ -891,10 +904,8 @@
                         status.data
                     );
 
-                    // LastSuccess can refer to an old backup. Only accept
-                    // a result after LastRun changes for THIS request.
-                    if (!status.data.last_run ||
-                        status.data.last_run === previousLastRun) {
+                    // Ignore old backup results and other scheduled runs.
+                    if (status.data.completed_run_id !== launchedRunID) {
                         continue;
                     }
 
@@ -950,17 +961,28 @@
 
 
         // Export backup
-        async function exportBackup() {
+        async function exportBackup(button = null) {
+            if (button && button.disabled) return;
+            const original = button ? button.textContent : '';
+            if (button) {
+                button.disabled = true;
+                button.textContent = '⏳ Creating backup...';
+            }
             try {
-                await api.exportBackup();
-                showToast('Backup exported successfully!', 'success');
+                const result = await api.exportBackup();
+                showToast('Backup downloaded: ' + result.filename, 'success');
             } catch (error) {
-                const message =
+                showToast(
                     error && error.message
                         ? error.message
-                        : 'Failed to export backup';
-
-                showToast(message, 'error');
+                        : 'Failed to export backup',
+                    'error'
+                );
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = original;
+                }
             }
         }
 
