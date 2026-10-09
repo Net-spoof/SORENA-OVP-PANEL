@@ -1,4 +1,4 @@
-// Sidebar Component for NET SPOOF Web Panel
+// Sidebar Component for SURENA Web Panel
 
 // IRANGATE_SIDEBAR_LAYOUT_CACHE_BUST_V2
 (function refreshSidebarLayoutStylesheet() {
@@ -93,7 +93,7 @@
 
             return { role, redirected: false };
         } catch (error) {
-            console.error('NET SPOOF authoritative role check failed:', error);
+            console.error('SURENA authoritative role check failed:', error);
             // Fail closed for a session that is already known to be delegated.
             const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
             if (cachedRole === 'delegated_admin' && !allowedDelegatedPages.has(page)) {
@@ -120,8 +120,8 @@ function createSidebar(activePage) {
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-logo">
-                        <div class="sidebar-logo-icon"><img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg"></div>
-                        <span class="sidebar-logo-text">NET SPOOF</span>
+                        <div class="sidebar-logo-icon"><img src="logo/surena.webp" alt="SURENA Logo" class="w-10 h-10 rounded-lg"></div>
+                        <span class="sidebar-logo-text">SURENA</span>
                     </div>
                     <div class="sidebar-user">
                         <div class="flex items-center gap-2">
@@ -169,9 +169,9 @@ function createSidebar(activePage) {
             <div class="sidebar-header">
                 <div class="sidebar-logo">
                     <div class="sidebar-logo-icon">
-                        <img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="w-10 h-10 rounded-lg">
+                        <img src="logo/surena.webp" alt="SURENA Logo" class="w-10 h-10 rounded-lg">
                     </div>
-                    <span class="sidebar-logo-text">NET SPOOF</span>
+                    <span class="sidebar-logo-text">SURENA</span>
                 </div>
                 <div class="sidebar-user">
                     <div class="flex items-center gap-2">

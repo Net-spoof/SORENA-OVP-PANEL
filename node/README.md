@@ -1,113 +1,123 @@
-# IranGate OpenVPN Node Installer
+<div align="center">
+  <img src="../webpanel/frontend/logo/surena.webp" width="112" alt="SURENA">
+  <h1>SURENA · Node Agent</h1>
+  <p>OpenVPN Foreign Node · Agent & Control APIs · Remote Client Operations</p>
+  <a href="#فارسی--نصب-نود">فارسی</a> · <a href="#english--node-setup">English</a> ·
+  <a href="https://t.me/NET_SPOOF">Telegram @NET_SPOOF</a>
+</div>
 
-Install this script on each external IranGate OpenVPN node.
+---
 
-## Install
+## فارسی — نصب نود
 
-    wget -O install-node.sh https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat/node/install-node.sh
-    chmod +x install-node.sh
-    bash install-node.sh
+این راهنما مخصوص **سرور خارجی Node** است؛ پنل مرکزی یا Master را با [راهنمای اصلی](../README.md) نصب کنید.
 
-The installer configures:
+### پیش‌نیازها
 
-- OpenVPN server
-- Node Agent API
-- OpenVPN usage API
-- Node Control API
-- block/unblock enforcement
-- immediate session termination through the OpenVPN management interface
-- persistent client-connect blocking
-- IPv4 forwarding and NAT
-- client profile creation and download
-- encrypted node snapshot export for Master backups
-- PKI locking while clients or snapshots are created
-- ovp-node management CLI
+- سرور لینوکسی جداگانه با دسترسی root، systemd، TUN، دسترسی اینترنت برای APT و دسترسی به مخزن خصوصی GitHub
+- پورت UDP مربوط به OpenVPN (پیش‌فرض 1194) و امکان برقراری ارتباط Master با Agent و Control
+- توکن اختصاصی و قوی برای ارتباط Master و Node
 
+**مهم:** این اسکریپت نصب Node برای سرور موجودِ دارای کاربران یا گواهی‌های VPN طراحی نشده است؛ قبل از اجرا از داده‌های مهم بکاپ بگیرید. نصب Node، برخلاف بسته آفلاین Master، از APT و شبکه استفاده می‌کند.
 
-### VPN routing compatibility
+### نصب با سورس کامل مخزن
 
-The Node installer adds a VPN direct bypass for legacy Gemini TCP redirect and
-UDP/443 reject rules. The bypass does not disable the main IranGate outbound
-routing engine or Iran-to-foreign GOST tunnels.
+چون مخزن خصوصی است، GitHub CLI را از قبل نصب و با حساب مجاز احراز هویت کنید، یا مخزن را با SSH key مجاز clone کنید:
 
-## Node Agent API
+~~~bash
+gh auth login -h github.com -p https -w
+gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
+cd surena-src
+sudo bash node/install-node.sh
+~~~
 
-Authenticated endpoints include:
+**فقط فایل تکی `node/install-node.sh` را دانلود و اجرا نکنید.** نصب به فایل `scripts/install-vpn-direct-bypass.sh` داخل همین مخزن وابسته است.
 
-- /status
-- /usage
-- /clients
-- /openvpn/status
-- client profile creation
-- client profile download
-- `GET /backup/export` using timestamped HMAC authentication
-- `POST /backup/restore` using checksum-bound timestamped HMAC authentication
+مقادیر موردنیاز:
 
-The Agent port is selected during installation.
+| سؤال نصاب Node | نمونه | توضیح |
+| --- | --- | --- |
+| Node display name | Germany 1 | نام نمایشی در Master |
+| Location code | DE | کد کشور |
+| Agent API port | 8091 | پورت TCP Agent |
+| Shared token | خودکار | توکن مشترک؛ در Master عیناً درج شود |
+| OpenVPN listen port | 1194 | پورت واقعی دریافت UDP روی Node |
+| IP/Domain inside ovpn config | Public Node IP | اگر از تونل ورودی استفاده می‌کنید، آدرس سمت ورود ایران را قرار دهید |
+| Port inside ovpn config | 1194 | در صورت استفاده از تونل، پورت سمت ورود ایران |
+| OpenVPN protocol | udp | پروتکل کانفیگ |
 
+> نکته: OpenVPN listen port با Port inside ovpn config لزوماً یکسان نیستند؛ اولی پورت واقعی نود و دومی مقصدی است که داخل کانفیگ کلاینت نوشته می‌شود.
 
-## Node snapshot export
+پس از نصب در خروجی، **Agent URL، Control URL و Token** نمایش داده می‌شود. Token را منتشر نکنید.
 
-The Agent can export an encrypted snapshot for the Master backup system.
-The snapshot includes OpenVPN PKI material, generated client profiles,
-server files, persistent block markers, node deny markers, CCD files, and
-the client-connect guard. The node environment file and shared token are
-not copied into the snapshot.
+### اتصال نود به مستر
 
-`GET /backup/export` requires `X-IranGate-Timestamp` and
-`X-IranGate-Signature` headers. The signature is an HMAC-SHA256 derived from
-the shared Node token. Snapshot creation and client certificate generation
-share `/run/irangate-node-pki.lock` so Easy-RSA state is captured consistently.
-The response is encrypted with AES-256-CBC/PBKDF2 and includes SHA256 and
-response-HMAC headers for Master-side verification.
+در مرورگر وارد Master شوید: **Nodes → Add Node** و نام، کد کشور، IP نود، **Agent URL** و **Shared Token** را وارد کنید. آدرس Agent معمولاً به شکل `http://NODE_IP:8091` است؛ سرویس Control به‌صورت پیش‌فرض روی `TCP 5024` اجرا می‌شود.
 
-## Node snapshot restore
+در فایروال سرور Node، پورت‌های Agent و Control را فقط از **IP مستر** مجاز کنید. از بازگذاشتن سرویس‌های HTTP مدیریتی برای همه اینترنت خودداری کنید؛ اگر ارتباط از شبکه عمومی عبور می‌کند TLS یا یک تونل امن در نظر بگیرید.
 
-The Agent can validate or apply encrypted snapshots through `POST /backup/restore`.
-The request signature binds the timestamp and encrypted payload SHA256 to the
-shared Node token. Validation checks archive paths, size limits, manifest format,
-all internal SHA256 entries, essential PKI files, and every OpenVPN file referenced
-by `server.conf`. `crl.pem` is required only when `server.conf` uses `crl-verify`.
+### مدیریت و عیب‌یابی
 
-Before a real restore, the node creates a local safety copy. PKI, server files,
-client profiles, CCD files, and block markers are replaced under the shared PKI
-lock. OpenVPN configuration is tested before restart; failures trigger rollback.
-The Master may use validate-only mode without changing files or restarting OpenVPN.
+~~~bash
+sudo ovp-node
+sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
+sudo systemctl status irangate-node-agent --no-pager
+sudo journalctl -u irangate-node-agent -n 50 --no-pager
+sudo ss -tulnp
+~~~
 
-## Node Control API
+از `ovp-node` می‌توان وضعیت را دید، پورت Agent یا OpenVPN، توکن مشترک یا IP/پورت مقصد داخل کانفیگ کلاینت را تغییر داد و یک کانفیگ آزمایشی ایجاد کرد. **تغییر توکن یا پورت Agent باید در تنظیمات نود داخل Master هم اعمال شود.**
 
-The Node Control service listens on TCP port 5024 by default.
+### بکاپ و بازیابی Node
 
-Authenticated endpoints:
+Node دارای Snapshot Export/Restore رمزگذاری‌شده برای هماهنگی با بکاپ Master است. متادیتای بکاپ شامل گواهی‌ها، کانفیگ‌ها و وضعیت بلاک‌کردن کاربران می‌شود، ولی فایل محیطی حاوی Token وارد Snapshot نمی‌شود. عملیات Restore واقعی روی سرویس اثر می‌گذارد؛ قبل از اجرا بکاپ معتبر و پنجره نگهداری داشته باشید.
 
-- /health
-- /block-client?name=CLIENT
-- /unblock-client?name=CLIENT
+---
 
-The Control API and Agent API use the same shared Node token.
+## English — Node Setup
 
-Blocking a client performs two actions:
+This is the installer for a separate **foreign OpenVPN Node**, not the Master panel. Follow the [Master instructions](../README.md) for the management server.
 
-1. Creates a persistent block marker under /etc/openvpn/blocked-clients.
-2. Terminates the active OpenVPN session through the local management interface.
+**Requirements:** a Linux VPS with root, systemd, TUN, Internet access for APT, and authenticated access to the private repository.
 
-The OpenVPN client-connect hook prevents blocked clients from reconnecting.
+### Install from the complete repository
 
-## Manage
+~~~bash
+gh auth login -h github.com -p https -w
+gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
+cd surena-src
+sudo bash node/install-node.sh
+~~~
 
-Run:
+Do not download and execute `install-node.sh` by itself. It expects the local helper at `scripts/install-vpn-direct-bypass.sh`. This Node setup is **online** and changes OpenVPN/systemd/network settings.
 
-    ovp-node
+### Interactive settings
 
-Menu options:
+| Prompt | Purpose |
+| --- | --- |
+| Node display name | Friendly name displayed in the Master |
+| Location code | Country/location identifier (e.g. DE, TR, FI) |
+| Agent API port | TCP listener (8091 default) |
+| Shared token | Authentication secret shared with the Master |
+| OpenVPN listen port | Actual UDP listener on the Node |
+| IP/Domain inside ovpn config | Address embedded into client configs; may be an ingress tunnel endpoint |
+| Port inside ovpn config | Port embedded into client configs |
+| OpenVPN protocol | Normally UDP |
 
-1. Status
-2. Change Agent port
-3. Change shared Token
-4. Change IP/Domain inside ovpn config
-5. Change Port inside ovpn config
-6. Change OpenVPN listen port on node
-7. Create test ovpn config
-8. Remove node completely
+The installer prints the **Agent URL**, **Control URL** (TCP 5024 default), **token**, and profile endpoint information. Keep the token private.
 
-When using an Iran-to-external tunnel, set the IP/domain and port written into generated .ovpn profiles to the Iran-side tunnel endpoint.
+### Pair with the Master
+
+In the Master web UI go to **Nodes → Add Node** and supply the display name, location, public IP, Agent URL and exact shared token. Restrict Node Agent/Control ports so **only the Master** can reach them. Administrative HTTP must not be freely exposed on the public Internet.
+
+### Operations
+
+~~~bash
+sudo ovp-node
+sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
+sudo journalctl -u irangate-node-agent -n 50 --no-pager
+~~~
+
+Menu options include status, Agent port, shared token, advertised config host/port, OpenVPN listener, a test configuration, and node removal. Coordinate Agent port or token changes on both ends.
+
+**Support / پشتیبانی:** [Telegram @NET_SPOOF](https://t.me/NET_SPOOF)

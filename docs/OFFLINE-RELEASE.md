@@ -1,122 +1,149 @@
-# NET SPOOF fully-offline release installer
+<div align="center">
+  <img src="../webpanel/frontend/logo/surena.webp" width="112" alt="SURENA">
+  <h1>SURENA · Master Offline Installer</h1>
+  <strong>نصب آفلاین مستر · Complete Master Installation</strong>
+  <p><a href="#فارسی--نصب-آفلاین-مستر">فارسی</a> · <a href="#english--fully-offline-master-setup">English</a> · <a href="https://t.me/NET_SPOOF">@NET_SPOOF</a></p>
+</div>
 
-The downloadable **.run GitHub Release asset** is a self-extracting snapshot of the
-the NET SPOOF repository source plus its compiled Linux executables,
-a local Ubuntu APT package repository including dependency closure, sing-box,
-and Python AI wheels. The destination machine makes **zero internet requests**
-during installation.
+---
 
-## Supported targets
+## فارسی — نصب آفلاین مستر
 
-- Fresh **Ubuntu 22.04 LTS (amd64)**: `NET-SPOOF-offline-ubuntu2204-amd64.run`
-- Fresh **Ubuntu 24.04 LTS (amd64)**: `NET-SPOOF-offline-ubuntu2404-amd64.run`
-- Root + systemd + working TUN interface + enough disk space
-- Choose the package matching the **exact OS release**. The installer aborts on
-  a mismatch to avoid mixing incompatible .deb versions.
+### نیازمندی‌ها و محدوده نصب
 
-## Transfer and install (interactive, one command)
+- VPS تازه **Ubuntu 22.04 یا 24.04، معماری amd64**
+- دسترسی root، systemd، دستگاه TUN و فضای دیسک کافی
+- فایل نصب `.run` و فایل متناظر `.sha256`
+- نصب فقط روی مستر **تازه** انجام شود. اسکریپت از جایگزینی اطلاعات، PKI یا دیتابیس قبلی خودداری می‌کند.
+- بسته **فقط Master** را پوشش می‌دهد؛ نصب Node خارجی دستور جداگانه دارد: [Node README](../node/README.md).
 
-Download the matching `.run` (and optional `.sha256`) from the GitHub Release
-on a networked machine and transfer it by SCP, SFTP, USB or another offline
-channel. Then run the single file on the destination:
+**معماری:** اسکریپت ساخت Release در GitHub Actions با اینترنت اجرا و مخزن محلی APT، Wheelهای Python، باینری پنل، CLI و Sing-box را داخل فایل یک‌تکه قرار می‌دهد. روی VPS مقصد، نصب بسته‌ها از مخزن محلی فایل انجام می‌شود.
 
-```bash
-sudo bash ./NET-SPOOF-offline-ubuntu2404-amd64.run
-```
+### دریافت فایل از مخزن خصوصی
 
-Change `2404` to `2204` for Ubuntu 22.04.
+در گوشی یا رایانه دارای دسترسی GitHub:
 
-If available, verify file integrity against the **GitHub Release** checksum
-before installing:
+~~~bash
+gh auth login -h github.com -p https -w
+gh release download -R Net-spoof/IranGate-OV-Reza-dev \
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+~~~
 
-```bash
-sha256sum -c NET-SPOOF-offline-ubuntu2404-amd64.run.sha256
-```
+اگر مقصد Ubuntu 24.04 است، `ubuntu2204` را با `ubuntu2404` عوض کنید.
 
-### Interactive questions, automatic port collision avoidance and resume
+برای ارسال از Termux:
 
-When launched in an SSH terminal, the installer **asks for public IPv4,
-OpenVPN protocol and port, WebPanel TCP port, Subscription TCP port, and
-admin username** before it creates any VPN certificates or database. It checks
-which ports are already occupied (including by Backhaul) and offers another
-available port if necessary. It checks that selected service ports differ.
-Press Enter to accept each suggested value.
+~~~bash
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
+    root@YOUR_MASTER_IP:/root/
+~~~
 
-In noninteractive terminals, the same installer uses defaults and automatically
-picks alternative free ports. Use environment variables to override defaults.
-If you don't provide an administrator password, a unique random password
-is generated and securely saved to
-`/root/irangate-offline-initial-credentials.txt` (mode 0600).
+### نصب با یک دستور روی سرور مقصد
 
-```bash
-sudo IRANGATE_SERVER_IP=192.0.2.25 IRANGATE_PANEL_PORT=8614 \
-  IRANGATE_SUBSCRIPTION_PORT=2098 \
-  bash ./NET-SPOOF-offline-ubuntu2404-amd64.run
-```
+~~~bash
+cd /root
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
+~~~
 
-If an installation fails halfway through, **do not run the fresh installation
-again**. Resume with exactly the same offline file using:
+**در نصب تعاملی** این موارد پرسیده می‌شود: Public IPv4، پروتکل OpenVPN (UDP/TCP)، پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام کاربری ادمین. نصاب تداخل پورت‌های TCP/UDP با سرویس‌های فعلی را بررسی و پورت آزاد پیشنهاد می‌کند. یک رمز قوی می‌سازد و آن را در فایل root-only ذخیره می‌کند.
 
-```bash
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
-```
+**سرویس‌های ایجادشده:** OpenVPN، پنل وب، PostgreSQL و تایمرهای مصرف، StrongSwan/IKEv2، Sing-box/مسیریابی، Backup V2 و خدمات نگهداری. موتور مسیریابی نصب و اعتبارسنجی می‌شود اما بدون تعریف Outbound به‌صورت خودکار ترافیک را تغییر مسیر نمی‌دهد.
 
-Completed stages are checkpointed in `/var/lib/irangate-offline`, with
-permissions restricted to root. Resuming reuses existing OpenVPN PKI and
-administrator credentials. The installer refuses to resume unless it finds
-its own recorded installation state. Do not attempt to resume the *old*
-non-checkpointed installer released before this change.
+### مشاهده نتیجه نصب
 
-Routing and sing-box are installed and validated, but traffic interception
-is deliberately **not enabled** until an operator configures an outbound and
-explicitly applies routing.
+~~~bash
+sudo surena-panel
+sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
+sudo journalctl -u irangate-webpanel -n 35 --no-pager
+~~~
 
-Do not put passwords directly in shell history on shared machines.
-The installer defaults to **HTTP via the IP address** (no Let's Encrypt
-enrollment or international DNS required). Terminate TLS at a trusted local
-reverse proxy or pre-provision TLS certificates separately.
+برای نمونه، اگر پورت انتخابی پنل 18614 باشد:
 
-## What's bundled
+~~~bash
+curl --noproxy '*' -fsS http://127.0.0.1:18614/api/health
+~~~
 
-- Full repository source files, frontend, tools, master/agent source, templates,
-  Backup v2 export/import and systemd units
-- Compiled `irangate-webpanel` and `irangate` CLI (Go compiler not required
-  on the destination)
-- Ubuntu offline APT repository: OpenVPN / EasyRSA, PostgreSQL,
-  psycopg2, Nginx, strongSwan (IKEv2), routing and maintenance dependencies
-- Bundled official sing-box Linux amd64 executable
-- Python dependency wheels for optional AI functionality
+اطلاعات ورود در فایل `/root/irangate-offline-initial-credentials.txt` نگهداری می‌شود. **رمز را در چت نفرستید و فایل را عمومی نکنید.**
 
-The master offline installer initializes OpenVPN PKI and service,
-PostgreSQL schema and traffic/enforcement timers, webpanel, subscription proxy,
-routing, IKEv2, maintenance services and backup wrappers.
+### رفع توقف نصب
 
-## Important safety/limitations
+اگر فقط همین نسخه در اواسط نصب قطع شده است، بعد از شناسایی و رفع خطا:
 
-1. **Fresh installation only.** It refuses to overwrite an existing NET SPOOF
-   or OpenVPN PKI. Never run it on a populated production master.
-2. No user database, admin credentials, node tokens, certificates or private
-   backup archives are embedded in the public release. Restore your own
-   Backup v2 archive from a secure location after installation.
-3. Foreign nodes, public domains and public TLS certificates still require
-   site-specific configuration. A global-trust certificate cannot be obtained
-   from Let's Encrypt without reachability.
-4. This installer prepares the **master panel**, not an already-joined foreign
-   node. Agent node installation remains a separate role and requires a node
-   token / endpoint.
-5. CI builds for both Ubuntu versions MUST pass the Go build/test and local
-   APT dependency simulation before the GitHub Release is published.
-6. Installing kernel networking packages may require reboot on some VPS
-   configurations, and a TUN-disabled host cannot be fixed by packaging.
+~~~bash
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
+~~~
 
-## Build and publication
+Checkpointهای نصب در `/var/lib/irangate-offline/` نگهداری می‌شوند. برای **نصب‌های قدیمی یا سرور از پیش نصب‌شده** از این گزینه استفاده نکنید. نصب را با حذف PKI، دیتابیس یا سرویس‌های فعال از ابتدا تکرار نکنید.
 
-See `.github/workflows/irangate-offline-release.yml`. The GitHub Actions
-workflow builds each OS package on an internet-connected hosted runner,
-checks completeness of its local dependency repository using APT simulation,
-generates release checksums and publishes both `.run` artifacts under
-GitHub **Releases** only after both jobs pass.
+### امنیت
 
-**Do not claim a working offline Release until a workflow success and the
-corresponding release assets have been verified.** Source commits alone are
-not a downloadable tested release.
+- پورت‌های UDP موردنیاز OpenVPN و IKEv2 را متناسب با سرویس واقعی تنظیم کنید؛ پورت پنل را به IPهای مدیریتی محدود کنید.
+- استفاده از HTTP در نصب اولیه به معنی HTTPS نیست؛ دامنه و TLS عمومی نیاز به تنظیم مستقل دارند.
+- فایل‌های Backup V2، Tokenها و کلیدهای خصوصی را فقط در محل امن و با دسترسی محدود نگه دارید.
+- قبل از تغییر نسخه روی محیط عملیاتی، بکاپ و تست Rollback لازم است.
+
+---
+
+## English — Fully Offline Master Setup
+
+### Scope and prerequisites
+
+The self-extracting `.run` release installs a **fresh** Master on **Ubuntu 22.04/24.04 amd64** with root privileges, systemd, TUN and sufficient disk space. It is **not** an upgrade/restore script for existing installations.
+
+The build pipeline downloads dependencies on an online GitHub Actions runner. The destination server installs from an **embedded file-based APT repository**, prebuilt executables and a bundled wheelhouse.
+
+Foreign nodes use the [separate Node installer](../node/README.md), which is not offline.
+
+### Download on an authenticated machine
+
+~~~bash
+gh auth login -h github.com -p https -w
+gh release download -R Net-spoof/IranGate-OV-Reza-dev \
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
+    root@YOUR_MASTER_IP:/root/
+~~~
+
+Replace `ubuntu2204` with `ubuntu2404` for Ubuntu 24.04. This works with a **private repository** after GitHub authentication.
+
+### Install on the fresh Master
+
+~~~bash
+cd /root
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
+~~~
+
+The installer prompts for public IP, OpenVPN protocol/port, panel port, subscription port and admin username. Occupied ports are checked before service provisioning. It installs OpenVPN, PostgreSQL, panel, IKEv2, backup tooling and sing-box routing. Outbound traffic interception stays disabled until explicitly configured.
+
+### Verify
+
+~~~bash
+sudo surena-panel
+sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
+curl --noproxy '*' -fsS http://127.0.0.1:PANEL_PORT/api/health
+~~~
+
+Substitute your actual numeric panel port. Administrator credentials are in `/root/irangate-offline-initial-credentials.txt` (root-only); never share them.
+
+### Resume an interrupted install
+
+~~~bash
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
+~~~
+
+**Only** run resume for state created by the same released installer; do not use this as an updater for an existing deployment. Preserve PKI and databases, diagnose the original error and maintain verified backups.
+
+### Limits
+
+The offline installer cannot supply your site's DNS, public TLS, remote Node secrets or historical user state. A successful installer health check does not replace a real client connection test.
+
+---
+
+**Telegram support:** [@NET_SPOOF](https://t.me/NET_SPOOF)
