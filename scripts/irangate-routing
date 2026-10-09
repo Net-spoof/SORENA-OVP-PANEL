@@ -176,18 +176,8 @@ def init_config() -> None:
             "config": {},
         })
 
-    if not any(o.get("tag") == "default-gost" for o in outbounds["outbounds"]):
-        outbounds["outbounds"].append({
-            "tag": "default-gost",
-            "name": "Default GOST Tunnel",
-            "type": "gost",
-            "enabled": True,
-            "created_at": now_iso(),
-            "config": {
-                "mode": "existing",
-                "note": "Placeholder for existing GOST tunnel. No route changes are applied in milestone 1."
-            },
-        })
+    # No legacy GOST placeholder is added to fresh configurations.
+    # Existing user-defined route files are preserved for compatibility.
 
     save_json(OUTBOUNDS_FILE, outbounds)
 
@@ -2126,7 +2116,7 @@ def install_routing_service() -> None:
     sing_box_bin = shutil.which("sing-box")
 
     service = f"""[Unit]
-Description=IranGate Routing Engine
+Description=SURENA Routing Engine
 Documentation=https://sing-box.sagernet.org/
 After=network-online.target
 Wants=network-online.target
@@ -2494,7 +2484,7 @@ def apply_routing():
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="IranGate Routing Manager"
+        description="SURENA Routing Manager"
     )
 
     sub = parser.add_subparsers(dest="cmd", required=True)
