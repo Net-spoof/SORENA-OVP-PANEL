@@ -79,6 +79,8 @@ sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 
 [📘 راهنمای جامع نصب Master](docs/OFFLINE-RELEASE.md)
 
+[🛠️ راهنمای مدیریت تنظیمات و ارتقای امن پنل/نود موجود](docs/EXISTING-SERVER-OPERATIONS.md)
+
 ### ۲) نصب Foreign Node
 
 نود خارجی با Master فرق دارد. روی **سرور خارجی جداگانه**، با GitHub احرازشده مخزن کامل را بگیرید؛ اجرای فایل تکی `install-node.sh` کافی نیست، چون ابزار VPN Direct Bypass از مسیر `scripts/` نیز نیاز است:
@@ -175,6 +177,8 @@ sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@s
 ~~~
 
 [Complete Node installation details](node/README.md)
+
+[Existing servers: safe UI updates, Master & Node settings (FA/EN)](docs/EXISTING-SERVER-OPERATIONS.md)
 
 ### Security & compatibility
 
