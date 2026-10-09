@@ -75,6 +75,7 @@ jobs:
           python3 -m py_compile scripts/irangate-routing
           sed -n '/^    check_port() {/,/^    }/p' scripts/offline/install-master-from-bundle.sh > "$RUNNER_TEMP/check-port-only.sh"
           bash -c '
+            set -Eeuo pipefail
             ss() { :; }
             source "$1"
             check_port udp 443 "" "" OpenVPN
