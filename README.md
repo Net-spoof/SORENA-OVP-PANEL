@@ -1,69 +1,189 @@
-# NET SPOOF
+<div align="center">
+  <img src="webpanel/frontend/logo/surena.webp" width="160" alt="SURENA emblem">
+  <h1>SURENA</h1>
+  <strong>Network Control Platform</strong>
+  <p>OpenVPN · IKEv2/IPsec · Multi-location · Outbound Routing · Node Management</p>
+  <p>
+    <a href="#فارسی--راهنمای-نصب">فارسی</a> ·
+    <a href="#english--installation-guide">English</a> ·
+    <a href="https://t.me/NET_SPOOF">Telegram Support · @NET_SPOOF</a>
+  </p>
+</div>
 
-**NET SPOOF** is a self-hosted VPN management panel for OpenVPN, IKEv2, multi-port local VPN locations, outbound routing, traffic accounting and automated backups.
+---
 
-The panel includes a web interface, a command-line manager, PostgreSQL accounting, StrongSwan/IKEv2 support, a sing-box routing engine, and client/subscription management.
+## فارسی — راهنمای نصب
 
-## Features
+**سورنا** پنل مدیریت متمرکز OpenVPN و IKEv2 با قابلیت تعریف کاربران، لوکیشن‌های مجازی روی پورت‌های مستقل، نودهای خارجی، مسیریابی با sing-box، آمار مصرف و Backup V2 است.
 
-- OpenVPN UDP endpoints, local port-based locations, country flags, and independent client configuration downloads.
-- IKEv2/IPsec with StrongSwan and client synchronization.
-- Per-location outbound routing and single/failover strategies with sing-box.
-- Client/traffic/usage administration through a web panel.
-- Backup V2 export/import and maintenance timers.
-- Local offline installation artifacts for Ubuntu 22.04 and 24.04, amd64.
+### امکانات
 
-**Routing note:** Installing the routing engine does not activate traffic interception automatically. Configure a supported outbound and explicitly apply routing in the panel. A displayed country flag represents a location profile, not evidence that traffic exits in that country.
+| بخش | کاربرد |
+| --- | --- |
+| Master Panel | مدیریت کاربران، مدیران، سابسکریپشن و آمار |
+| OpenVPN / IKEv2 | ساخت و کنترل سرویس‌های VPN |
+| Local Port Locations | ساخت چند پورت OpenVPN با نام، پرچم و کانفیگ مستقل |
+| Foreign Nodes | اتصال سرورهای خارجی به Master از طریق Node Agent |
+| Outbounds | انتخاب مسیر خروجی مستقل برای ورودی‌ها با حالت Single و Failover |
+| Backup V2 | خروجی گرفتن و بازیابی تنظیمات و اطلاعات |
 
-## Offline installation
+> **توجه:** لوکیشن پورت‌دار، VPS خارجی جدا نیست؛ IP سرور ورودی یکسان می‌ماند و کشور خروجی وابسته به Outbound واقعی است. مسیریابی تا زمانی که عمداً تنظیم و فعال نشده باشد غیرفعال می‌ماند.
 
-Download the correct file from [Releases](../../releases/latest), together with its `.sha256` companion.
+### ۱) نصب Master به‌صورت آفلاین
 
-For Ubuntu 22.04 amd64:
+**پیش‌نیازها:** سرور تازه Ubuntu **22.04 یا 24.04 amd64**، دسترسی root، systemd، فعال‌بودن TUN و فضای کافی. این فایل برای نصب تازه است؛ **روی سرور دارای کاربر، گواهی یا پنل فعال اجرا نکنید**.
 
-```bash
+مخزن خصوصی است؛ برای دریافت Release، در مرورگر با حساب مجاز وارد GitHub شوید یا روی گوشی/رایانه:
+
+~~~bash
+gh auth login -h github.com -p https -w
+gh release download --repo Net-spoof/IranGate-OV-Reza-dev \
+  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
+sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+~~~
+
+برای Ubuntu 24.04، بخش `2204` نام فایل را به `2404` تغییر دهید. **فقط بسته متناسب با سیستم‌عامل را انتخاب کنید.**
+
+از گوشی Termux به سرور:
+
+~~~bash
+scp NET-SPOOF-offline-ubuntu2204-amd64.run \
+    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+    root@YOUR_MASTER_IP:/root/
+~~~
+
+روی سرور مقصد (حتی اگر اینترنت نداشته باشد):
+
+~~~bash
 cd /root
 sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
 sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
-```
+~~~
 
-For Ubuntu 24.04 amd64, substitute `ubuntu2404`.
+نصاب IP عمومی، پروتکل و پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام ادمین را می‌پرسد؛ پورت اشغال‌شده را بررسی و جایگزین پیشنهاد می‌کند. گواهی‌ها و دیتابیس و سرویس‌های Master، IKEv2، Backup V2 و موتور Routing را راه‌اندازی و بررسی می‌کند.
 
-The installer asks for the public server IP, OpenVPN protocol/port, webpanel port, subscription port, and administrator username. It detects locally occupied service ports and proposes alternatives. Administration credentials are generated securely and saved in a root-only local file.
+اطلاعات ورود در یک فایل محرمانه مخصوص root ذخیره می‌شود (رمز را در چت یا لاگ عمومی منتشر نکنید). بعد از نصب:
 
-Only on an interrupted installation created by the **same installer release**:
+~~~bash
+surena-panel
+systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
+~~~
 
-```bash
+اگر **همان نسخه نصاب** وسط کار متوقف شد، پس از رفع علت:
+
+~~~bash
 sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
-```
+~~~
 
-Do not run a fresh installer over an existing deployed server, and do not use `--resume` across unrelated builds.
+**روی نصب فعال یا نصب قدیمی با نسخه متفاوت، فایل را دوباره اجرا نکنید.**
 
-See [Complete offline installation guide](docs/OFFLINE-RELEASE.md).
+[📘 راهنمای جامع نصب Master](docs/OFFLINE-RELEASE.md)
 
-## Administration
+### ۲) نصب Foreign Node
 
-After installation:
+نود خارجی با Master فرق دارد. روی **سرور خارجی جداگانه**، با GitHub احرازشده مخزن کامل را بگیرید؛ اجرای فایل تکی `install-node.sh` کافی نیست، چون ابزار VPN Direct Bypass از مسیر `scripts/` نیز نیاز است:
 
-```bash
-sudo netspoof-panel
-netspoof version
-```
+~~~bash
+gh auth login -h github.com -p https -w
+gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
+cd surena-src
+sudo bash node/install-node.sh
+~~~
 
-The historical CLI executable names are preserved for compatibility with existing integrations.
+نصاب Node نام، کد لوکیشن، پورت Agent، توکن مشترک، پورت OpenVPN و IP/پورت نوشته‌شده داخل کانفیگ کاربران را می‌پرسد. خروجی شامل **Agent URL** و Token است.
 
-In the web panel, use **Nodes → Local OpenVPN Port Locations** to create virtual locations and **Outbounds** to choose their exit routes. The interface also supports client/subscription configuration downloads for enabled local locations.
+سپس در Master → **Nodes → Add Node** آدرس Agent، IP، نام، کد کشور و همان Token را ثبت کنید. پورت Agent (پیش‌فرض 8091/TCP) و Control API (5024/TCP) را در فایروال **فقط برای IP مستر** مجاز کنید. توکن را عمومی نکنید. برای مدیریت خود نود:
 
-## Documentation
+~~~bash
+sudo ovp-node
+sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
+~~~
 
-- [Configuration](docs/configuration.md)
-- [Installation](docs/installation.md)
-- [CLI guide](docs/cli-guide.md)
-- [Traffic](docs/TRAFFIC_QUICKSTART.md)
-- [Troubleshooting](docs/troubleshooting.md)
+[📘 راهنمای کامل نصب Node](node/README.md)
 
-## Safety and compatibility
+### ۳) بررسی سلامت و بازیابی
 
-Existing service units, API paths, backup metadata, persistent file paths, and database objects deliberately retain their established compatibility identifiers. Rebranding the visible product does not require destructive database or PKI migration. Do not manually rename systemd units or data directories on a live deployment.
+~~~bash
+sudo systemctl status irangate-webpanel --no-pager
+sudo journalctl -u irangate-webpanel -n 50 --no-pager
+sudo surena-panel
+~~~
 
-NET SPOOF · VPN Management
+اگر Routing را تنظیم نکرده‌اید، غیرفعال‌بودن موتور مسیریابی طبیعی است. نصب آفلاین Master **به معنی آفلاین‌بودن نصب Node نیست**؛ Node برای نصب بسته‌ها از APT استفاده می‌کند.
+
+---
+
+## English — Installation Guide
+
+**SURENA** is a self-hosted network control panel for OpenVPN, IKEv2/IPsec, users, multi-port virtual locations, external node agents, independent sing-box outbound routing, traffic accounting and Backup V2.
+
+### Install the Master (fully offline on the destination host)
+
+**Requirements:** fresh Ubuntu **22.04 or 24.04 amd64** VPS with root, systemd and TUN. Do not install over an existing deployment, PKI or database.
+
+The repository is private. Authenticate with GitHub CLI on a connected **phone or workstation**, not necessarily on the destination server:
+
+~~~bash
+gh auth login -h github.com -p https -w
+gh release download -R Net-spoof/IranGate-OV-Reza-dev \
+  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
+sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+scp NET-SPOOF-offline-ubuntu2204-amd64.run \
+    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+    root@YOUR_MASTER_IP:/root/
+~~~
+
+For Ubuntu 24.04, use the `ubuntu2404` files. On the destination server:
+
+~~~bash
+cd /root
+sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
+~~~
+
+The interactive installer prompts for public IP, OpenVPN protocol/port, panel port, subscription port and admin username. It detects occupied local ports and initializes the Master services, PostgreSQL, IKEv2 and backup/routing tooling.
+
+~~~bash
+sudo surena-panel
+sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
+~~~
+
+For an interrupted run created by this **same installer version only**:
+
+~~~bash
+sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
+~~~
+
+[Complete Master installation details](docs/OFFLINE-RELEASE.md)
+
+### Install a foreign Node
+
+On a separate node server, clone the **whole private repository**, not only the installer script:
+
+~~~bash
+gh auth login -h github.com -p https -w
+gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
+cd surena-src
+sudo bash node/install-node.sh
+~~~
+
+Record the Node Agent URL and secret token shown by the installer. In the Master web UI, open **Nodes → Add Node** and enter the node's name, country code, public IP, Agent URL and shared token. Restrict Agent TCP (8091 by default) and Control TCP 5024 to the Master IP.
+
+~~~bash
+sudo ovp-node
+sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
+~~~
+
+[Complete Node installation details](node/README.md)
+
+### Security & compatibility
+
+Existing technical service names, APIs, database objects and data directories retain historical identifiers to preserve compatibility. **Never rename them manually on a running deployment.** The removed standalone GOST tunnel-manager is not part of the supported Surena installer. Routing must be deliberately configured and activated. HTTPS, external nodes, DNS and backups require site-specific setup.
+
+---
+
+### Support / پشتیبانی
+
+**Telegram:** [@NET_SPOOF](https://t.me/NET_SPOOF)
+
+**SURENA — Network Control Platform**
