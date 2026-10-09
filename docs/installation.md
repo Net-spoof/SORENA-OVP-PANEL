@@ -1,4 +1,4 @@
-# 🚀 IRANGATE Installation Guide
+# 🚀 NET SPOOF Installation Guide
 ## Version 1.1.0 - Production Release
 
 **Platform:** Linux Only (Ubuntu 20.04+, Debian 10+, RHEL 8+, CentOS 8+)  
@@ -41,7 +41,7 @@ sudo yum install -y epel-release
 sudo yum install -y openvpn easy-rsa
 ```
 
-### Step 2: Install IRANGATE Binary
+### Step 2: Install NET SPOOF Binary
 
 ```bash
 # Copy binary to server (from your local machine)
@@ -60,7 +60,7 @@ sudo chmod +x /usr/local/bin/irangate
 ```bash
 # Check version
 irangate version
-# Expected: IRANGATE CLI v1.0.0
+# Expected: NET SPOOF CLI v1.0.0
 
 # Check dependencies
 irangate check-deps
@@ -143,7 +143,7 @@ After installation, the following structure is created:
 ├── openvpn/
 │   └── openvpn-status.log  # OpenVPN status
 └── irangate/
-    └── irangate.log         # IRANGATE logs
+    └── irangate.log         # NET SPOOF logs
 ```
 
 ---
@@ -278,7 +278,7 @@ irangate client remove testuser
 irangate test-recovery
 
 # Expected output:
-# 🔧 Testing IRANGATE recovery procedures...
+# 🔧 Testing NET SPOOF recovery procedures...
 # 📊 Testing database recovery...
 # ✅ Database recovery test passed
 # 🔒 Testing VPN service recovery...
@@ -395,6 +395,6 @@ After successful installation:
 
 ---
 
-*Installation Guide for IRANGATE v1.1.0*  
+*Installation Guide for NET SPOOF v1.1.0*  
 *Production-Ready Release*  
 *October 12, 2025*
