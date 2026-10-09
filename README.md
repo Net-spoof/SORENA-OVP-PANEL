@@ -29,164 +29,140 @@
 
 > **توجه:** لوکیشن پورت‌دار، VPS خارجی جدا نیست؛ IP سرور ورودی یکسان می‌ماند و کشور خروجی وابسته به Outbound واقعی است. مسیریابی تا زمانی که عمداً تنظیم و فعال نشده باشد غیرفعال می‌ماند.
 
-### ۱) نصب Master به‌صورت آفلاین
+### ۱) نصب آنلاین Master / پنل مرکزی
 
-**پیش‌نیازها:** سرور تازه Ubuntu **22.04 یا 24.04 amd64**، دسترسی root، systemd، فعال‌بودن TUN و فضای کافی. این فایل برای نصب تازه است؛ **روی سرور دارای کاربر، گواهی یا پنل فعال اجرا نکنید**.
+**پیش‌نیازها:** سرور **تازه** Ubuntu 22.04 یا 24.04 (amd64)، دسترسی root یا sudo، اینترنت برای دانلود وابستگی‌ها، systemd و TUN فعال. این نصب برای **سرور تازه** است؛ روی مستر دارای کاربران، دیتابیس، گواهی یا VPN فعال اجرا نکنید. برای ارتقای سرور موجود از [راهنمای عملیات امن](docs/EXISTING-SERVER-OPERATIONS.md) استفاده کنید.
 
-مخزن خصوصی است؛ برای دریافت Release، در مرورگر با حساب مجاز وارد GitHub شوید یا روی گوشی/رایانه:
+روی **سرور Master** اجرا کنید؛ مخزن عمومی است و به GitHub Token یا `gh auth login` نیاز ندارد:
 
-~~~bash
-gh auth login -h github.com -p https -w
-gh release download --repo Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
-sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
-~~~
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash install.sh
+```
 
-برای Ubuntu 24.04، بخش `2204` نام فایل را به `2404` تغییر دهید. **فقط بسته متناسب با سیستم‌عامل را انتخاب کنید.**
+نصاب به‌صورت تعاملی IP/دامنه، پروتکل و پورت OpenVPN (پیش‌فرض 1194)، DNS، پورت پنل (پیش‌فرض **8080**)، پورت سابسکریپشن (پیش‌فرض **8090**)، دامنه اختیاری، مسیر وب و اطلاعات ادمین را می‌پرسد. **حتماً رمز ادمین قوی و غیرپیش‌فرض وارد کنید**؛ رمز پیش‌فرضِ نمایش‌داده‌شده در نصاب برای استفاده عمومی امن نیست. HTTPS با دامنه به DNS معتبر و راه‌اندازی صحیح TLS وابسته است.
 
-از گوشی Termux به سرور:
+پس از نصب، آدرس پنل در خروجی نمایش داده می‌شود. اگر دامنه و مسیر وب اختصاصی تعیین نکرده‌اید، آدرس معمول:
 
-~~~bash
-scp SURENA-offline-ubuntu2204-amd64.run \
-    SURENA-offline-ubuntu2204-amd64.run.sha256 \
-    root@YOUR_MASTER_IP:/root/
-~~~
+```text
+http://MASTER_IP:8080/
+```
 
-روی سرور مقصد (حتی اگر اینترنت نداشته باشد):
+برای مدیریت و بررسی سرویس‌ها:
 
-~~~bash
-cd /root
-sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./SURENA-offline-ubuntu2204-amd64.run
-~~~
+```bash
+sudo surena-panel
+sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx
+sudo journalctl -u irangate-webpanel -n 50 --no-pager
+```
 
-نصاب IP عمومی، پروتکل و پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام ادمین را می‌پرسد؛ پورت اشغال‌شده را بررسی و جایگزین پیشنهاد می‌کند. گواهی‌ها و دیتابیس و سرویس‌های Master، IKEv2، Backup V2 و موتور Routing را راه‌اندازی و بررسی می‌کند.
+**توجه:** این دستورها نصب تازه‌اند، نه دستور آپدیت. پورت‌های انتخابی را مطابق فایروال/شبکه خود باز کنید؛ پنل مدیریتی را ترجیحاً پشت HTTPS و کنترل دسترسی قرار دهید.
 
-اطلاعات ورود در یک فایل محرمانه مخصوص root ذخیره می‌شود (رمز را در چت یا لاگ عمومی منتشر نکنید). بعد از نصب:
+### ۲) نصب آنلاین Foreign Node / نود خارجی
 
-~~~bash
-surena-panel
-systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
-~~~
+نود را روی **سرور جداگانه** اجرا کنید، نه روی سرور Master. باید مخزن را **کامل** Clone کنید، زیرا نصاب نود به فایل‌های پوشه `scripts/` هم نیاز دارد.
 
-اگر **همان نسخه نصاب** وسط کار متوقف شد، پس از رفع علت:
-
-~~~bash
-sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
-~~~
-
-**روی نصب فعال یا نصب قدیمی با نسخه متفاوت، فایل را دوباره اجرا نکنید.**
-
-[📘 راهنمای جامع نصب Master](docs/OFFLINE-RELEASE.md)
-
-[🛠️ راهنمای مدیریت تنظیمات و ارتقای امن پنل/نود موجود](docs/EXISTING-SERVER-OPERATIONS.md)
-
-### ۲) نصب Foreign Node
-
-نود خارجی با Master فرق دارد. روی **سرور خارجی جداگانه**، با GitHub احرازشده مخزن کامل را بگیرید؛ اجرای فایل تکی `install-node.sh` کافی نیست، چون ابزار VPN Direct Bypass از مسیر `scripts/` نیز نیاز است:
-
-~~~bash
-gh auth login -h github.com -p https -w
-gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
-cd surena-src
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
-~~~
+```
 
-نصاب Node نام، کد لوکیشن، پورت Agent، توکن مشترک، پورت OpenVPN و IP/پورت نوشته‌شده داخل کانفیگ کاربران را می‌پرسد. خروجی شامل **Agent URL** و Token است.
+نصاب نام نود، کد کشور، پورت Agent (پیش‌فرض **8091/TCP**)، توکن مشترک، پورت واقعی OpenVPN و IP/پورت درج‌شده در کانفیگ کلاینت را می‌پرسد. آدرس کانفیگ می‌تواند با IP واقعی نود متفاوت باشد، مثلاً زمانی که اتصال از تونل ایران انجام می‌شود.
 
-سپس در Master → **Nodes → Add Node** آدرس Agent، IP، نام، کد کشور و همان Token را ثبت کنید. پورت Agent (پیش‌فرض 8091/TCP) و Control API (5024/TCP) را در فایروال **فقط برای IP مستر** مجاز کنید. توکن را عمومی نکنید. برای مدیریت خود نود:
+بعد از نصب، مقدار **Agent URL** و **Token** خروجی را در پنل Master از مسیر **Nodes → Add Node** ثبت کنید. پورت‌های Agent (**8091/TCP** یا مقدار انتخابی) و Control (**5024/TCP**) را فقط برای IP مستر مجاز کنید؛ توکن را عمومی نکنید.
 
-~~~bash
-sudo surena-node
-sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
-~~~
+مدیریت نود و بررسی وضعیت:
 
-[📘 راهنمای کامل نصب Node](node/README.md)
+```bash
+sudo Serena-node
+sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
+```
 
-**نام‌های مدیریت نود:** `surena-node` (اصلی)، `Serena-node` و `serena-node` (جایگزین). دستور قدیمی `ovp-node` برای سازگاری همچنان کار می‌کند. روی نودهای نصب‌شده، بدون نصب مجدد یا ری‌استارت سرویس از `sudo bash node/install-manager-aliases.sh` در یک کلون کامل مخزن استفاده کنید.
+دستورهای `surena-node` و `serena-node` نیز پشتیبانی می‌شوند. [📘 راهنمای کامل نصب و اتصال نود](node/README.md).
 
-### ۳) بررسی سلامت و بازیابی
+### ۳) نصب آفلاین Master (اختیاری)
 
-~~~bash
+اگر سرور مقصد به اینترنت دسترسی ندارد، نسخه بسته‌بندی‌شده آفلاین Master برای Ubuntu 22.04/24.04 amd64 در [Releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases) ارائه می‌شود. دستورهای دانلود، کنترل SHA256، انتقال از گوشی/رایانه و نصب در **[راهنمای کامل نصب آفلاین](docs/OFFLINE-RELEASE.md)** قرار دارند. نصب Node همچنان آنلاین است.
+
+### ۴) بررسی سلامت و ارتقا
+
+```bash
 sudo systemctl status irangate-webpanel --no-pager
 sudo journalctl -u irangate-webpanel -n 50 --no-pager
-sudo surena-panel
-~~~
+```
 
-اگر Routing را تنظیم نکرده‌اید، غیرفعال‌بودن موتور مسیریابی طبیعی است. نصب آفلاین Master **به معنی آفلاین‌بودن نصب Node نیست**؛ Node برای نصب بسته‌ها از APT استفاده می‌کند.
+برای تغییرات روی نصب موجود، به‌جای اجرای مجدد نصاب کامل، از [🛠️ راهنمای ارتقای امن و مدیریت Master/Node](docs/EXISTING-SERVER-OPERATIONS.md) استفاده کنید. مسیریابی Outbound تا زمان تنظیم و فعال‌سازی عمدی اعمال نمی‌شود.
 
 ---
 
 ## English — Installation Guide
 
-**SURENA** is a self-hosted network control panel for OpenVPN, IKEv2/IPsec, users, multi-port virtual locations, external node agents, independent sing-box outbound routing, traffic accounting and Backup V2.
+**SURENA** is a self-hosted network control panel for OpenVPN, IKEv2/IPsec, user management, multi-port virtual locations, external Node agents, optional sing-box outbound routing, traffic accounting, and Backup V2.
 
-### Install the Master (fully offline on the destination host)
+### 1) Online Master / Panel Installation
 
-**Requirements:** fresh Ubuntu **22.04 or 24.04 amd64** VPS with root, systemd and TUN. Do not install over an existing deployment, PKI or database.
+**Requirements:** a **fresh** Ubuntu 22.04 or 24.04 (amd64) VPS, root/sudo, Internet access for dependencies, systemd, and an enabled TUN device. **Do not run this fresh installer on an existing deployment** containing users, PKI, databases or active VPN services. Use the [existing-server operations guide](docs/EXISTING-SERVER-OPERATIONS.md) for upgrades.
 
-The repository is private. Authenticate with GitHub CLI on a connected **phone or workstation**, not necessarily on the destination server:
+Run on the **Master VPS**. The repository is public; GitHub authentication is not required:
 
-~~~bash
-gh auth login -h github.com -p https -w
-gh release download -R Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
-sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
-scp SURENA-offline-ubuntu2204-amd64.run \
-    SURENA-offline-ubuntu2204-amd64.run.sha256 \
-    root@YOUR_MASTER_IP:/root/
-~~~
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash install.sh
+```
 
-For Ubuntu 24.04, use the `ubuntu2404` files. On the destination server:
+The interactive installer asks for the server IP/domain, OpenVPN protocol and port (**1194** default), client DNS, web panel port (**8080** default), subscription port (**8090** default), optional domain, web path, and admin credentials. **Set a strong, non-default admin password**; the suggested default is unsafe for Internet-facing installations. Domain HTTPS requires working DNS and TLS configuration.
 
-~~~bash
-cd /root
-sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./SURENA-offline-ubuntu2204-amd64.run
-~~~
+The installer displays the resulting URL; with no custom domain/path, the typical address is `http://MASTER_IP:8080/`.
 
-The interactive installer prompts for public IP, OpenVPN protocol/port, panel port, subscription port and admin username. It detects occupied local ports and initializes the Master services, PostgreSQL, IKEv2 and backup/routing tooling.
+Check services and open the management menu:
 
-~~~bash
+```bash
 sudo surena-panel
-sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
-~~~
+sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx
+sudo journalctl -u irangate-webpanel -n 50 --no-pager
+```
 
-For an interrupted run created by this **same installer version only**:
+Allow your chosen ports through the firewall. Prefer HTTPS and restricted access for the management interface. These commands are for **fresh installation, not in-place updates**.
 
-~~~bash
-sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
-~~~
+### 2) Online Foreign Node Installation
 
-[Complete Master installation details](docs/OFFLINE-RELEASE.md)
+Use a **separate server** for each Node; do not install it over the Master. Clone the **whole repository**, because the Node installer uses helpers from `scripts/`.
 
-### Install a foreign Node
-
-On a separate node server, clone the **whole private repository**, not only the installer script:
-
-~~~bash
-gh auth login -h github.com -p https -w
-gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
-cd surena-src
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
-~~~
+```
 
-Record the Node Agent URL and secret token shown by the installer. In the Master web UI, open **Nodes → Add Node** and enter the node's name, country code, public IP, Agent URL and shared token. Restrict Agent TCP (8091 by default) and Control TCP 5024 to the Master IP.
+The wizard prompts for the Node name and country code, Agent API port (**8091/TCP** default), shared secret token, real OpenVPN listener, and the host/port embedded in client profiles. The profile destination can differ from the Node's IP when traffic enters through a tunnel.
 
-~~~bash
-sudo surena-node
-sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
-~~~
+After installation, copy the **Agent URL** and **Token** to **Master → Nodes → Add Node**. Restrict the Agent port (**8091/TCP**, or your selection) and Control API (**5024/TCP**) so **only the Master IP** can reach them; never publish the token.
 
-[Complete Node installation details](node/README.md)
+```bash
+sudo Serena-node
+sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
+```
 
-**Node management:** `surena-node` (preferred), `Serena-node` / `serena-node` (alternate spellings), and legacy `ovp-node`. On an existing Node, add aliases non-disruptively using `sudo bash node/install-manager-aliases.sh` from a checked-out repository.
+The `surena-node` and `serena-node` spellings also work. See the [full Node setup and pairing guide](node/README.md).
 
-[Existing servers: safe UI updates, Master & Node settings (FA/EN)](docs/EXISTING-SERVER-OPERATIONS.md)
+### 3) Offline Master Installer (optional)
 
-### Security & compatibility
+For a destination VPS without Internet access, prebuilt offline Master assets for Ubuntu 22.04/24.04 amd64 can be downloaded from [Releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases). See the [offline release guide](docs/OFFLINE-RELEASE.md) for matching OS packages, SHA256 verification, upload and installation. The separate Node installer still requires Internet access.
 
-Existing technical service names, APIs, database objects and data directories retain historical identifiers to preserve compatibility. **Never rename them manually on a running deployment.** The removed standalone GOST tunnel-manager is not part of the supported Surena installer. Routing must be deliberately configured and activated. HTTPS, external nodes, DNS and backups require site-specific setup.
+### 4) Operations and security
+
+For existing servers, follow the [safe Master/Node update guide](docs/EXISTING-SERVER-OPERATIONS.md) rather than rerunning `install.sh`. Some internal service, database and filesystem identifiers retain historical names for backward compatibility; **do not rename them on live deployments**. Outbound routing is not enabled until explicitly configured, and public TLS/DNS and Node secrets require site-specific setup.
 
 ---
 
