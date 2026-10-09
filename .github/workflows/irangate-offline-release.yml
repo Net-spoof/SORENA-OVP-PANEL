@@ -73,6 +73,15 @@ jobs:
           bash -n scripts/offline/install-master-from-bundle.sh
           bash -n scripts/offline/build-release-bundle.sh
           python3 -m py_compile scripts/irangate-routing
+          sed -n '/^    check_port() {/,/^    }/p' scripts/offline/install-master-from-bundle.sh > "$RUNNER_TEMP/check-port-only.sh"
+          bash -c '
+            ss() { :; }
+            source "$1"
+            check_port udp 443 "" "" OpenVPN
+            check_port tcp 443 "" "" OpenVPN
+            ! check_port tcp 443 "" "" WebPanel
+            ! check_port udp 500 "" "" OpenVPN
+          ' bash "$RUNNER_TEMP/check-port-only.sh"
           asset="$(find "$OUT_DIR" -name '*.run' -type f -print -quit)"
           test -n "$asset"
           marker_line="$(awk '$0=="__IRANGATE_BUNDLE_START__" {print NR; exit}' "$asset")"
