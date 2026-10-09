@@ -1,4 +1,4 @@
-name: Build and publish complete offline NET SPOOF releases
+name: Build and publish complete offline SURENA releases
 
 on:
   push:
@@ -11,8 +11,10 @@ on:
       - scripts/make-offline-panel-bundle.sh
       - scripts/irangate-routing
       - scripts/ovp-panel
+      - node/**
       - install.sh
       - README.md
+      - node/**
       - webpanel/frontend/**
       - pkg/menu/menu.go
       - pkg/cmd/root.go
@@ -84,8 +86,14 @@ jobs:
           bash -n scripts/offline/build-release-bundle.sh
           python3 -m py_compile scripts/irangate-routing
           bash -n scripts/ovp-panel
+          bash -n node/install-node.sh
+          node --check webpanel/frontend/js/sidebar.js
+          node --check webpanel/frontend/js/i18n.js
+          test -s webpanel/frontend/logo/surena.webp
+          test ! -e scripts/irangate-gost-tunnel-manager.sh
+          grep -q "logo/surena.webp" webpanel/frontend/index.html webpanel/frontend/js/sidebar.js
           bash -n install.sh
-          ! grep -Eq 'IranGate Panel Management|IranGate Version|IranGate complete offline installer' scripts/ovp-panel webpanel/frontend/settings.html
+          ! grep -Eq 'IranGate Panel Management|IranGate Version|NET SPOOF Panel Management' scripts/ovp-panel webpanel/frontend/settings.html
           sed -n '/^    check_port() {/,/^    }/p' scripts/offline/install-master-from-bundle.sh > "$RUNNER_TEMP/check-port-only.sh"
           bash -c '
             set -Eeuo pipefail
@@ -136,7 +144,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           for os in 2204 2404; do
-            name="NET-SPOOF-offline-ubuntu${os}-amd64.run"
+            name="SURENA-offline-ubuntu${os}-amd64.run"
             test -s "dist/$name"
             (cd dist && sha256sum -c "$name.sha256")
           done
@@ -150,6 +158,6 @@ jobs:
           tag="offline-${GITHUB_SHA:0:12}"
           gh release create "$tag" dist/*.run dist/*.sha256 \
             --target "$GITHUB_SHA" \
-            --title "NET SPOOF complete offline installer (${GITHUB_SHA:0:12})" \
-            --notes "Self-contained, no international network required on the destination server. Choose the asset matching Ubuntu 22.04 or 24.04 **amd64**. Single command: sudo bash NET-SPOOF-offline-ubuntu2204-amd64.run (or ubuntu2404). Includes source, compiled webpanel and CLI, dependency-complete local APT pool, PostgreSQL/OpenVPN/IKEv2 installation logic, sing-box routing engine, Python wheels and Backup v2. Intended for a **fresh systemd VPS with TUN enabled**, and HTTP/IP startup. Does not replace existing deployed installations; public TLS certificates, DNS, remote node credentials and user data are necessarily site-specific. Validate your private backup separately." \
+            --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
+            --notes "Self-contained, no international network required on the destination server. Choose the asset matching Ubuntu 22.04 or 24.04 **amd64**. Single command: sudo bash SURENA-offline-ubuntu2204-amd64.run (or ubuntu2404). Includes source, compiled webpanel and CLI, dependency-complete local APT pool, PostgreSQL/OpenVPN/IKEv2 installation logic, sing-box routing engine, Python wheels and Backup v2. Intended for a **fresh systemd VPS with TUN enabled**, and HTTP/IP startup. Does not replace existing deployed installations; public TLS certificates, DNS, remote node credentials and user data are necessarily site-specific. Validate your private backup separately." \
             --latest
