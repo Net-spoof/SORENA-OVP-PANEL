@@ -2,11 +2,15 @@
 
 [فارسی](#فارسی--مشاهده-تنظیمات-و-بهروزرسانی) · [English](#english--existing-deployment) · [@NET_SPOOF](https://t.me/NET_SPOOF)
 
+<div dir="rtl" align="right">
+
 ## فارسی — مشاهده تنظیمات و به‌روزرسانی
 
 ### تشخیص اینکه سرور Master است یا Node
 
 روی سرور فعلی **فقط برای مشاهده**:
+
+<div dir="ltr" align="left">
 
 ```bash
 echo "OS:"; . /etc/os-release; echo "$PRETTY_NAME"
@@ -18,17 +22,25 @@ for f in /etc/irangate/webpanel.env /etc/irangate-node-agent.env; do
 done
 ```
 
+</div>
+
 اگر `irangate-webpanel` فعال است، معمولاً پنل Master روی آن سرور اجرا می‌شود. اگر `irangate-node-agent` فعال است، Node روی همان سرور نصب شده است. ممکن است هر دو نقش وجود داشته باشند.
 
 ### پنل Master — منوی مشاهده و تغییر
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo surena-panel
 ```
 
+</div>
+
 منوی پنل از جمله این گزینه‌ها را دارد: 1 نمایش اطلاعات، 2 تغییر پورت پنل، 3 تغییر دامنه، 4 مسیر پنل، 5 دامنه سابسکریپشن، 6 پورت سابسکریپشن، 8 پورت OpenVPN، 9 آدرس عمومی، 10 وضعیت سرویس‌ها، 12 لاگ، 14 بکاپ. گزینه 13 فرایند **Git-based source update** را اجرا می‌کند و روی نصب آفلاین بدون `.git` یا بدون بکاپ معتبر، روش ارتقای عمومی نیست.
 
 نمایش تنظیمات عمومی بدون افشای رمزهای ادمین:
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo awk -F= '/^(WEBPANEL_PORT|PANEL_DOMAIN|WEBPANEL_BASEPATH|SUBSCRIPTION_PORT|SUBSCRIPTION_PUBLIC_HOST|SUBSCRIPTION_SCHEME)=/ {print}' /etc/irangate/webpanel.env
@@ -36,13 +48,19 @@ sudo systemctl status irangate-webpanel --no-pager
 sudo journalctl -u irangate-webpanel -n 40 --no-pager
 ```
 
+</div>
+
 تنظیمات محرمانه `JWT_SECRET`، رمز ادمین، DB DSN و توکن‌ها را در چت یا لاگ عمومی ارسال نکنید.
 
 ### Node — مدیریت تنظیمات
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo Serena-node
 ```
+
+</div>
 
 برای نود نصب‌شده، منوی مدیریت را با `sudo Serena-node` باز کنید. اگر این دستور روی نصب موجود در دسترس نبود، از اسکریپت `node/install-manager-aliases.sh` موجود در مخزن، برای فعال‌سازی امن فرمان مدیریت استفاده کنید؛ نصب کامل نود را روی سرور فعال تکرار نکنید.
 
@@ -50,10 +68,14 @@ sudo Serena-node
 
 نمایش امن بدون توکن:
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo awk -F= '/^(NODE_NAME|NODE_LOCATION|NODE_AGENT_PORT|NODE_PUBLIC_HOST|NODE_OVPN_PORT|NODE_OVPN_PROTO|NODE_OPENVPN_LISTEN_PORT)=/ {print}' /etc/irangate-node-agent.env
 sudo systemctl is-active irangate-node-agent irangate-node-control openvpn-server@server
 ```
+
+</div>
 
 تغییر Agent port یا shared token باید در **Master → Nodes** نیز ثبت شود. پورت Agent به‌صورت پیش‌فرض 8091/TCP و Control 5024/TCP است؛ دسترسی این پورت‌های مدیریتی را به IP مستر محدود کنید.
 
@@ -63,20 +85,30 @@ sudo systemctl is-active irangate-node-agent irangate-node-control openvpn-serve
 
 اگر فقط می‌خواهید **لوگو، صفحه ورود، منوی مدیریتی و ترجمه‌های SURENA** به‌روزرسانی شوند، روی دستگاهی که دسترسی GitHub دارد سورس تازه را دریافت کرده و یک آرشیو UI بسازید:
 
+<div dir="ltr" align="left">
+
 ```bash
 git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git surena-ui-src
 tar -czf surena-ui-update.tar.gz -C surena-ui-src webpanel/frontend scripts/ovp-panel
 scp surena-ui-update.tar.gz root@YOUR_SERVER_IP:/root/
 ```
 
+</div>
+
 روی سرور **Master موجود**، ابتدا مسیرهای نصب را بررسی کنید:
+
+<div dir="ltr" align="left">
 
 ```bash
 test -d /opt/irangate/webpanel/frontend
 test -f /usr/local/bin/ovp-panel
 ```
 
+</div>
+
 در صورت تطبیق مسیرها، UI-only upgrade را با بکاپ اجرا کنید (بدون آپدیت Go/backend، دیتابیس، OpenVPN یا Node):
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo bash <<'BASH'
@@ -101,7 +133,11 @@ printf 'SURENA UI updated; rollback: %s\n' "$BACK"
 BASH
 ```
 
+</div>
+
 این دستور سرویس‌ها را ری‌استارت نمی‌کند؛ صفحه مرورگر را با Hard Refresh باز کنید. **برای ارتقای هسته اجرایی و دیتابیس/نود روی سرور فعال، ابتدا نسخه فعلی، نوع نصب، بکاپ و تغییرات سفارشی را بررسی کنید.** این کار نیازمند برنامه ارتقا و Rollback مستقل است.
+
+</div>
 
 ## English — Existing Deployment
 
