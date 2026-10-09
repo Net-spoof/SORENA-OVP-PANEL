@@ -209,7 +209,7 @@
 
         // Routing
         'Route primary OpenVPN/IKEv2 traffic and each OpenVPN port location through independent outbound strategies.':'مسیریابی ترافیک اصلی OpenVPN/IKEv2 و هر موقعیت پورت OpenVPN از طریق خروجی‌های مستقل.',
-        'Bypass / GOST Mode':'حالت Bypass / GOST','Outbound Form':'فرم خروجی','Tag':'تگ','Auto / xray parser':'خودکار / پردازشگر Xray',
+        'Disable Routing / Bypass':'غیرفعال‌سازی مسیریابی / عبور مستقیم','Outbound Form':'فرم خروجی','Tag':'تگ','Auto / xray parser':'خودکار / پردازشگر Xray',
         'Share Link':'لینک اشتراک','Add New':'افزودن جدید','Update Selected':'به‌روزرسانی انتخاب‌شده','Route VPN Client Traffic':'مسیریابی ترافیک کاربران VPN',
         'Inbound':'ورودی','OpenVPN + IKEv2 — Shared Outbound':'OpenVPN + IKEv2 — خروجی مشترک','OpenVPN traffic':'ترافیک OpenVPN',
         'Balancer Strategy':'استراتژی بالانسر','Least Ping / URLTest':'کمترین پینگ / URLTest','Manual Selector':'انتخاب‌گر دستی',
@@ -273,7 +273,7 @@
         'Enter IP address (e.g., 8.8.8.8)':'آدرس IP را وارد کنید (مثال: 8.8.8.8)',
 
         // API docs / AI
-        'API Documentation':'مستندات API','Interactive REST API reference for SURENA':'مرجع تعاملی REST API برای IranGate',
+        'API Documentation':'مستندات API','Interactive REST API reference for SURENA':'مرجع تعاملی REST API برای SURENA',
         'Authentication':'احراز هویت','Login and receive JWT token':'ورود و دریافت توکن JWT','Request:':'درخواست:','Response:':'پاسخ:',
         'Client Management':'مدیریت کاربران','List all VPN clients':'فهرست همه کاربران VPN','Create new client':'ساخت کاربر جدید',
         'Download .ovpn configuration file':'دانلود فایل کانفیگ .ovpn','Revoke all orphaned certificates':'لغو همه گواهی‌های بدون رکورد',
