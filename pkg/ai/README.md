@@ -1,8 +1,8 @@
-# 🤖 IRANGATE AI Management Package
+# 🤖 NET SPOOF AI Management Package
 
 ## Overview
 
-This package provides AI-powered monitoring and management capabilities for the IRANGATE VPN system. It includes intelligent system monitoring, automatic problem detection, and self-healing capabilities using OpenAI's GPT models.
+This package provides AI-powered monitoring and management capabilities for the NET SPOOF VPN system. It includes intelligent system monitoring, automatic problem detection, and self-healing capabilities using OpenAI's GPT models.
 
 ## Files
 
