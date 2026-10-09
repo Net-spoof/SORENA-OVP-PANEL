@@ -97,11 +97,13 @@ sudo bash node/install-node.sh
 سپس در Master → **Nodes → Add Node** آدرس Agent، IP، نام، کد کشور و همان Token را ثبت کنید. پورت Agent (پیش‌فرض 8091/TCP) و Control API (5024/TCP) را در فایروال **فقط برای IP مستر** مجاز کنید. توکن را عمومی نکنید. برای مدیریت خود نود:
 
 ~~~bash
-sudo ovp-node
+sudo surena-node
 sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
 ~~~
 
 [📘 راهنمای کامل نصب Node](node/README.md)
+
+**نام‌های مدیریت نود:** `surena-node` (اصلی)، `Serena-node` و `serena-node` (جایگزین). دستور قدیمی `ovp-node` برای سازگاری همچنان کار می‌کند. روی نودهای نصب‌شده، بدون نصب مجدد یا ری‌استارت سرویس از `sudo bash node/install-manager-aliases.sh` در یک کلون کامل مخزن استفاده کنید.
 
 ### ۳) بررسی سلامت و بازیابی
 
@@ -172,11 +174,13 @@ sudo bash node/install-node.sh
 Record the Node Agent URL and secret token shown by the installer. In the Master web UI, open **Nodes → Add Node** and enter the node's name, country code, public IP, Agent URL and shared token. Restrict Agent TCP (8091 by default) and Control TCP 5024 to the Master IP.
 
 ~~~bash
-sudo ovp-node
+sudo surena-node
 sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
 ~~~
 
 [Complete Node installation details](node/README.md)
+
+**Node management:** `surena-node` (preferred), `Serena-node` / `serena-node` (alternate spellings), and legacy `ovp-node`. On an existing Node, add aliases non-disruptively using `sudo bash node/install-manager-aliases.sh` from a checked-out repository.
 
 [Existing servers: safe UI updates, Master & Node settings (FA/EN)](docs/EXISTING-SERVER-OPERATIONS.md)
 

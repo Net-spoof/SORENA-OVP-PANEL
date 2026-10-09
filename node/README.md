@@ -59,14 +59,14 @@ sudo bash node/install-node.sh
 ### مدیریت و عیب‌یابی
 
 ~~~bash
-sudo ovp-node
+sudo surena-node
 sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
 sudo systemctl status irangate-node-agent --no-pager
 sudo journalctl -u irangate-node-agent -n 50 --no-pager
 sudo ss -tulnp
 ~~~
 
-از `ovp-node` می‌توان وضعیت را دید، پورت Agent یا OpenVPN، توکن مشترک یا IP/پورت مقصد داخل کانفیگ کلاینت را تغییر داد و یک کانفیگ آزمایشی ایجاد کرد. **تغییر توکن یا پورت Agent باید در تنظیمات نود داخل Master هم اعمال شود.**
+از `surena-node` می‌توان وضعیت را دید، پورت Agent یا OpenVPN، توکن مشترک یا IP/پورت مقصد داخل کانفیگ کلاینت را تغییر داد و یک کانفیگ آزمایشی ایجاد کرد. **تغییر توکن یا پورت Agent باید در تنظیمات نود داخل Master هم اعمال شود.**
 
 ### بکاپ و بازیابی Node
 
@@ -113,11 +113,13 @@ In the Master web UI go to **Nodes → Add Node** and supply the display name, l
 ### Operations
 
 ~~~bash
-sudo ovp-node
+sudo surena-node
 sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
 sudo journalctl -u irangate-node-agent -n 50 --no-pager
 ~~~
 
 Menu options include status, Agent port, shared token, advertised config host/port, OpenVPN listener, a test configuration, and node removal. Coordinate Agent port or token changes on both ends.
+
+**Available management aliases:** `surena-node`, `Serena-node`, `serena-node`, and legacy `ovp-node`.
 
 **Support / پشتیبانی:** [Telegram @NET_SPOOF](https://t.me/NET_SPOOF)
