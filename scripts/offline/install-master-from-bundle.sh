@@ -153,8 +153,11 @@ else
     check_port() {
         local proto="$1" port="$2" exclude_a="${3:-}" exclude_b="${4:-}"
         [[ "$port" =~ ^[0-9]+$ ]] || return 1
-        (( 10#$port >= 1024 && 10#$port <= 65535 )) || return 1
-        [[ "$port" != "4500" && "$port" != "500" && "$port" != "80" ]] || return 1
+        (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
+        # Privileged OpenVPN ports (e.g. TCP/443 or UDP/443) are supported.
+        # Panel/subscription ports remain unprivileged by design.
+        if [[ "${5:-}" != OpenVPN ]] && (( 10#$port < 1024 )); then return 1; fi
+        [[ "$port" != "4500" && "$port" != "500" ]] || return 1
         [[ "$port" != "$exclude_a" && "$port" != "$exclude_b" ]] || return 1
         local ss_flag="-ltn"
         [[ "$proto" == "udp" ]] && ss_flag="-lun"
@@ -165,11 +168,11 @@ else
     select_port() {
         local label="$1" proto="$2" initial="$3" candidates="$4"
         local exclude_a="${5:-}" exclude_b="${6:-}" candidate="" selected=""
-        if check_port "$proto" "$initial" "$exclude_a" "$exclude_b"; then
+        if check_port "$proto" "$initial" "$exclude_a" "$exclude_b" "$label"; then
             selected="$initial"
         else
             for candidate in $candidates; do
-                if check_port "$proto" "$candidate" "$exclude_a" "$exclude_b"; then
+                if check_port "$proto" "$candidate" "$exclude_a" "$exclude_b" "$label"; then
                     selected="$candidate"
                     printf '[IranGate Offline] %s port %s unavailable; choosing %s\n' \
                         "$label" "$initial" "$selected" >&2
@@ -181,7 +184,7 @@ else
         local attempt
         for attempt in {1..20}; do
             candidate="$(prompt_value "$label ($proto)" "$selected")"
-            if check_port "$proto" "$candidate" "$exclude_a" "$exclude_b"; then
+            if check_port "$proto" "$candidate" "$exclude_a" "$exclude_b" "$label"; then
                 printf '%s' "$candidate"
                 return 0
             fi
