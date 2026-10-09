@@ -1,4 +1,4 @@
-# 📖 IRANGATE Usage Guide
+# 📖 NET SPOOF Usage Guide
 ## Version 1.1.0 - Complete Usage Examples
 
 **Updated:** October 12, 2025
@@ -523,6 +523,6 @@ irangate monitor clients
 
 ---
 
-*Usage Guide for IRANGATE v1.1.0*  
+*Usage Guide for NET SPOOF v1.1.0*  
 *Production-Ready Release*  
 *October 12, 2025*
