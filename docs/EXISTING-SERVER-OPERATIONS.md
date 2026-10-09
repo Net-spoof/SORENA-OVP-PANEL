@@ -24,8 +24,6 @@ done
 
 ```bash
 sudo surena-panel
-# در نسخه‌های قبلی:
-sudo ovp-panel
 ```
 
 منوی پنل از جمله این گزینه‌ها را دارد: 1 نمایش اطلاعات، 2 تغییر پورت پنل، 3 تغییر دامنه، 4 مسیر پنل، 5 دامنه سابسکریپشن، 6 پورت سابسکریپشن، 8 پورت OpenVPN، 9 آدرس عمومی، 10 وضعیت سرویس‌ها، 12 لاگ، 14 بکاپ. گزینه 13 فرایند **Git-based source update** را اجرا می‌کند و روی نصب آفلاین بدون `.git` یا بدون بکاپ معتبر، روش ارتقای عمومی نیست.
@@ -43,10 +41,10 @@ sudo journalctl -u irangate-webpanel -n 40 --no-pager
 ### Node — مدیریت تنظیمات
 
 ```bash
-sudo surena-node
+sudo Serena-node
 ```
 
-برای نودهای ازقبل‌نصب‌شده، فرمان‌های سورنا را بدون نصب مجدد و بدون توقف VPN با `sudo bash node/install-manager-aliases.sh` از یک کپی کامل مخزن فعال کنید. فرمان‌های `Serena-node`، `serena-node`، `surena-node` و فرمان قدیمی `ovp-node` همگی به یک ابزار اشاره می‌کنند.
+برای نود نصب‌شده، منوی مدیریت را با `sudo Serena-node` باز کنید. اگر این دستور روی نصب موجود در دسترس نبود، از اسکریپت `node/install-manager-aliases.sh` موجود در مخزن، برای فعال‌سازی امن فرمان مدیریت استفاده کنید؛ نصب کامل نود را روی سرور فعال تکرار نکنید.
 
 گزینه‌های Node: 1 وضعیت، 2 پورت Agent، 3 تغییر توکن مشترک، 4 آدرس کانفیگ کاربران، 5 پورت کانفیگ کاربران، 6 پورت واقعی OpenVPN نود، 7 کانفیگ تست و 8 **حذف نود**. گزینه 8 مخرب است.
 
@@ -66,8 +64,7 @@ sudo systemctl is-active irangate-node-agent irangate-node-control openvpn-serve
 اگر فقط می‌خواهید **لوگو، صفحه ورود، منوی مدیریتی و ترجمه‌های SURENA** به‌روزرسانی شوند، روی دستگاهی که دسترسی GitHub دارد سورس تازه را دریافت کرده و یک آرشیو UI بسازید:
 
 ```bash
-gh auth login -h github.com -p https -w
-gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-ui-src -- --branch l2tp-dev
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git surena-ui-src
 tar -czf surena-ui-update.tar.gz -C surena-ui-src webpanel/frontend scripts/ovp-panel
 scp surena-ui-update.tar.gz root@YOUR_SERVER_IP:/root/
 ```
@@ -110,9 +107,9 @@ BASH
 
 **Identify the deployment:** check the systemd services `irangate-webpanel` (Master) and `irangate-node-agent` (Node).
 
-**Master configuration:** `sudo surena-panel` (legacy alias: `sudo ovp-panel`). Use the manager for panel port/domain/subscription/OpenVPN edits; inspect non-secret fields in `/etc/irangate/webpanel.env`. Avoid displaying JWT secrets, database connection strings and passwords.
+**Master configuration:** `sudo surena-panel`. Use the manager for panel port/domain/subscription/OpenVPN edits; inspect non-secret fields in `/etc/irangate/webpanel.env`. Avoid displaying JWT secrets, database connection strings and passwords.
 
-**Node configuration:** `sudo surena-node` (also `Serena-node`, `serena-node`, and legacy `ovp-node`). It can show status and edit the Agent port, shared token, advertised client host/port and OpenVPN listen port. Check non-secret fields in `/etc/irangate-node-agent.env`. After changing the Agent port or token, update the pairing settings under **Master → Nodes**.
+**Node configuration:** `sudo Serena-node`. It can show status and edit the Agent port, shared token, advertised client host/port and OpenVPN listen port. Check non-secret fields in `/etc/irangate-node-agent.env`. After changing the Agent port or token, update the pairing settings under **Master → Nodes**.
 
 **Existing-install upgrades:** Fresh offline `.run` installers and the Node installer are **not in-place update mechanisms**. For a branding-only change, the preceding Persian section includes a backed-up, static-files-and-menu-only workflow. Do not update backend binaries, PKI, OpenVPN, IKEv2, databases or production nodes without inspecting current deployment state and preparing a tested rollback.
 
