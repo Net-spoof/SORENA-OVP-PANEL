@@ -7,6 +7,8 @@
 
 ---
 
+<div dir="rtl" align="right">
+
 ## فارسی — نصب آفلاین مستر
 
 ### نیازمندی‌ها و محدوده نصب
@@ -23,15 +25,21 @@
 
 از [صفحه Releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases) یا با GitHub CLI روی گوشی/رایانه متصل به اینترنت دریافت کنید:
 
+<div dir="ltr" align="left">
+
 ~~~bash
 gh release download -R Net-spoof/SORENA-OVP-PANEL \
   --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
 sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 ~~~
 
+</div>
+
 اگر مقصد Ubuntu 24.04 است، `ubuntu2204` را با `ubuntu2404` عوض کنید.
 
 برای ارسال از Termux:
+
+<div dir="ltr" align="left">
 
 ~~~bash
 scp SURENA-offline-ubuntu2204-amd64.run \
@@ -39,7 +47,11 @@ scp SURENA-offline-ubuntu2204-amd64.run \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
+</div>
+
 ### نصب با یک دستور روی سرور مقصد
+
+<div dir="ltr" align="left">
 
 ~~~bash
 cd /root
@@ -47,11 +59,15 @@ sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 sudo bash ./SURENA-offline-ubuntu2204-amd64.run
 ~~~
 
+</div>
+
 **در نصب تعاملی** این موارد پرسیده می‌شود: Public IPv4، پروتکل OpenVPN (UDP/TCP)، پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام کاربری ادمین. نصاب تداخل پورت‌های TCP/UDP با سرویس‌های فعلی را بررسی و پورت آزاد پیشنهاد می‌کند. یک رمز قوی می‌سازد و آن را در فایل root-only ذخیره می‌کند.
 
 **سرویس‌های ایجادشده:** OpenVPN، پنل وب، PostgreSQL و تایمرهای مصرف، StrongSwan/IKEv2، Sing-box/مسیریابی، Backup V2 و خدمات نگهداری. موتور مسیریابی نصب و اعتبارسنجی می‌شود اما بدون تعریف Outbound به‌صورت خودکار ترافیک را تغییر مسیر نمی‌دهد.
 
 ### مشاهده نتیجه نصب
+
+<div dir="ltr" align="left">
 
 ~~~bash
 sudo surena-panel
@@ -59,11 +75,17 @@ sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx stron
 sudo journalctl -u irangate-webpanel -n 35 --no-pager
 ~~~
 
+</div>
+
 برای نمونه، اگر پورت انتخابی پنل 18614 باشد:
+
+<div dir="ltr" align="left">
 
 ~~~bash
 curl --noproxy '*' -fsS http://127.0.0.1:18614/api/health
 ~~~
+
+</div>
 
 اطلاعات ورود در فایل `/root/irangate-offline-initial-credentials.txt` نگهداری می‌شود. **رمز را در چت نفرستید و فایل را عمومی نکنید.**
 
@@ -71,9 +93,13 @@ curl --noproxy '*' -fsS http://127.0.0.1:18614/api/health
 
 اگر فقط همین نسخه در اواسط نصب قطع شده است، بعد از شناسایی و رفع خطا:
 
+<div dir="ltr" align="left">
+
 ~~~bash
 sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 ~~~
+
+</div>
 
 Checkpointهای نصب در `/var/lib/irangate-offline/` نگهداری می‌شوند. برای **نصب‌های قدیمی یا سرور از پیش نصب‌شده** از این گزینه استفاده نکنید. نصب را با حذف PKI، دیتابیس یا سرویس‌های فعال از ابتدا تکرار نکنید.
 
@@ -85,6 +111,8 @@ Checkpointهای نصب در `/var/lib/irangate-offline/` نگهداری می‌
 - قبل از تغییر نسخه روی محیط عملیاتی، بکاپ و تست Rollback لازم است.
 
 ---
+
+</div>
 
 ## English — Fully Offline Master Setup
 
