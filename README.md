@@ -38,8 +38,8 @@
 ~~~bash
 gh auth login -h github.com -p https -w
 gh release download --repo Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 ~~~
 
 برای Ubuntu 24.04، بخش `2204` نام فایل را به `2404` تغییر دهید. **فقط بسته متناسب با سیستم‌عامل را انتخاب کنید.**
@@ -47,8 +47,8 @@ sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
 از گوشی Termux به سرور:
 
 ~~~bash
-scp NET-SPOOF-offline-ubuntu2204-amd64.run \
-    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
@@ -56,8 +56,8 @@ scp NET-SPOOF-offline-ubuntu2204-amd64.run \
 
 ~~~bash
 cd /root
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
 ~~~
 
 نصاب IP عمومی، پروتکل و پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام ادمین را می‌پرسد؛ پورت اشغال‌شده را بررسی و جایگزین پیشنهاد می‌کند. گواهی‌ها و دیتابیس و سرویس‌های Master، IKEv2، Backup V2 و موتور Routing را راه‌اندازی و بررسی می‌کند.
@@ -72,7 +72,7 @@ systemctl is-active irangate-webpanel openvpn@server postgresql nginx strongswan
 اگر **همان نسخه نصاب** وسط کار متوقف شد، پس از رفع علت:
 
 ~~~bash
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 ~~~
 
 **روی نصب فعال یا نصب قدیمی با نسخه متفاوت، فایل را دوباره اجرا نکنید.**
@@ -126,10 +126,10 @@ The repository is private. Authenticate with GitHub CLI on a connected **phone o
 ~~~bash
 gh auth login -h github.com -p https -w
 gh release download -R Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
-scp NET-SPOOF-offline-ubuntu2204-amd64.run \
-    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
@@ -137,8 +137,8 @@ For Ubuntu 24.04, use the `ubuntu2404` files. On the destination server:
 
 ~~~bash
 cd /root
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
 ~~~
 
 The interactive installer prompts for public IP, OpenVPN protocol/port, panel port, subscription port and admin username. It detects occupied local ports and initializes the Master services, PostgreSQL, IKEv2 and backup/routing tooling.
@@ -151,7 +151,7 @@ sudo systemctl is-active irangate-webpanel openvpn@server postgresql nginx stron
 For an interrupted run created by this **same installer version only**:
 
 ~~~bash
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 ~~~
 
 [Complete Master installation details](docs/OFFLINE-RELEASE.md)
