@@ -1,7 +1,7 @@
-# ⚙️ IRANGATE Configuration Guide
+# ⚙️ NET SPOOF Configuration Guide
 ## Version 1.1.0
 
-**Purpose:** Complete guide to configuring IRANGATE OpenVPN Management System  
+**Purpose:** Complete guide to configuring NET SPOOF OpenVPN Management System  
 **Updated:** October 12, 2025
 
 ---
@@ -9,7 +9,7 @@
 ## 📂 Configuration Storage
 
 ### Database Configuration
-IRANGATE uses JSON files for all configuration:
+NET SPOOF uses JSON files for all configuration:
 
 ```
 /opt/irangate/database/
@@ -448,5 +448,5 @@ irangate test-recovery
 
 ---
 
-*Configuration Guide for IRANGATE v1.1.0*  
+*Configuration Guide for NET SPOOF v1.1.0*  
 *October 12, 2025*

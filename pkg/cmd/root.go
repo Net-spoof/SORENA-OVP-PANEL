@@ -22,9 +22,9 @@ import (
 )
 var (
 	RootCmd = &cobra.Command{
-		Use:   "irangate",
-		Short: "IranGate OV - A secure VPN gateway manager",
-		Long: `IranGate OV is a comprehensive VPN gateway management solution
+		Use:   "netspoof",
+		Short: "NET SPOOF - Secure VPN gateway manager",
+		Long: `NET SPOOF is a comprehensive VPN gateway management solution
 that helps you secure and monitor your network traffic and OpenVPN server.
 Provides CLI tools for OpenVPN management.`,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -48,9 +48,9 @@ func init() {
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
-		Long:  "Print version information for IRANGATE CLI",
+		Long:  "Print version information for NET SPOOF CLI",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("IRANGATE CLI v1.0.0")
+			fmt.Println("NET SPOOF CLI v1.0.0")
 			fmt.Println("Build Date:", time.Now().Format("2006-01-02"))
 			fmt.Println("Go Version:", runtime.Version())
 			fmt.Println("Platform:", runtime.GOOS+"/"+runtime.GOARCH)
@@ -62,7 +62,7 @@ func init() {
 		Short: "Check system dependencies",
 		Long:  "Check if all required system dependencies are installed and available",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("🔍 Checking IRANGATE system dependencies...")
+			fmt.Println("🔍 Checking NET SPOOF system dependencies...")
 			fmt.Println("===========================================")
 			dm := utils.NewDependencyManager()
 			if err := dm.ValidateAll(); err != nil {
@@ -78,7 +78,7 @@ func init() {
 		Short: "Test recovery procedures",
 		Long:  "Test the system recovery procedures for different service types",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("🔧 Testing IRANGATE recovery procedures...")
+			fmt.Println("🔧 Testing NET SPOOF recovery procedures...")
 			fmt.Println("==========================================")
 			config := errors.RecoveryConfig{
 				HealthCheckInterval: 30 * time.Second,

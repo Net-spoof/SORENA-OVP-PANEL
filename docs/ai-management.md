@@ -1,8 +1,8 @@
-# 🤖 IRANGATE AI Management
+# 🤖 NET SPOOF AI Management
 
 ## Overview
 
-IRANGATE AI Management is an intelligent monitoring and management system that uses OpenAI's GPT models to automatically monitor, diagnose, and fix common issues with your VPN server.
+NET SPOOF AI Management is an intelligent monitoring and management system that uses OpenAI's GPT models to automatically monitor, diagnose, and fix common issues with your VPN server.
 
 ## Features
 
@@ -167,7 +167,7 @@ The AI can automatically perform these actions:
 1. Create a bot with [@BotFather](https://t.me/botfather)
 2. Get your bot token
 3. Get your chat ID using [@userinfobot](https://t.me/userinfobot)
-4. Configure in IRANGATE:
+4. Configure in NET SPOOF:
 
 ```bash
 irangate ai config set telegram_bot_token "YOUR_BOT_TOKEN"
@@ -283,4 +283,4 @@ For issues and support:
 
 ---
 
-**🤖 AI Management makes your IRANGATE server truly intelligent and self-healing!**
+**🤖 AI Management makes your NET SPOOF server truly intelligent and self-healing!**

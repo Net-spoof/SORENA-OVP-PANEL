@@ -1,4 +1,4 @@
-# 🔧 IRANGATE Troubleshooting Guide
+# 🔧 NET SPOOF Troubleshooting Guide
 ## Version 1.1.0
 
 **Updated:** October 12, 2025  
@@ -69,7 +69,7 @@ Error: systemctl command not found
 systemctl --version
 
 # If not installed, your system may not be compatible
-# IRANGATE requires SystemD-based Linux systems
+# NET SPOOF requires SystemD-based Linux systems
 ```
 
 ---
@@ -225,7 +225,7 @@ sudo chown root:root /opt/irangate/database/clients/*.json
 ### System Information
 
 ```bash
-# Check IRANGATE version
+# Check NET SPOOF version
 irangate version
 
 # Verify all dependencies
@@ -277,7 +277,7 @@ sudo openvpn --config /etc/openvpn/server/server.conf --verb 3
 
 ## 📊 Log Files
 
-### IRANGATE Logs
+### NET SPOOF Logs
 
 ```bash
 # Application logs
@@ -471,5 +471,5 @@ Run this checklist regularly:
 
 ---
 
-*Troubleshooting Guide for IRANGATE v1.1.0*  
+*Troubleshooting Guide for NET SPOOF v1.1.0*  
 *October 12, 2025*

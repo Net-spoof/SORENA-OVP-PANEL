@@ -40,7 +40,7 @@ func (m *Menu) AddItem(id int, title, description, icon string, handler func()) 
 }
 func (m *Menu) Display() {
 	ClearScreen()
-	DisplayIranGateLogo()
+	DisplayNetSpoofLogo()
 	titleColor := color.New(color.FgCyan, color.Bold)
 	titleColor.Printf("\n║  %s  ║\n", m.Title)
 	fmt.Println("║                                                                              ║")
@@ -105,20 +105,15 @@ func (m *Menu) Run() {
 func ClearScreen() {
 	fmt.Print("\033[H\033[2J")
 }
-func DisplayIranGateLogo() {
+func DisplayNetSpoofLogo() {
 	cyan := color.New(color.FgCyan, color.Bold)
 	yellow := color.New(color.FgYellow, color.Bold)
 	fmt.Println("╔══════════════════════════════════════════════════════════════════════════════╗")
 	fmt.Println("║                                                                              ║")
-	cyan.Println("║    ██╗██████╗  █████╗ ███╗   ██╗ ██████╗  █████╗ ████████╗███████╗           ║")
-	cyan.Println("║    ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██╔══██╗╚══██╔══╝██╔════╝           ║")
-	cyan.Println("║    ██║██████╔╝███████║██╔██╗ ██║██║  ███╗███████║   ██║   █████╗             ║")
-	cyan.Println("║    ██║██╔══██╗██╔══██║██║╚██╗██║██║   ██║██╔══██║   ██║   ██╔══╝             ║")
-	cyan.Println("║    ██║██║  ██║██║  ██║██║ ╚████║╚██████╔╝██║  ██║   ██║   ███████╗           ║")
 	cyan.Println("║    ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝           ║")
 	fmt.Println("║                                                                              ║")
 	yellow.Println("║    ╔═══════════════════════════════════════════════════════════════════╗     ║")
-	yellow.Println("║    ║              🚀 VPN Gateway Management System 🚀                  ║     ║")
+	yellow.Println("║    ║              🚀 NET SPOOF VPN Management System 🚀                  ║     ║")
 	yellow.Println("║    ╚═══════════════════════════════════════════════════════════════════╝     ║")
 	fmt.Println("║                                                                              ║")
 }
@@ -130,7 +125,7 @@ type MainMenu struct {
 	*Menu
 }
 func NewMainMenu() *MainMenu {
-	menu := NewMenu("🚀 IRANGATE VPN MANAGER")
+	menu := NewMenu("🚀 NET SPOOF VPN MANAGER")
 	mainMenu := &MainMenu{Menu: menu}
 	mainMenu.setupMenuItems()
 	return mainMenu
@@ -201,7 +196,7 @@ func (m *MainMenu) handleServerControl() {
 }
 func (m *MainMenu) handleInstallWebPanel() {
 	fmt.Println("Web Panel Installer")
-	fmt.Println("This will install and start the IranGate Web Panel service.")
+	fmt.Println("This will install and start the NET SPOOF Web Panel service.")
 	fmt.Println("You will be asked for admin username/password, web path, and port.")
 	possiblePaths := []string{
 		"/root/OV-Panel/irangate/webpanel/install_webpanel.sh",

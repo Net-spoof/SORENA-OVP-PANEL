@@ -1,15 +1,15 @@
-# IranGate fully-offline release installer
+# NET SPOOF fully-offline release installer
 
 The downloadable **.run GitHub Release asset** is a self-extracting snapshot of the
-entire current IranGate-OV-Reza-dev source plus its compiled Linux executables,
+the NET SPOOF repository source plus its compiled Linux executables,
 a local Ubuntu APT package repository including dependency closure, sing-box,
 and Python AI wheels. The destination machine makes **zero internet requests**
 during installation.
 
 ## Supported targets
 
-- Fresh **Ubuntu 22.04 LTS (amd64)**: `IranGate-OV-offline-ubuntu2204-amd64.run`
-- Fresh **Ubuntu 24.04 LTS (amd64)**: `IranGate-OV-offline-ubuntu2404-amd64.run`
+- Fresh **Ubuntu 22.04 LTS (amd64)**: `NET-SPOOF-offline-ubuntu2204-amd64.run`
+- Fresh **Ubuntu 24.04 LTS (amd64)**: `NET-SPOOF-offline-ubuntu2404-amd64.run`
 - Root + systemd + working TUN interface + enough disk space
 - Choose the package matching the **exact OS release**. The installer aborts on
   a mismatch to avoid mixing incompatible .deb versions.
@@ -21,7 +21,7 @@ on a networked machine and transfer it by SCP, SFTP, USB or another offline
 channel. Then run the single file on the destination:
 
 ```bash
-sudo bash ./IranGate-OV-offline-ubuntu2404-amd64.run
+sudo bash ./NET-SPOOF-offline-ubuntu2404-amd64.run
 ```
 
 Change `2404` to `2204` for Ubuntu 22.04.
@@ -30,7 +30,7 @@ If available, verify file integrity against the **GitHub Release** checksum
 before installing:
 
 ```bash
-sha256sum -c IranGate-OV-offline-ubuntu2404-amd64.run.sha256
+sha256sum -c NET-SPOOF-offline-ubuntu2404-amd64.run.sha256
 ```
 
 ### Interactive questions, automatic port collision avoidance and resume
@@ -51,14 +51,14 @@ is generated and securely saved to
 ```bash
 sudo IRANGATE_SERVER_IP=192.0.2.25 IRANGATE_PANEL_PORT=8614 \
   IRANGATE_SUBSCRIPTION_PORT=2098 \
-  bash ./IranGate-OV-offline-ubuntu2404-amd64.run
+  bash ./NET-SPOOF-offline-ubuntu2404-amd64.run
 ```
 
 If an installation fails halfway through, **do not run the fresh installation
 again**. Resume with exactly the same offline file using:
 
 ```bash
-sudo bash ./IranGate-OV-offline-ubuntu2204-amd64.run --resume
+sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
 ```
 
 Completed stages are checkpointed in `/var/lib/irangate-offline`, with
@@ -93,7 +93,7 @@ routing, IKEv2, maintenance services and backup wrappers.
 
 ## Important safety/limitations
 
-1. **Fresh installation only.** It refuses to overwrite an existing IranGate
+1. **Fresh installation only.** It refuses to overwrite an existing NET SPOOF
    or OpenVPN PKI. Never run it on a populated production master.
 2. No user database, admin credentials, node tokens, certificates or private
    backup archives are embedded in the public release. Restore your own

@@ -1,4 +1,4 @@
-// Sidebar Component for IranGate Web Panel
+// Sidebar Component for NET SPOOF Web Panel
 
 // IRANGATE_SIDEBAR_LAYOUT_CACHE_BUST_V2
 (function refreshSidebarLayoutStylesheet() {
@@ -93,7 +93,7 @@
 
             return { role, redirected: false };
         } catch (error) {
-            console.error('IranGate authoritative role check failed:', error);
+            console.error('NET SPOOF authoritative role check failed:', error);
             // Fail closed for a session that is already known to be delegated.
             const page = (window.location.pathname.split('/').pop() || '').split('?')[0];
             if (cachedRole === 'delegated_admin' && !allowedDelegatedPages.has(page)) {

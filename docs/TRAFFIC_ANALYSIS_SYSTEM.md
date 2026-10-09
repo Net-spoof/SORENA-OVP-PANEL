@@ -2,7 +2,7 @@
 
 ## Overview
 
-The IranGate Traffic Analysis System is a comprehensive, production-ready solution for monitoring and analyzing OpenVPN traffic in real-time. It provides detailed insights into bandwidth usage, performance metrics, and client behavior patterns.
+The NET SPOOF Traffic Analysis System is a comprehensive, production-ready solution for monitoring and analyzing OpenVPN traffic in real-time. It provides detailed insights into bandwidth usage, performance metrics, and client behavior patterns.
 
 ## Architecture
 
@@ -465,7 +465,7 @@ go test -race ./pkg/traffic/...
 ### With Existing Monitoring
 
 The traffic system integrates seamlessly with:
-- IranGate CLI (`irangate` command)
+- NET SPOOF CLI (`irangate` command)
 - Web Panel (via API endpoints)
 - AI Agent (future integration)
 - Telegram notifications
@@ -550,7 +550,7 @@ topUsers, err := analyzer.GetTopUsers(10, startTime, endTime)
 
 - Documentation: `/root/OV-Panel/irangate/docs/`
 - Issues: GitHub Issues
-- Community: IranGate Telegram Group
+- Community: NET SPOOF Telegram Group
 
 ### Contributing
 
@@ -558,14 +558,14 @@ Contributions welcome! Please see CONTRIBUTING.md for guidelines.
 
 ## License
 
-IranGate Traffic Analysis System is part of IranGate OV project.
+NET SPOOF Traffic Analysis System is part of NET SPOOF OV project.
 See main project license for details.
 
 ## Version
 
 - **Current Version**: 1.0.0
 - **Last Updated**: 2025-01-15
-- **Compatibility**: IranGate OV 1.0.0+
+- **Compatibility**: NET SPOOF OV 1.0.0+
 
 ## References
 
