@@ -2,22 +2,64 @@
 
 <p align="center"><img src="../webpanel/frontend/logo/surena.webp" width="104" alt="SURENA"></p>
 
-## فارسی
+## فارسی — نصب آنلاین
 
-نصب پشتیبانی‌شده مستر برای سرورهای تازه Ubuntu 22.04/24.04 amd64 از طریق **فایل یک‌تکه آفلاین** است.
+روش مستقیم برای نصب **پنل مرکزی (Master)** روی VPS تازه Ubuntu 22.04/24.04 amd64:
 
-- **[راهنمای جامع نصب Master](OFFLINE-RELEASE.md)** — دانلود از Release خصوصی، بررسی SHA256، نصب تعاملی و گزینه Resume
-- **[راهنمای جامع نصب Node](../node/README.md)** — نصب Node از سورس کامل مخزن، اتصال به Master و تنظیم توکن
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash install.sh
+```
 
-به جای دستورهای تاریخی نصب از سورس یا اسکریپت‌های قدیمی، از دو راهنمای بالا استفاده کنید. هیچ نصابی را روی سرور دارای کاربر یا PKI فعلی بدون بکاپ و برنامه مهاجرت اجرا نکنید.
+نصاب IP/دامنه، پورت OpenVPN، پورت پنل (8080 پیش‌فرض)، پورت سابسکریپشن (8090 پیش‌فرض) و اطلاعات ادمین را می‌پرسد. **رمز قوی و غیرپیش‌فرض انتخاب کنید.** این روش برای نصب تازه است، نه ارتقای مستر فعال.
 
-## English
+نصب **Node** روی سرور جداگانه:
 
-Supported fresh Master installation uses the **single self-extracting offline release** for Ubuntu 22.04/24.04 amd64.
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash node/install-node.sh
+```
 
-- **[Master setup](OFFLINE-RELEASE.md)** — authenticated release download, SHA256 validation, interactive install and resume
-- **[Node setup](../node/README.md)** — full repository clone, Node Agent installation, Master pairing and security
+پس از نصب نود، `sudo Serena-node` را برای مدیریت اجرا کنید. Agent URL و توکن ایجادشده را در **Master → Nodes → Add Node** وارد کنید. فقط IP مستر باید به Agent و Control دسترسی داشته باشد.
 
-Avoid historical source-install commands on a production Master; they are not a supported in-place upgrade path.
+- [راهنمای کامل نصب و اتصال نود](../node/README.md)
+- [نصب آفلاین مستر (جایگزین اختیاری)](OFFLINE-RELEASE.md)
+- [ارتقا و مدیریت امن سرورهای موجود](EXISTING-SERVER-OPERATIONS.md)
+
+## English — Online Installation
+
+Install the **Master** on a fresh Ubuntu 22.04/24.04 amd64 VPS:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash install.sh
+```
+
+The installer asks for the IP/domain, OpenVPN settings, panel port (8080 default), subscription port (8090 default), and admin credentials. **Choose a strong, non-default password.** This is a fresh install, not a production upgrade.
+
+Install a **Node** on a separate server:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
+sudo bash node/install-node.sh
+```
+
+Manage it with `sudo Serena-node`. Register the output Agent URL and secret token under **Master → Nodes → Add Node**. Restrict administrative Node ports to the Master IP.
+
+- [Detailed Node setup and pairing](../node/README.md)
+- [Optional offline Master installer](OFFLINE-RELEASE.md)
+- [Safe operations on existing servers](EXISTING-SERVER-OPERATIONS.md)
 
 **Support / پشتیبانی:** [@NET_SPOOF](https://t.me/NET_SPOOF)
