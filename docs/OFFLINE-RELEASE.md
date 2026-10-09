@@ -26,8 +26,8 @@
 ~~~bash
 gh auth login -h github.com -p https -w
 gh release download -R Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 ~~~
 
 اگر مقصد Ubuntu 24.04 است، `ubuntu2204` را با `ubuntu2404` عوض کنید.
@@ -35,8 +35,8 @@ sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
 برای ارسال از Termux:
 
 ~~~bash
-scp NET-SPOOF-offline-ubuntu2204-amd64.run \
-    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
@@ -44,8 +44,8 @@ scp NET-SPOOF-offline-ubuntu2204-amd64.run \
 
 ~~~bash
 cd /root
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
 ~~~
 
 **در نصب تعاملی** این موارد پرسیده می‌شود: Public IPv4، پروتکل OpenVPN (UDP/TCP)، پورت OpenVPN، پورت پنل، پورت سابسکریپشن و نام کاربری ادمین. نصاب تداخل پورت‌های TCP/UDP با سرویس‌های فعلی را بررسی و پورت آزاد پیشنهاد می‌کند. یک رمز قوی می‌سازد و آن را در فایل root-only ذخیره می‌کند.
@@ -73,7 +73,7 @@ curl --noproxy '*' -fsS http://127.0.0.1:18614/api/health
 اگر فقط همین نسخه در اواسط نصب قطع شده است، بعد از شناسایی و رفع خطا:
 
 ~~~bash
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 ~~~
 
 Checkpointهای نصب در `/var/lib/irangate-offline/` نگهداری می‌شوند. برای **نصب‌های قدیمی یا سرور از پیش نصب‌شده** از این گزینه استفاده نکنید. نصب را با حذف PKI، دیتابیس یا سرویس‌های فعال از ابتدا تکرار نکنید.
@@ -102,11 +102,11 @@ Foreign nodes use the [separate Node installer](../node/README.md), which is not
 ~~~bash
 gh auth login -h github.com -p https -w
 gh release download -R Net-spoof/IranGate-OV-Reza-dev \
-  --pattern 'NET-SPOOF-offline-ubuntu2204-amd64.run*'
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
+  --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 
-scp NET-SPOOF-offline-ubuntu2204-amd64.run \
-    NET-SPOOF-offline-ubuntu2204-amd64.run.sha256 \
+scp SURENA-offline-ubuntu2204-amd64.run \
+    SURENA-offline-ubuntu2204-amd64.run.sha256 \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
@@ -116,8 +116,8 @@ Replace `ubuntu2204` with `ubuntu2404` for Ubuntu 24.04. This works with a **pri
 
 ~~~bash
 cd /root
-sha256sum -c NET-SPOOF-offline-ubuntu2204-amd64.run.sha256
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run
+sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run
 ~~~
 
 The installer prompts for public IP, OpenVPN protocol/port, panel port, subscription port and admin username. Occupied ports are checked before service provisioning. It installs OpenVPN, PostgreSQL, panel, IKEv2, backup tooling and sing-box routing. Outbound traffic interception stays disabled until explicitly configured.
@@ -135,7 +135,7 @@ Substitute your actual numeric panel port. Administrator credentials are in `/ro
 ### Resume an interrupted install
 
 ~~~bash
-sudo bash ./NET-SPOOF-offline-ubuntu2204-amd64.run --resume
+sudo bash ./SURENA-offline-ubuntu2204-amd64.run --resume
 ~~~
 
 **Only** run resume for state created by the same released installer; do not use this as an updater for an existing deployment. Preserve PKI and databases, diagnose the original error and maintain verified backups.
