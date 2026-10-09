@@ -9,6 +9,8 @@
 
 <a id="persian"></a>
 
+<div dir="rtl" align="right">
+
 ## 🇮🇷 راهنمای فارسی نصب Node
 
 Node سرور جداگانه‌ای است که با پنل مرکزی **SURENA Master** ارتباط برقرار می‌کند و برای ارائه سرویس از لوکیشن‌های مختلف استفاده می‌شود. برای نصب Master به [صفحه اصلی پروژه](../README.md) مراجعه کنید.
@@ -25,6 +27,8 @@ Node سرور جداگانه‌ای است که با پنل مرکزی **SURENA 
 
 روی **سرور خارجی Node**:
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y git ca-certificates
@@ -32,6 +36,8 @@ git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-
 cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
 ```
+
+</div>
 
 **مهم:** نصب را از سورس کامل انجام دهید؛ نصاب به فایل‌های کمکی داخل پوشه `scripts/` وابسته است. روی سرور دارای کاربران، PKI یا OpenVPN فعال، بدون برنامه مهاجرت و بکاپ نصب تازه انجام ندهید.
 
@@ -69,9 +75,13 @@ sudo bash node/install-node.sh
 
 ### مدیریت Node
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo Serena-node
 ```
+
+</div>
 
 این منو امکانات زیر را ارائه می‌دهد:
 
@@ -88,17 +98,23 @@ sudo Serena-node
 
 ### بررسی سرویس و لاگ‌ها
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
 sudo journalctl -u irangate-node-agent -n 50 --no-pager
 sudo ss -tulnp
 ```
 
+</div>
+
 در صورت عدم اتصال، ابتدا وضعیت سرویس‌ها، فایروال سرور و محدودیت‌های شبکه بین مستر و نود را بررسی کنید.
 
 ### پشتیبان‌گیری و تغییرات
 
 بخش Node از Snapshot برای پشتیبان‌گیری و بازیابی داده‌های پشتیبانی‌شده استفاده می‌کند. پیش از Restore، حذف Node یا تغییرات اساسی سرویس‌ها، بکاپ معتبر و برنامه بازیابی تهیه کنید. راهنمای تکمیلی: [عملیات روی سرورهای موجود](../docs/EXISTING-SERVER-OPERATIONS.md).
+
+</div>
 
 ---
 
