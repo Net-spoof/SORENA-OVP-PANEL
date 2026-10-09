@@ -110,15 +110,10 @@ func DisplayIranGateLogo() {
 	yellow := color.New(color.FgYellow, color.Bold)
 	fmt.Println("╔══════════════════════════════════════════════════════════════════════════════╗")
 	fmt.Println("║                                                                              ║")
-	cyan.Println("║    ██╗██████╗  █████╗ ███╗   ██╗ ██████╗  █████╗ ████████╗███████╗           ║")
-	cyan.Println("║    ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝ ██╔══██╗╚══██╔══╝██╔════╝           ║")
-	cyan.Println("║    ██║██████╔╝███████║██╔██╗ ██║██║  ███╗███████║   ██║   █████╗             ║")
-	cyan.Println("║    ██║██╔══██╗██╔══██║██║╚██╗██║██║   ██║██╔══██║   ██║   ██╔══╝             ║")
-	cyan.Println("║    ██║██║  ██║██║  ██║██║ ╚████║╚██████╔╝██║  ██║   ██║   ███████╗           ║")
 	cyan.Println("║    ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝           ║")
 	fmt.Println("║                                                                              ║")
 	yellow.Println("║    ╔═══════════════════════════════════════════════════════════════════╗     ║")
-	yellow.Println("║    ║              🚀 VPN Gateway Management System 🚀                  ║     ║")
+	yellow.Println("║    ║              🚀 NET SPOOF VPN Management System 🚀                  ║     ║")
 	yellow.Println("║    ╚═══════════════════════════════════════════════════════════════════╝     ║")
 	fmt.Println("║                                                                              ║")
 }
@@ -130,7 +125,7 @@ type MainMenu struct {
 	*Menu
 }
 func NewMainMenu() *MainMenu {
-	menu := NewMenu("🚀 IRANGATE VPN MANAGER")
+	menu := NewMenu("🚀 NET SPOOF VPN MANAGER")
 	mainMenu := &MainMenu{Menu: menu}
 	mainMenu.setupMenuItems()
 	return mainMenu
