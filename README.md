@@ -22,6 +22,8 @@
 
 <a id="persian"></a>
 
+<div dir="rtl" align="right">
+
 ## 🇮🇷 سورنا پنل | راهنمای فارسی
 
 **SURENA** یک پلتفرم تحت وب برای مدیریت متمرکز سرویس‌های VPN، کاربران، نودهای خارجی و مسیرهای خروجی است. مستر، مدیریت کاربران و سرویس‌ها را بر عهده دارد و نودها می‌توانند به‌عنوان سرورهای جداگانه به آن متصل شوند.
@@ -49,6 +51,8 @@
 
 دستورات زیر را در ترمینال **سرور Master** اجرا کنید:
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y git ca-certificates
@@ -56,6 +60,8 @@ git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-
 cd SORENA-OVP-PANEL
 sudo bash install.sh
 ```
+
+</div>
 
 نصاب، تنظیمات اصلی را به‌صورت تعاملی دریافت می‌کند:
 
@@ -72,21 +78,31 @@ sudo bash install.sh
 
 **پس از نصب:** آدرس دقیق ورود به پنل در خروجی نصاب نمایش داده می‌شود. اگر دامنه، مسیر و پورت پیش‌فرض را تغییر نداده باشید:
 
+<div dir="ltr" align="left">
+
 ```text
 http://SERVER_IP:8080/
 ```
 
+</div>
+
 برای باز کردن منوی مدیریت مستر:
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo surena-panel
 ```
+
+</div>
 
 از این منو می‌توانید اطلاعات پنل، دامنه، پورت‌ها، تنظیمات مرتبط با سرویس‌ها و بخش‌های مدیریتی را بررسی و مدیریت کنید.
 
 ### 🌍 نصب آنلاین نود خارجی (Node)
 
 Node روی **یک سرور جداگانه** نصب می‌شود. دستور زیر را در ترمینال **سرور Node** اجرا کنید:
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo apt-get update
@@ -95,6 +111,8 @@ git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-
 cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
 ```
+
+</div>
 
 نصاب نود اطلاعات زیر را دریافت می‌کند:
 
@@ -118,9 +136,13 @@ sudo bash node/install-node.sh
 
 برای مدیریت نود در ترمینال:
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo Serena-node
 ```
+
+</div>
 
 از منوی Node می‌توانید وضعیت سرویس، پورت Agent، کلید ارتباطی، آدرس کانفیگ کاربران، پورت OpenVPN و ساخت کانفیگ آزمایشی را مدیریت کنید.
 
@@ -130,18 +152,26 @@ sudo Serena-node
 
 روی Master:
 
+<div dir="ltr" align="left">
+
 ```bash
 sudo surena-panel
 sudo systemctl status irangate-webpanel --no-pager
 sudo journalctl -u irangate-webpanel -n 50 --no-pager
 ```
 
+</div>
+
 روی Node:
+
+<div dir="ltr" align="left">
 
 ```bash
 sudo Serena-node
 sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@server --no-pager
 ```
+
+</div>
 
 نام‌های سرویس در `systemd` شناسه‌های فنی نصب هستند؛ دستورات اصلی مدیریت سورنا همان `surena-panel` و `Serena-node` هستند.
 
@@ -160,6 +190,8 @@ sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@s
 - [راهنمای کامل Node](node/README.md)
 - [راهنمای عملیات و ارتقای سرور موجود](docs/EXISTING-SERVER-OPERATIONS.md)
 - [نصب آفلاین Master (روش جایگزین)](docs/OFFLINE-RELEASE.md)
+
+</div>
 
 ---
 
