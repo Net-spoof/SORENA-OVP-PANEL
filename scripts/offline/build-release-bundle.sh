@@ -169,7 +169,7 @@ printf '%s\n' "$(git rev-parse HEAD)" > "$PAYLOAD/offline-assets/source-commit"
     sort -z | xargs -0 sha256sum > offline-assets/SHA256SUMS
 )
 
-NAME="NET-SPOOF-offline-ubuntu${DISTRO//./}-amd64"
+NAME="SURENA-offline-ubuntu${DISTRO//./}-amd64"
 ASSET="$OUT/$NAME.run"
 cat > "$ASSET" <<'SELF'
 #!/usr/bin/env bash
@@ -195,7 +195,7 @@ chmod 0755 "$ASSET"
     cd "$OUT"
     sha256sum "$(basename "$ASSET")" > "$(basename "$ASSET").sha256"
 )
-echo "[NET SPOOF builder] Offline release ready: $ASSET"
+echo "[SURENA builder] Offline release ready: $ASSET"
 du -h "$ASSET"
 [[ $(stat -c '%s' "$ASSET") -lt 2000000000 ]] || {
     echo "Release file exceeds GitHub's 2GB asset limit" >&2
