@@ -185,7 +185,7 @@ MARKER='__IRANGATE_BUNDLE_START__'
 OFFSET="$(awk -v marker="$MARKER" '$0 == marker { print NR+1; exit }' "$SELF_FILE")"
 [[ "$OFFSET" =~ ^[0-9]+$ ]] || { echo "Corrupt self-extracting release" >&2; exit 1; }
 tail -n +"$OFFSET" "$SELF_FILE" | tar -xzf - -C "$TMP"
-bash "$TMP/scripts/offline/install-master-from-bundle.sh" "$TMP"
+bash "$TMP/scripts/offline/install-master-from-bundle.sh" "$TMP" "$@"
 exit 0
 __IRANGATE_BUNDLE_START__
 SELF
