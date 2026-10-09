@@ -360,6 +360,22 @@ run_stage() {
         return 0
     fi
     info "START: $stage_name"
+    if [[ "$stage_name" == openvpn ]]; then
+        if [[ -f "$STATE_DIR/stages/openvpn.started" ]] &&
+           validate_pki &&
+           [[ -s /opt/irangate/clients/client.ovpn ]] &&
+           systemctl is-active --quiet openvpn@server; then
+            info "OpenVPN was successfully initialized before interruption; preserving existing PKI and client"
+            touch "$STATE_DIR/stages/openvpn.done"
+            return 0
+        fi
+        if [[ -f "$STATE_DIR/stages/openvpn.started" ]] &&
+           [[ -f /etc/openvpn/easy-rsa/pki/private/ca.key ]] &&
+           ! validate_pki; then
+            die "Previous run left incomplete PKI with a private CA key. Refusing to regenerate it; recover the PKI manually."
+        fi
+        touch "$STATE_DIR/stages/openvpn.started"
+    fi
     "$@"
     touch "$STATE_DIR/stages/$stage_name.done"
     info "DONE: $stage_name"
