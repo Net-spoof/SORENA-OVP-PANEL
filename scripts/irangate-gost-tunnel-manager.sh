@@ -461,7 +461,7 @@ self_test(){
 }
 main(){
   while true; do
-    clear; echo -e "${B}${C}============================================================"; echo "        IranGate GOST UDP Tunnel Manager v$VERSION"; echo -e "============================================================${R}\n"
+    clear; echo -e "${B}${C}============================================================"; echo "        NET SPOOF GOST UDP Tunnel Manager v$VERSION"; echo -e "============================================================${R}\n"
     echo "1) Create tunnel"; echo "2) Tunnels"; echo "3) System status"; echo "4) Install manager command"; echo "0) Exit"; echo
     read -r -p "Select option: " c
     case "$c" in 1) create_menu; pause;; 2) tunnels_menu;; 3) system_status; pause;; 4) install_command; pause;; 0) echo "Bye."; exit 0;; *) warn "Invalid option."; sleep 1;; esac
