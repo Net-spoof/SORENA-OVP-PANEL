@@ -19,13 +19,12 @@
 
 **معماری:** اسکریپت ساخت Release در GitHub Actions با اینترنت اجرا و مخزن محلی APT، Wheelهای Python، باینری پنل، CLI و Sing-box را داخل فایل یک‌تکه قرار می‌دهد. روی VPS مقصد، نصب بسته‌ها از مخزن محلی فایل انجام می‌شود.
 
-### دریافت فایل از مخزن خصوصی
+### دریافت فایل از Release عمومی
 
-در گوشی یا رایانه دارای دسترسی GitHub:
+از [صفحه Releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases) یا با GitHub CLI روی گوشی/رایانه متصل به اینترنت دریافت کنید:
 
 ~~~bash
-gh auth login -h github.com -p https -w
-gh release download -R Net-spoof/IranGate-OV-Reza-dev \
+gh release download -R Net-spoof/SORENA-OVP-PANEL \
   --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
 sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 ~~~
@@ -97,11 +96,10 @@ The build pipeline downloads dependencies on an online GitHub Actions runner. Th
 
 Foreign nodes use the [separate Node installer](../node/README.md), which is not offline.
 
-### Download on an authenticated machine
+### Download from public Releases
 
 ~~~bash
-gh auth login -h github.com -p https -w
-gh release download -R Net-spoof/IranGate-OV-Reza-dev \
+gh release download -R Net-spoof/SORENA-OVP-PANEL \
   --pattern 'SURENA-offline-ubuntu2204-amd64.run*'
 sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 
@@ -110,7 +108,7 @@ scp SURENA-offline-ubuntu2204-amd64.run \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
-Replace `ubuntu2204` with `ubuntu2404` for Ubuntu 24.04. This works with a **private repository** after GitHub authentication.
+Replace `ubuntu2204` with `ubuntu2404` for Ubuntu 24.04. These assets are published under the [public Releases page](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases); GitHub authentication is not required to browse or download public assets.
 
 ### Install on the fresh Master
 
