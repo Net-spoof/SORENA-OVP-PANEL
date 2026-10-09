@@ -14,7 +14,6 @@ on:
       - node/**
       - install.sh
       - README.md
-      - node/**
       - webpanel/frontend/**
       - pkg/menu/menu.go
       - pkg/cmd/root.go
@@ -87,6 +86,12 @@ jobs:
           python3 -m py_compile scripts/irangate-routing
           bash -n scripts/ovp-panel
           bash -n node/install-node.sh
+          bash -n node/install-manager-aliases.sh
+          grep -Fq 'ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel' install.sh
+          grep -Fq 'run_stage panel-manager install_panel_manager' scripts/offline/install-master-from-bundle.sh
+          grep -Fq 'need surena-panel' scripts/offline/install-master-from-bundle.sh
+          grep -Fq 'for alias_name in surena-node serena-node Serena-node' node/install-node.sh
+          grep -Fq 'ln -sfn /usr/local/bin/ovp-node "$alias_path"' node/install-node.sh
           node --check webpanel/frontend/js/sidebar.js
           node --check webpanel/frontend/js/i18n.js
           test -s webpanel/frontend/logo/surena.webp
