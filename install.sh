@@ -55,7 +55,7 @@ display_banner() {
     echo "║    ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝           ║"
     echo "║                                                                              ║"
     echo "║    ╔═══════════════════════════════════════════════════════════════════╗     ║"
-    echo -e "║    ║     ${MAGENTA}🚀 IranGate Multi-Protocol Gateway Management System 🚀${CYAN}      ║      ║"
+    echo -e "║    ║     ${MAGENTA}🚀 NET SPOOF Multi-Protocol Gateway Manager 🚀${CYAN}      ║      ║"
     echo "║    ╚═══════════════════════════════════════════════════════════════════╝     ║"
     echo "║                                                                              ║"
     echo "╚══════════════════════════════════════════════════════════════════════════════╝"
@@ -64,13 +64,13 @@ display_banner() {
     echo -e "${YELLOW}Version: 3.0.0${NC}"
     echo -e "${YELLOW}This installer will set up:${NC}"
     echo -e "  ${GREEN}✓${NC} OpenVPN Server Core"
-    echo -e "  ${GREEN}✓${NC} IranGate CLI"
-    echo -e "  ${GREEN}✓${NC} IranGate Web Panel"
+    echo -e "  ${GREEN}✓${NC} NET SPOOF CLI"
+    echo -e "  ${GREEN}✓${NC} NET SPOOF Web Panel"
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}📦 Project's Git:${NC} ${GREEN}https://github.com/AmiriDev-ORG/IranGate-OV${NC}"
-    echo -e "${BLUE}📢 Telegram Channel:${NC} ${GREEN}@IranGate_Official${NC}"
-    echo -e "${BLUE}👤 Project Author:${NC} ${GREEN}@AmiriDev_ORG${NC}"
+    echo -e "${BLUE}📦 Project's Git:${NC} ${GREEN}Project repository: see README.md${NC}"
+    echo -e "${BLUE}📢 Brand:${NC} ${GREEN}NET SPOOF${NC}"
+    echo -e "${BLUE}👤 Project:${NC} ${GREEN}NET SPOOF${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo ""
@@ -1057,7 +1057,7 @@ EOF
     log_info "OpenVPN Server Core installed and configured successfully"
 }
 install_irangate_cli() {
-    log_step "Step 2/5: Installing IranGate CLI..."
+    log_step "Step 2/5: Installing NET SPOOF CLI..."
     cd "$SCRIPT_DIR" || {
         log_error "Failed to change directory to $SCRIPT_DIR"
         exit 1
@@ -1848,7 +1848,7 @@ MASTER_NODE_GUARD_EOF
 
 
 install_panel_manager() {
-    log_info "Installing ovp-panel management command..."
+    log_info "Installing NET SPOOF panel management command..."
 
     local manager_source="$SCRIPT_DIR/scripts/ovp-panel"
 
@@ -1861,6 +1861,9 @@ install_panel_manager() {
         -m 0755 \
         "$manager_source" \
         /usr/local/bin/ovp-panel
+
+    # New public command; keep ovp-panel for existing scripts and deployments.
+    ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/netspoof-panel
 
     mkdir -p /etc/irangate
 
@@ -2002,12 +2005,12 @@ test_services() {
         echo -e "${RED}✗${NC} OpenVPN: ${RED}INACTIVE${NC}"
         all_ok=false
     fi
-    echo -e "${CYAN}Testing IranGate CLI...${NC}"
+    echo -e "${CYAN}Testing NET SPOOF CLI...${NC}"
     if /usr/local/bin/irangate version &> /dev/null; then
-        echo -e "${GREEN}✓${NC} IranGate CLI: ${GREEN}WORKING${NC}"
+        echo -e "${GREEN}✓${NC} NET SPOOF CLI: ${GREEN}WORKING${NC}"
         /usr/local/bin/irangate version | head -1
     else
-        echo -e "${RED}✗${NC} IranGate CLI: ${RED}NOT WORKING${NC}"
+        echo -e "${RED}✗${NC} NET SPOOF CLI: ${RED}NOT WORKING${NC}"
         all_ok=false
     fi
     echo -e "${CYAN}Testing Web Panel service...${NC}"
@@ -2126,8 +2129,8 @@ show_final_summary() {
     echo ""
     echo -e "${GREEN}Installation log saved to: /var/log/irangate-install.log${NC}"
     echo ""
-    echo -e "${GREEN}Thank you for using IranGate VPN Management System!${NC}"
-    echo -e "${GREEN}For support and documentation, visit: https://github.com/amiridev-org/irangate-ov${NC}"
+    echo -e "${GREEN}Thank you for using NET SPOOF VPN Management System!${NC}"
+    echo -e "${GREEN}Documentation: see repository README.md${NC}"
     echo ""
 }
 
