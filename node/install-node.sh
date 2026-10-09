@@ -1233,7 +1233,7 @@ NODE_PUBLIC_HOST = os.environ.get("NODE_PUBLIC_HOST", "")
 NODE_OVPN_PORT = os.environ.get("NODE_OVPN_PORT", "1194")
 NODE_OVPN_PROTO = os.environ.get("NODE_OVPN_PROTO", "udp")
 NODE_LOCATION = os.environ.get("NODE_LOCATION", "NODE")
-NODE_NAME = os.environ.get("NODE_NAME", "IranGate Node")
+NODE_NAME = os.environ.get("NODE_NAME", "SURENA Node")
 NODE_AGENT_PORT = int(os.environ.get("NODE_AGENT_PORT", "8091"))
 CLIENT_DIR = Path("/opt/irangate-node-agent/clients")
 
@@ -2017,7 +2017,7 @@ make_test_config() {
 }
 
 uninstall_node() {
-  echo "This removes IranGate node-agent and OpenVPN node files."
+  echo "This removes SURENA node-agent and OpenVPN node files."
   read -rp "Type REMOVE to continue: " x
   [ "$x" != "REMOVE" ] && echo "Canceled" && return
 
@@ -2059,7 +2059,7 @@ uninstall_node() {
 
 while true; do
   echo
-  echo "IranGate OVP Node"
+  echo "SURENA OVPN Node"
   echo "1) Status"
   echo "2) Change Agent port"
   echo "3) Change shared Token"
@@ -2130,34 +2130,16 @@ install_vpn_direct_bypass() {
     return 0
   fi
 
-  raw_base="${IRANGATE_RAW_BASE:-https://raw.githubusercontent.com/Reza-lgif/IranGate-OV-Reza/CyrusTheGreat}"
-  installer_url="${raw_base}/scripts/install-vpn-direct-bypass.sh"
-  temp_installer="$(mktemp)"
-
-  if ! curl -4 \
-      -fsSL \
-      --retry 5 \
-      --retry-delay 2 \
-      --connect-timeout 15 \
-      -o "$temp_installer" \
-      "$installer_url"
-  then
-    rm -f "$temp_installer"
-    echo "Unable to obtain VPN direct bypass installer" >&2
-    return 1
-  fi
-
-  bash -n "$temp_installer"
-  bash "$temp_installer" node
-
-  rm -f "$temp_installer"
+  echo "Missing scripts/install-vpn-direct-bypass.sh." >&2
+  echo "Install SURENA Node from a complete authenticated repository clone, not a standalone script." >&2
+  return 1
 }
 
 main() {
   need_root
 
   PUBLIC_IP="$(detect_ip)"
-  echo "IranGate OpenVPN Node Installer"
+  echo "SURENA OpenVPN Node Installer"
   echo
 
   NODE_NAME="$(ask 'Node display name' 'Turkey')"
