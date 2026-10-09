@@ -113,7 +113,7 @@ func DisplayNetSpoofLogo() {
 	cyan.Println("║    ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝           ║")
 	fmt.Println("║                                                                              ║")
 	yellow.Println("║    ╔═══════════════════════════════════════════════════════════════════╗     ║")
-	yellow.Println("║    ║              🚀 NET SPOOF VPN Management System 🚀                  ║     ║")
+	yellow.Println("║    ║              🚀 SURENA VPN Management System 🚀                  ║     ║")
 	yellow.Println("║    ╚═══════════════════════════════════════════════════════════════════╝     ║")
 	fmt.Println("║                                                                              ║")
 }
@@ -125,7 +125,7 @@ type MainMenu struct {
 	*Menu
 }
 func NewMainMenu() *MainMenu {
-	menu := NewMenu("🚀 NET SPOOF VPN MANAGER")
+	menu := NewMenu("🚀 SURENA VPN MANAGER")
 	mainMenu := &MainMenu{Menu: menu}
 	mainMenu.setupMenuItems()
 	return mainMenu
@@ -196,7 +196,7 @@ func (m *MainMenu) handleServerControl() {
 }
 func (m *MainMenu) handleInstallWebPanel() {
 	fmt.Println("Web Panel Installer")
-	fmt.Println("This will install and start the NET SPOOF Web Panel service.")
+	fmt.Println("This will install and start the SURENA Web Panel service.")
 	fmt.Println("You will be asked for admin username/password, web path, and port.")
 	possiblePaths := []string{
 		"/root/OV-Panel/irangate/webpanel/install_webpanel.sh",
