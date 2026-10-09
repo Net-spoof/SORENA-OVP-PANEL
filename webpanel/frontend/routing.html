@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="icon" type="image/webp" href="logo/surena.webp">
     <!-- routing-v24-outbounds-payload-fix-20260718 -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Outbounds - NET SPOOF</title>
+    <title>Outbounds - SURENA</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
 
@@ -42,7 +43,7 @@
                     Refresh
                 </button>
                 <button onclick="bypassRouting()" class="px-4 py-2 rounded-lg bg-yellow-500 text-white hover:bg-yellow-600">
-                    Bypass / GOST Mode
+                    Disable Routing / Bypass
                 </button>
             </div>
         </div>
@@ -391,7 +392,7 @@ function renderPingResult(item) {
 
 function realOutbounds() {
     if (!Array.isArray(outbounds)) outbounds = normalizeOutboundsPayload(outbounds);
-    return outbounds.filter(o => o && !['block'].includes(o.tag));
+    return outbounds.filter(o => o && !['block', 'default-gost'].includes(o.tag) && o.type !== 'gost');
 }
 
 function checkedTagsRaw() {
@@ -452,12 +453,12 @@ function renderOutbounds() {
     }
 
     tbody.innerHTML = items.map(o => {
-        const disabled = o.tag === 'default-gost' || o.type === 'gost';
+        const disabled = false;
         const link = o.link || o.server || o.remote || '';
         return `
             <tr class="border-t hover:bg-gray-50">
                 <td class="p-3">
-                    <input type="checkbox" class="outbound-check h-4 w-4" value="${esc(o.tag)}" ${disabled ? 'disabled title="GOST placeholder is not a real sing-box outbound yet"' : ''} onchange="refreshSelectionPreview()">
+                    <input type="checkbox" class="outbound-check h-4 w-4" value="${esc(o.tag)}" ${disabled ? 'disabled' : ''} onchange="refreshSelectionPreview()">
                 </td>
                 <td class="p-3 font-mono text-xs">${esc(o.tag)}</td>
                 <td class="p-3">${esc(o.name || '-')}</td>
@@ -737,7 +738,7 @@ async function deleteChecked() {
 }
 
 async function bypassRouting() {
-    if (!confirm('Disable outbound routing and remove TPROXY rules?\n\nUse this for foreign/GOST mode.')) return;
+    if (!confirm('Disable outbound routing and remove TPROXY rules?\n\nThis stops TPROXY routing for this server.')) return;
 
     try {
         const res = await apiRequest('/routing/apply', {
