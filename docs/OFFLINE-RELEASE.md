@@ -14,7 +14,7 @@ during installation.
 - Choose the package matching the **exact OS release**. The installer aborts on
   a mismatch to avoid mixing incompatible .deb versions.
 
-## Transfer and install (one command)
+## Transfer and install (interactive, one command)
 
 Download the matching `.run` (and optional `.sha256`) from the GitHub Release
 on a networked machine and transfer it by SCP, SFTP, USB or another offline
@@ -33,9 +33,17 @@ before installing:
 sha256sum -c IranGate-OV-offline-ubuntu2404-amd64.run.sha256
 ```
 
-### Optional IP, credentials and ports
+### Interactive questions, automatic port collision avoidance and resume
 
-Environment variables are optional. **No interactive prompts are required.**
+When launched in an SSH terminal, the installer **asks for public IPv4,
+OpenVPN protocol and port, WebPanel TCP port, Subscription TCP port, and
+admin username** before it creates any VPN certificates or database. It checks
+which ports are already occupied (including by Backhaul) and offers another
+available port if necessary. It checks that selected service ports differ.
+Press Enter to accept each suggested value.
+
+In noninteractive terminals, the same installer uses defaults and automatically
+picks alternative free ports. Use environment variables to override defaults.
 If you don't provide an administrator password, a unique random password
 is generated and securely saved to
 `/root/irangate-offline-initial-credentials.txt` (mode 0600).
@@ -45,6 +53,23 @@ sudo IRANGATE_SERVER_IP=192.0.2.25 IRANGATE_PANEL_PORT=8614 \
   IRANGATE_SUBSCRIPTION_PORT=2098 \
   bash ./IranGate-OV-offline-ubuntu2404-amd64.run
 ```
+
+If an installation fails halfway through, **do not run the fresh installation
+again**. Resume with exactly the same offline file using:
+
+```bash
+sudo bash ./IranGate-OV-offline-ubuntu2204-amd64.run --resume
+```
+
+Completed stages are checkpointed in `/var/lib/irangate-offline`, with
+permissions restricted to root. Resuming reuses existing OpenVPN PKI and
+administrator credentials. The installer refuses to resume unless it finds
+its own recorded installation state. Do not attempt to resume the *old*
+non-checkpointed installer released before this change.
+
+Routing and sing-box are installed and validated, but traffic interception
+is deliberately **not enabled** until an operator configures an outbound and
+explicitly applies routing.
 
 Do not put passwords directly in shell history on shared machines.
 The installer defaults to **HTTP via the IP address** (no Let's Encrypt

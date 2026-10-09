@@ -546,10 +546,9 @@ def outbound_to_sing_box(item: dict) -> tuple[dict | None, str | None]:
         }, None
 
     if typ == "block":
-        return {
-            "type": "block",
-            "tag": tag,
-        }, None
+        # sing-box >= 1.13 no longer supports the legacy block outbound.
+        # Blocking is modeled with routing reject actions, not an outbound.
+        return None, f"{tag}: legacy block outbound omitted; configure route reject actions"
 
     if typ in {"socks", "http"}:
         remote = config.get("remote", "")
@@ -720,12 +719,7 @@ def build_sing_box_config() -> tuple[dict, list[str]]:
         )
         existing_tags.add("direct")
 
-    if "block" not in existing_tags:
-        outbounds.append({
-            "type": "block",
-            "tag": "block",
-        })
-        existing_tags.add("block")
+    # Do not add legacy type=block (removed by sing-box 1.13).
 
     balancer_map = {
         item.get("tag"): item

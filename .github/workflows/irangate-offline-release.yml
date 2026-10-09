@@ -9,6 +9,15 @@ on:
       - scripts/offline/**
       - scripts/offline-install-panel.sh
       - scripts/make-offline-panel-bundle.sh
+      - scripts/irangate-routing
+  pull_request:
+    branches:
+      - l2tp-dev
+    paths:
+      - .github/workflows/irangate-offline-release.yml
+      - scripts/offline/**
+      - scripts/irangate-routing
+      - docs/OFFLINE-RELEASE.md
   workflow_dispatch:
 
 permissions:
@@ -63,11 +72,18 @@ jobs:
         run: |
           bash -n scripts/offline/install-master-from-bundle.sh
           bash -n scripts/offline/build-release-bundle.sh
+          python3 -m py_compile scripts/irangate-routing
           asset="$(find "$OUT_DIR" -name '*.run' -type f -print -quit)"
           test -n "$asset"
           marker_line="$(awk '$0=="__IRANGATE_BUNDLE_START__" {print NR; exit}' "$asset")"
           test -n "$marker_line"
           head -n "$((marker_line-1))" "$asset" | bash -n
+          mkdir -p "$RUNNER_TEMP/offline-smoke"
+          tail -n "+$((marker_line+1))" "$asset" | tar -xzf - -C "$RUNNER_TEMP/offline-smoke"
+          bash -n "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
+          test -s "$RUNNER_TEMP/offline-smoke/offline-assets/apt/Packages.gz"
+          grep -q 'select_port' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
+          grep -q 'run_stage verification' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           (cd "$OUT_DIR" && sha256sum -c "$(basename "$asset").sha256")
 
       - name: Upload fully-built offline artifacts
