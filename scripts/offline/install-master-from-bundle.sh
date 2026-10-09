@@ -22,7 +22,7 @@ CREDENTIALS="/root/irangate-offline-initial-credentials.txt"
 if [[ "$MODE" == "--resume" && ! -s "$STATE_FILE" ]]; then
     die "No resumable offline install on this server"
 fi
-[[ "$EUID" == 0 ]] || die "Run as root: sudo bash NET-SPOOF-offline-ubuntu2204-amd64.run"
+[[ "$EUID" == 0 ]] || die "Run as root: sudo bash SURENA-offline-ubuntu2204-amd64.run"
 [[ -f "$ROOT/install.sh" ]] || die "Project source is missing"
 [[ -s "$ROOT/offline-assets/irangate-webpanel" ]] || die "Bundled webpanel binary is missing"
 [[ -s "$ROOT/offline-assets/irangate-cli" ]] || die "Bundled SURENA CLI binary is missing"
@@ -467,6 +467,8 @@ check_final_services() {
     need netspoof
     need netspoof-panel
     need surena-panel
+    [[ "$(readlink -f /usr/local/bin/surena-panel)" == "/usr/local/bin/ovp-panel" ]] ||
+        die "SURENA panel alias is not connected to ovp-panel"
     irangate-routing generate-engine --write --check >/dev/null ||
         die "Bundled sing-box routing configuration failed validation"
     if ! ss -H -ltn | awk -v p=":$WEBPANEL_PORT" '$4 ~ p "$" {found=1} END {exit(!found)}'; then
