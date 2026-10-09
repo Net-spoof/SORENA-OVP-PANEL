@@ -2043,6 +2043,15 @@ uninstall_node() {
   rm -f /etc/systemd/system/irangate-warp-gemini-rules.service.d/90-vpn-direct-bypass.conf
   rm -f /usr/local/bin/irangate-node-nat
   rm -f /usr/local/bin/ovp-node
+  # Remove branding aliases only when they still target this Node manager.
+  local alias_name alias_path
+  for alias_name in surena-node serena-node Serena-node; do
+    alias_path="/usr/local/bin/$alias_name"
+    if [[ -L "$alias_path" ]] &&
+       [[ "$(readlink -- "$alias_path")" == "/usr/local/bin/ovp-node" ]]; then
+      rm -f -- "$alias_path"
+    fi
+  done
   rm -f /etc/openvpn/irangate-client-connect.sh
   rm -rf /etc/openvpn/blocked-clients
   rm -f /etc/irangate-node-agent.env
@@ -2059,7 +2068,7 @@ uninstall_node() {
 
 while true; do
   echo
-  echo "SURENA OVPN Node"
+  echo "SURENA Node Manager"
   echo "1) Status"
   echo "2) Change Agent port"
   echo "3) Change shared Token"
@@ -2087,6 +2096,18 @@ done
 OVP_NODE_EOF
 
   chmod +x /usr/local/bin/ovp-node
+
+  # Human-facing SURENA commands; keep ovp-node as the stable internal
+  # executable name for existing installations and integrations.
+  local alias_name alias_path
+  for alias_name in surena-node serena-node Serena-node; do
+    alias_path="/usr/local/bin/$alias_name"
+    if [[ -e "$alias_path" && ! -L "$alias_path" ]]; then
+      echo "Refusing to overwrite existing non-symlink: $alias_path" >&2
+      return 1
+    fi
+    ln -sfn /usr/local/bin/ovp-node "$alias_path"
+  done
 }
 
 start_services() {
@@ -2177,7 +2198,7 @@ main() {
   echo "Public IP: $PUBLIC_IP"
   echo "Config remote: $NODE_PUBLIC_HOST:$NODE_OVPN_PORT/$NODE_OVPN_PROTO"
   echo
-  echo "Manage node with: ovp-node"
+  echo "Manage node with: surena-node (aliases: Serena-node, serena-node, ovp-node)"
 }
 
 main "$@"
