@@ -1,4 +1,4 @@
-# IranGate CLI - راهنمای کامل
+# NET SPOOF CLI - راهنمای کامل
 
 ## 📋 فهرست مطالب
 - [نصب و راه‌اندازی](#نصب-و-راه‌اندازی)
@@ -23,7 +23,7 @@
 # بسته‌ها: OpenVPN, easy-rsa
 ```
 
-### نصب IranGate CLI
+### نصب NET SPOOF CLI
 ```bash
 # 1. کلون کردن پروژه
 git clone https://github.com/amiridev-org/irangate-ov
@@ -467,7 +467,7 @@ sudo irangate cron run backup_daily
 ## 🤖 AI Management
 
 ### معرفی AI Management
-سیستم مدیریت هوشمند IRANGATE که با استفاده از OpenAI GPT مشکلات سیستم را تشخیص داده و به صورت خودکار حل می‌کند.
+سیستم مدیریت هوشمند NET SPOOF که با استفاده از OpenAI GPT مشکلات سیستم را تشخیص داده و به صورت خودکار حل می‌کند.
 
 ### نصب و راه‌اندازی اولیه
 
@@ -502,7 +502,7 @@ irangate ai config set admin_chat_id "123456789"
 irangate ai status
 
 # خروجی:
-# 🤖 IRANGATE AI Agent Status
+# 🤖 NET SPOOF AI Agent Status
 # ============================
 # Status: ✅ Running
 # Config: ✅ Loaded
@@ -618,7 +618,7 @@ AI به صورت خودکار مشکلات زیر را حل می‌کند:
 # 1. ایجاد bot با @BotFather
 # 2. دریافت token
 # 3. دریافت chat ID با @userinfobot
-# 4. تنظیم در IRANGATE:
+# 4. تنظیم در NET SPOOF:
 
 irangate ai config set telegram_bot_token "YOUR_BOT_TOKEN"
 irangate ai config set admin_chat_id "YOUR_CHAT_ID"
@@ -632,7 +632,7 @@ irangate ai config set admin_chat_id "YOUR_CHAT_ID"
 
 **نمونه پیام‌های هشدار:**
 ```
-🤖 IRANGATE AI Agent
+🤖 NET SPOOF AI Agent
 
 🚨 ALERT: High CPU Usage
 
@@ -774,7 +774,7 @@ irangate ai restart
 ### سناریو 1: راه‌اندازی VPN Server جدید
 
 ```bash
-# 1. نصب IranGate
+# 1. نصب NET SPOOF
 sudo make install
 
 # 2. نصب OpenVPN
@@ -1011,7 +1011,7 @@ irangate ai config set admin_chat_id "new-chat-id"
 ```bash
 # اسکریپت بررسی سلامت
 #!/bin/bash
-echo "=== IranGate Health Check ==="
+echo "=== NET SPOOF Health Check ==="
 echo "1. Service Status:"
 irangate status
 
@@ -1042,7 +1042,7 @@ sudo tail -f /var/log/openvpn/openvpn.log
 # لاگ سیستم
 sudo journalctl -u openvpn@server -f
 
-# لاگ IranGate
+# لاگ NET SPOOF
 sudo journalctl -u irangate -f
 
 # لاگ AI Agent
@@ -1087,7 +1087,7 @@ sudo tail -f /var/log/syslog
 
 ### گزارش باگ
 در صورت بروز مشکل، لطفاً اطلاعات زیر را ارائه دهید:
-- نسخه IranGate: `irangate --version`
+- نسخه NET SPOOF: `irangate --version`
 - سیستم عامل: `uname -a`
 - خروجی دستور مشکل‌دار: `irangate [command] --json`
 - لاگ‌های مربوطه: `sudo journalctl -u openvpn@server`
@@ -1178,4 +1178,4 @@ sudo irangate restart
 
 ---
 
-**🎉 موفق باشید در استفاده از IranGate CLI!**
+**🎉 موفق باشید در استفاده از NET SPOOF CLI!**
