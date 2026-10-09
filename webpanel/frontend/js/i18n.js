@@ -1,4 +1,4 @@
-// NET SPOOF panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V11_PERSISTENT
+// SURENA panel-wide bilingual UI (English/Persian) — frontend only. I18N_RUNTIME_V11_PERSISTENT
 (() => {
     'use strict';
 
@@ -200,7 +200,7 @@
         '💾 Save Backup Schedule':'💾 ذخیره برنامه بکاپ','📦 Backup & Send Now':'📦 بکاپ و ارسال الآن',
         '📥 Export Backup':'📥 خروجی بکاپ','Download complete Backup v2 with PostgreSQL, users, nodes, usage state, and OpenVPN PKI':'دانلود Backup v2 کامل شامل PostgreSQL، کاربران، نودها، وضعیت مصرف و PKI اوپن‌وی‌پی‌ان',
         'Import Backup':'واردکردن بکاپ','📤 Import Backup':'📤 واردکردن بکاپ','System Information':'اطلاعات سیستم',
-        'NET SPOOF Version':'نسخه NET SPOOF','API Status':'وضعیت API','● Online':'● آنلاین','Database Location':'محل دیتابیس',
+        'SURENA Version':'نسخه SURENA','Network Control Platform':'پلتفرم کنترل شبکه','Support':'پشتیبانی','Support ·':'پشتیبانی ·','API Status':'وضعیت API','● Online':'● آنلاین','Database Location':'محل دیتابیس',
         'OpenVPN Service':'سرویس OpenVPN','Panel-level proxy for Telegram Bot API, automatic backups, notifications and outbound HTTP/HTTPS requests.':'پروکسی سطح پنل برای API تلگرام، بکاپ خودکار، اعلان‌ها و درخواست‌های خروجی HTTP/HTTPS.',
         'Enable panel proxy':'فعال‌سازی پروکسی پنل','Proxy URL':'آدرس پروکسی','Test URL':'آدرس تست','Test Proxy':'تست پروکسی',
         'Save & Restart Panel':'ذخیره و راه‌اندازی مجدد پنل','Disable Proxy':'غیرفعال‌سازی پروکسی','Raw Result':'خروجی خام',
@@ -273,7 +273,7 @@
         'Enter IP address (e.g., 8.8.8.8)':'آدرس IP را وارد کنید (مثال: 8.8.8.8)',
 
         // API docs / AI
-        'API Documentation':'مستندات API','Interactive REST API reference for NET SPOOF':'مرجع تعاملی REST API برای IranGate',
+        'API Documentation':'مستندات API','Interactive REST API reference for SURENA':'مرجع تعاملی REST API برای IranGate',
         'Authentication':'احراز هویت','Login and receive JWT token':'ورود و دریافت توکن JWT','Request:':'درخواست:','Response:':'پاسخ:',
         'Client Management':'مدیریت کاربران','List all VPN clients':'فهرست همه کاربران VPN','Create new client':'ساخت کاربر جدید',
         'Download .ovpn configuration file':'دانلود فایل کانفیگ .ovpn','Revoke all orphaned certificates':'لغو همه گواهی‌های بدون رکورد',
@@ -310,22 +310,22 @@
     });
 
     const titleFA = Object.freeze({
-        'Dashboard - NET SPOOF':'داشبورد - NET SPOOF',
-        'Clients - NET SPOOF':'کاربران - NET SPOOF',
-        'Analytics - NET SPOOF':'آمار و تحلیل - NET SPOOF',
-        'Admins - NET SPOOF':'مدیران - NET SPOOF',
-        'Nodes - NET SPOOF':'نودها - NET SPOOF',
-        'Settings - NET SPOOF':'تنظیمات - NET SPOOF',
-        'Outbounds - NET SPOOF':'مسیرهای خروجی - NET SPOOF',
-        'Usage - NET SPOOF':'مصرف - NET SPOOF',
-        'Maintenance - NET SPOOF':'نگهداری - NET SPOOF',
-        'Notifications - NET SPOOF':'اعلان‌ها - NET SPOOF',
-        'Server Checker - NET SPOOF':'بررسی سرور - NET SPOOF',
-        'API Documentation - NET SPOOF':'مستندات API - NET SPOOF',
-        'User Management - NET SPOOF':'مدیریت کاربران - NET SPOOF',
-        'NET SPOOF - Proxy and Server':'NET SPOOF - پروکسی و سرور',
-        'AI Core - NET SPOOF':'AI Core - NET SPOOF',
-        'NET SPOOF - Login':'NET SPOOF - ورود'
+        'Dashboard - SURENA':'داشبورد - SURENA',
+        'Clients - SURENA':'کاربران - SURENA',
+        'Analytics - SURENA':'آمار و تحلیل - SURENA',
+        'Admins - SURENA':'مدیران - SURENA',
+        'Nodes - SURENA':'نودها - SURENA',
+        'Settings - SURENA':'تنظیمات - SURENA',
+        'Outbounds - SURENA':'مسیرهای خروجی - SURENA',
+        'Usage - SURENA':'مصرف - SURENA',
+        'Maintenance - SURENA':'نگهداری - SURENA',
+        'Notifications - SURENA':'اعلان‌ها - SURENA',
+        'Server Checker - SURENA':'بررسی سرور - SURENA',
+        'API Documentation - SURENA':'مستندات API - SURENA',
+        'User Management - SURENA':'مدیریت کاربران - SURENA',
+        'SURENA - Proxy and Server':'SURENA - پروکسی و سرور',
+        'AI Core - SURENA':'AI Core - SURENA',
+        'SURENA - Login':'SURENA - ورود'
     });
 
 
