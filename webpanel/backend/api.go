@@ -4622,7 +4622,7 @@ func main() {
 		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
 		handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}),
 	)(rootRouter)
-	log.Println("🚀 NET SPOOF Web Panel API Starting...")
+	log.Println("🚀 SURENA Web Panel API Starting...")
 	log.Printf("📍 API Server: http://localhost:%s", portStr)
 	log.Println("🔐 Default Login: configured via env or admin/admin123")
 	if readEnvOrDefault("WEBPANEL_ADMIN_PASS", "adminadmin") == "admin123" {
