@@ -470,7 +470,7 @@ show_info() {
     fi
 
     echo -e "${CYAN}==================================================${NC}"
-    echo -e "${CYAN}          IranGate Panel Information${NC}"
+    echo -e "${CYAN}          NET SPOOF Panel Information${NC}"
     echo -e "${CYAN}==================================================${NC}"
     echo
     echo -e "Panel URL:            ${GREEN}${panel_url}${NC}"
@@ -2455,7 +2455,7 @@ service_status() {
 
     echo
     echo -e "${BLUE}==================================================${NC}"
-    echo -e "${CYAN}              IranGate Service Status${NC}"
+    echo -e "${CYAN}              NET SPOOF Service Status${NC}"
     echo -e "${BLUE}==================================================${NC}"
     echo
 
@@ -2608,7 +2608,7 @@ restart_services() {
     )"
 
     echo
-    echo -e "${CYAN}Restarting IranGate services...${NC}"
+    echo -e "${CYAN}Restarting NET SPOOF services...${NC}"
     echo
 
     # ------------------------------------------------
@@ -2826,7 +2826,7 @@ view_logs() {
         clear
 
         echo -e "${BLUE}==================================================${NC}"
-        echo -e "${CYAN}                IranGate Logs${NC}"
+        echo -e "${CYAN}                NET SPOOF Logs${NC}"
         echo -e "${BLUE}==================================================${NC}"
         echo
         echo "  1) Web Panel Logs"
@@ -3044,7 +3044,7 @@ create_backup() {
     }
 
     echo
-    echo -e "${CYAN}Creating full IranGate Backup v2...${NC}"
+    echo -e "${CYAN}Creating full NET SPOOF Backup v2...${NC}"
     echo
 
     if ! "$exporter" >"$output_file" 2>&1; then
@@ -3158,7 +3158,7 @@ restore_backup() {
 
     echo
     echo -e "${BLUE}==================================================${NC}"
-    echo -e "${CYAN}              Restore IranGate Backup${NC}"
+    echo -e "${CYAN}              Restore NET SPOOF Backup${NC}"
     echo -e "${BLUE}==================================================${NC}"
     echo
 
@@ -3220,7 +3220,7 @@ restore_backup() {
     fi
 
     echo
-    echo -e "${YELLOW}WARNING: This operation will replace the current IranGate state.${NC}"
+    echo -e "${YELLOW}WARNING: This operation will replace the current NET SPOOF state.${NC}"
     echo
     read -r -p "Type RESTORE to continue: " confirm
 
@@ -3495,7 +3495,7 @@ irangate_update_health() {
     local port
 
     echo
-    echo -e "${CYAN}IranGate Runtime Health Checks${NC}"
+    echo -e "${CYAN}NET SPOOF Runtime Health Checks${NC}"
     echo
 
     for unit in \
@@ -3674,7 +3674,7 @@ update_panel() {
     importer="/usr/local/bin/irangate-backup-v2-import"
 
     repo="$(detect_repo)" || {
-        echo -e "${RED}IranGate source repository not found.${NC}"
+        echo -e "${RED}NET SPOOF source repository not found.${NC}"
         return 1
     }
 
@@ -3707,7 +3707,7 @@ update_panel() {
         >"$SOURCE_FILE"
 
     echo
-    echo -e "${CYAN}Checking for IranGate updates...${NC}"
+    echo -e "${CYAN}Checking for NET SPOOF updates...${NC}"
     echo
 
     if ! git fetch \
@@ -3744,7 +3744,7 @@ update_panel() {
 
         if irangate_update_health; then
             echo
-            echo -e "${GREEN}IranGate runtime is healthy ✅${NC}"
+            echo -e "${GREEN}NET SPOOF runtime is healthy ✅${NC}"
             return 0
         fi
 
@@ -3899,7 +3899,7 @@ update_panel() {
     rm -f "$cli_build" "$panel_build"
 
     echo
-    echo -e "${CYAN}Building IranGate CLI...${NC}"
+    echo -e "${CYAN}Building NET SPOOF CLI...${NC}"
 
     if ! (
         cd "$worktree"
@@ -4196,7 +4196,7 @@ full_uninstall() {
     clear
 
     echo -e "${RED}==================================================${NC}"
-    echo -e "${RED}             FULL IRANGATE UNINSTALL${NC}"
+    echo -e "${RED}             FULL NET SPOOF UNINSTALL${NC}"
     echo -e "${RED}==================================================${NC}"
     echo
     echo "This will permanently delete:"
@@ -4207,19 +4207,19 @@ full_uninstall() {
     echo "- Certificates and private keys"
     echo "- Subscription tokens"
     echo "- User database"
-    echo "- PostgreSQL IranGate database"
+    echo "- PostgreSQL NET SPOOF database"
     echo "- Traffic statistics"
-    echo "- IranGate backups"
-    echo "- IranGate systemd services and timers"
-    echo "- IranGate Nginx configurations"
-    echo "- IranGate logs"
-    echo "- IranGate CLI and manager"
+    echo "- NET SPOOF backups"
+    echo "- NET SPOOF systemd services and timers"
+    echo "- NET SPOOF Nginx configurations"
+    echo "- NET SPOOF logs"
+    echo "- NET SPOOF CLI and manager"
     echo
     echo -e "${YELLOW}Shared packages such as Nginx and PostgreSQL will remain installed.${NC}"
     echo
-    read -r -p "Type DELETE-IRANGATE to continue: " confirm
+    read -r -p "Type DELETE-NET-SPOOF to continue: " confirm
 
-    [[ "$confirm" == "DELETE-IRANGATE" ]] || {
+    [[ "$confirm" == "DELETE-NET-SPOOF" || "$confirm" == "DELETE-IRANGATE" ]] || {
         echo "Uninstall cancelled."
         return
     }
@@ -4249,7 +4249,7 @@ full_uninstall() {
             2>/dev/null || true
     fi
 
-    echo -e "${CYAN}Dropping IranGate PostgreSQL database...${NC}"
+    echo -e "${CYAN}Dropping NET SPOOF PostgreSQL database...${NC}"
 
     if command -v psql >/dev/null 2>&1; then
         runuser -u postgres -- \
@@ -4265,7 +4265,7 @@ full_uninstall() {
             2>/dev/null || true
     fi
 
-    echo -e "${CYAN}Removing IranGate files...${NC}"
+    echo -e "${CYAN}Removing NET SPOOF files...${NC}"
 
     rm -rf \
         /opt/irangate \
@@ -4310,7 +4310,7 @@ full_uninstall() {
     fi
 
     echo
-    echo -e "${GREEN}IranGate full uninstall completed.${NC}"
+    echo -e "${GREEN}NET SPOOF full uninstall completed.${NC}"
     exit 0
 }
 
@@ -4320,7 +4320,7 @@ menu() {
         clear
 
         echo -e "${BLUE}==================================================${NC}"
-        echo -e "${CYAN}          IranGate Panel Management${NC}"
+        echo -e "${CYAN}          NET SPOOF Panel Management${NC}"
         echo -e "${BLUE}==================================================${NC}"
         echo
         echo "  1) Show Panel Information"
@@ -4345,7 +4345,7 @@ menu() {
         echo " 15) Restore Backup"
         echo " 16) Restore Replaced Node"
         echo
-        echo " 17) Uninstall IranGate"
+        echo " 17) Uninstall NET SPOOF"
         echo
         echo "  0) Exit"
         echo
