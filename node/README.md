@@ -14,20 +14,21 @@
 
 ### پیش‌نیازها
 
-- سرور لینوکسی جداگانه با دسترسی root، systemd، TUN، دسترسی اینترنت برای APT و دسترسی به مخزن خصوصی GitHub
+- سرور لینوکسی **تازه و جداگانه** با دسترسی root/sudo، systemd، TUN و اینترنت برای APT و GitHub
 - پورت UDP مربوط به OpenVPN (پیش‌فرض 1194) و امکان برقراری ارتباط Master با Agent و Control
 - توکن اختصاصی و قوی برای ارتباط Master و Node
 
 **مهم:** این اسکریپت نصب Node برای سرور موجودِ دارای کاربران یا گواهی‌های VPN طراحی نشده است؛ قبل از اجرا از داده‌های مهم بکاپ بگیرید. نصب Node، برخلاف بسته آفلاین Master، از APT و شبکه استفاده می‌کند.
 
-### نصب با سورس کامل مخزن
+### نصب آنلاین با سورس کامل مخزن
 
-چون مخزن خصوصی است، GitHub CLI را از قبل نصب و با حساب مجاز احراز هویت کنید، یا مخزن را با SSH key مجاز clone کنید:
+مخزن **Public** است و به حساب یا توکن GitHub نیاز نیست. روی سرور خارجی Node اجرا کنید:
 
 ~~~bash
-gh auth login -h github.com -p https -w
-gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
-cd surena-src
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
 ~~~
 
@@ -59,7 +60,7 @@ sudo bash node/install-node.sh
 ### مدیریت و عیب‌یابی
 
 ~~~bash
-sudo surena-node
+sudo Serena-node
 sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
 sudo systemctl status irangate-node-agent --no-pager
 sudo journalctl -u irangate-node-agent -n 50 --no-pager
@@ -78,14 +79,15 @@ Node دارای Snapshot Export/Restore رمزگذاری‌شده برای هم�
 
 This is the installer for a separate **foreign OpenVPN Node**, not the Master panel. Follow the [Master instructions](../README.md) for the management server.
 
-**Requirements:** a Linux VPS with root, systemd, TUN, Internet access for APT, and authenticated access to the private repository.
+**Requirements:** a fresh, separate Linux VPS with root/sudo, systemd, TUN and Internet access for APT and GitHub. The repository is public; no GitHub authentication is required.
 
-### Install from the complete repository
+### Online install from the complete repository
 
 ~~~bash
-gh auth login -h github.com -p https -w
-gh repo clone Net-spoof/IranGate-OV-Reza-dev surena-src -- --branch l2tp-dev
-cd surena-src
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone --branch l2tp-dev --single-branch https://github.com/Net-spoof/SORENA-OVP-PANEL.git
+cd SORENA-OVP-PANEL
 sudo bash node/install-node.sh
 ~~~
 
@@ -113,13 +115,13 @@ In the Master web UI go to **Nodes → Add Node** and supply the display name, l
 ### Operations
 
 ~~~bash
-sudo surena-node
+sudo Serena-node
 sudo systemctl is-active openvpn-server@server irangate-node-agent irangate-node-control
 sudo journalctl -u irangate-node-agent -n 50 --no-pager
 ~~~
 
 Menu options include status, Agent port, shared token, advertised config host/port, OpenVPN listener, a test configuration, and node removal. Coordinate Agent port or token changes on both ends.
 
-**Available management aliases:** `surena-node`, `Serena-node`, `serena-node`, and legacy `ovp-node`.
+**Node management:** `Serena-node` (documented command), `surena-node` / `serena-node` (additional aliases), and legacy `ovp-node`.
 
 **Support / پشتیبانی:** [Telegram @NET_SPOOF](https://t.me/NET_SPOOF)
