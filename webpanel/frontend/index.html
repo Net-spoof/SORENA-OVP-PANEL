@@ -6,7 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>NET SPOOF - Login</title>
+    <title>SURENA - Login</title>
+    <link rel="icon" type="image/webp" href="logo/surena.webp">
+    <meta name="theme-color" content="#07182e">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="css/dark-theme.css">
     <link rel="stylesheet" href="css/ui-refresh.css?v=panel-ui-20260911-v1">
@@ -14,14 +16,14 @@
     <script src="js/i18n.js?v=panel-i18n-20261007-v11"></script>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border-t-4 border-amber-500">
         <!-- Logo/Header -->
         <div class="text-center mb-8">
             <div class="inline-flex items-center justify-center rounded-2xl bg-white/95 p-2 shadow-lg mb-4">
-                <img src="logo/net-spoof.svg" alt="NET SPOOF Logo" class="h-20 w-20 rounded-xl object-cover">
+                <img src="logo/surena.webp" alt="SURENA Logo" class="h-20 w-20 rounded-xl object-cover">
             </div>
-            <h1 class="text-3xl font-bold text-gray-800">NET SPOOF</h1>
-            <p class="text-gray-600 mt-2">OpenVPN Management Panel</p>
+            <h1 class="text-3xl font-bold text-gray-800">SURENA</h1>
+            <p class="text-gray-600 mt-2">Network Control Platform</p>
         </div>
 
         <!-- Login Form -->
@@ -55,10 +57,12 @@
             </div>
 
             <button type="submit" id="loginBtn"
-                    class="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-purple-600 hover:to-indigo-700 transition duration-300 transform hover:scale-105">
+                    class="w-full bg-gradient-to-r from-amber-500 to-amber-700 text-white py-3 rounded-lg font-semibold hover:from-amber-600 hover:to-amber-800 transition duration-300 transform hover:scale-105">
                 Sign In
             </button>
         </form>
+
+        <p class="mt-6 text-center text-sm text-gray-500">Support · <a href="https://t.me/NET_SPOOF" target="_blank" rel="noopener noreferrer" class="text-amber-700 hover:underline">@NET_SPOOF</a></p>
 
         <!-- Error Message -->
         <div id="error" class="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg hidden">
