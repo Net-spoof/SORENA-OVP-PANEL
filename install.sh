@@ -53,7 +53,7 @@ display_banner() {
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "${YELLOW}Version: 3.0.0${NC}"
-    echo "This installer sets up OpenVPN, NET SPOOF CLI and NET SPOOF Web Panel."
+    echo "This installer sets up OpenVPN, SURENA CLI and SURENA Web Panel."
     echo
 }
 
@@ -1039,7 +1039,7 @@ EOF
     log_info "OpenVPN Server Core installed and configured successfully"
 }
 install_irangate_cli() {
-    log_step "Step 2/5: Installing NET SPOOF CLI..."
+    log_step "Step 2/5: Installing SURENA CLI..."
     cd "$SCRIPT_DIR" || {
         log_error "Failed to change directory to $SCRIPT_DIR"
         exit 1
@@ -1830,7 +1830,7 @@ MASTER_NODE_GUARD_EOF
 
 
 install_panel_manager() {
-    log_info "Installing NET SPOOF panel management command..."
+    log_info "Installing SURENA panel management command..."
 
     local manager_source="$SCRIPT_DIR/scripts/ovp-panel"
 
@@ -1846,6 +1846,7 @@ install_panel_manager() {
 
     # New public command; keep ovp-panel for existing scripts and deployments.
     ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/netspoof-panel
+    ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel
 
     mkdir -p /etc/irangate
 
@@ -1987,12 +1988,12 @@ test_services() {
         echo -e "${RED}✗${NC} OpenVPN: ${RED}INACTIVE${NC}"
         all_ok=false
     fi
-    echo -e "${CYAN}Testing NET SPOOF CLI...${NC}"
+    echo -e "${CYAN}Testing SURENA CLI...${NC}"
     if /usr/local/bin/irangate version &> /dev/null; then
-        echo -e "${GREEN}✓${NC} NET SPOOF CLI: ${GREEN}WORKING${NC}"
+        echo -e "${GREEN}✓${NC} SURENA CLI: ${GREEN}WORKING${NC}"
         /usr/local/bin/irangate version | head -1
     else
-        echo -e "${RED}✗${NC} NET SPOOF CLI: ${RED}NOT WORKING${NC}"
+        echo -e "${RED}✗${NC} SURENA CLI: ${RED}NOT WORKING${NC}"
         all_ok=false
     fi
     echo -e "${CYAN}Testing Web Panel service...${NC}"
@@ -2111,7 +2112,7 @@ show_final_summary() {
     echo ""
     echo -e "${GREEN}Installation log saved to: /var/log/irangate-install.log${NC}"
     echo ""
-    echo -e "${GREEN}Thank you for using NET SPOOF VPN Management System!${NC}"
+    echo -e "${GREEN}Thank you for using SURENA VPN Management System!${NC}"
     echo -e "${GREEN}Documentation: see repository README.md${NC}"
     echo ""
 }
