@@ -8,8 +8,8 @@ ROOT="$(cd "$ROOT" && pwd -P)"
 export DEBIAN_FRONTEND=noninteractive
 export PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-die() { echo "[IranGate Offline][ERROR] $*" >&2; exit 1; }
-info() { echo "[IranGate Offline] $*"; }
+die() { echo "[NET SPOOF Offline][ERROR] $*" >&2; exit 1; }
+info() { echo "[NET SPOOF Offline] $*"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "Required command missing: $1"; }
 MODE="${2:-}"
 case "$MODE" in
@@ -22,10 +22,10 @@ CREDENTIALS="/root/irangate-offline-initial-credentials.txt"
 if [[ "$MODE" == "--resume" && ! -s "$STATE_FILE" ]]; then
     die "No resumable offline install on this server"
 fi
-[[ "$EUID" == 0 ]] || die "Run as root: sudo bash IranGate-....run"
+[[ "$EUID" == 0 ]] || die "Run as root: sudo bash NET-SPOOF-offline-ubuntu2204-amd64.run"
 [[ -f "$ROOT/install.sh" ]] || die "Project source is missing"
 [[ -s "$ROOT/offline-assets/irangate-webpanel" ]] || die "Bundled webpanel binary is missing"
-[[ -s "$ROOT/offline-assets/irangate-cli" ]] || die "Bundled IranGate CLI binary is missing"
+[[ -s "$ROOT/offline-assets/irangate-cli" ]] || die "Bundled NET SPOOF CLI binary is missing"
 [[ -s "$ROOT/offline-assets/sing-box" ]] || die "Bundled sing-box binary is missing"
 need dpkg
 need apt-get
@@ -109,6 +109,7 @@ mkdir -p "$INSTALL_ROOT"
 rsync -a --exclude=/offline-assets --exclude=/.git --exclude=/offline-bundles     "$ROOT/" "$INSTALL_ROOT/"
 chmod +x "$INSTALL_ROOT/scripts/"*.sh 2>/dev/null || true
 install -m 0755 "$ROOT/offline-assets/irangate-cli" /usr/local/bin/irangate
+ln -sfn /usr/local/bin/irangate /usr/local/bin/netspoof
 install -m 0755 "$ROOT/offline-assets/irangate-webpanel" /usr/local/bin/irangate-webpanel
 install -m 0755 "$ROOT/offline-assets/sing-box" /usr/local/bin/sing-box
 
@@ -174,7 +175,7 @@ else
             for candidate in $candidates; do
                 if check_port "$proto" "$candidate" "$exclude_a" "$exclude_b" "$label"; then
                     selected="$candidate"
-                    printf '[IranGate Offline] %s port %s unavailable; choosing %s\n' \
+                    printf '[NET SPOOF Offline] %s port %s unavailable; choosing %s\n' \
                         "$label" "$initial" "$selected" >&2
                     break
                 fi
@@ -188,7 +189,7 @@ else
                 printf '%s' "$candidate"
                 return 0
             fi
-            printf '[IranGate Offline] Port %s unavailable, reserved or invalid; choose another\n' \
+            printf '[NET SPOOF Offline] Port %s unavailable, reserved or invalid; choose another\n' \
                 "$candidate" >&2
             if [[ ! -t 0 ]]; then return 1; fi
         done
@@ -293,7 +294,7 @@ apt-get() {
 install_golang() { :; }
 install_dependencies() { :; }
 install_irangate_cli() {
-    info "Using packaged IranGate CLI (no Go build/download)"
+    info "Using packaged NET SPOOF CLI (no Go build/download)"
     test -x /usr/local/bin/irangate
 }
 install_webpanel() {
@@ -462,6 +463,8 @@ check_final_services() {
     need irangate-routing
     need sing-box
     need ovp-panel
+    need netspoof
+    need netspoof-panel
     irangate-routing generate-engine --write --check >/dev/null ||
         die "Bundled sing-box routing configuration failed validation"
     if ! ss -H -ltn | awk -v p=":$WEBPANEL_PORT" '$4 ~ p "$" {found=1} END {exit(!found)}'; then
