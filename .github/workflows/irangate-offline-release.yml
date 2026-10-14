@@ -133,9 +133,9 @@ jobs:
       # Direct Release uploads avoid GitHub Actions artifact-storage quota.
       - name: Upload verified offline bundle to draft GitHub Release
         env:
-          GH_TOKEN: ${ github.token }}
-          GH_REPO: ${ github.repository }}
-          OUT_DIR: ${ runner.temp }}/built
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OUT_DIR: ${{ runner.temp }}/built
         run: |
           set -Eeuo pipefail
           tag="offline-${GITHUB_SHA:0:12}"
@@ -156,8 +156,8 @@ jobs:
     steps:
       - name: Verify both OS packages and publish
         env:
-          GH_TOKEN: ${ github.token }}
-          GH_REPO: ${ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
           tag="offline-${GITHUB_SHA:0:12}"
