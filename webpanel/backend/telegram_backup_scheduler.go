@@ -667,6 +667,30 @@ func sendTelegramBackupPart(
 	return fmt.Errorf("Telegram backup upload retries exhausted")
 }
 
+// Telegram-facing branding is independent of the backup archive format.
+// Keep internal archive names unchanged for scheduler/restore compatibility.
+const telegramBackupTitle = "🛡️ SURENA Backup V2"
+
+func telegramBackupCaption(hostname, createdAt string, totalSizeMB float64, part, totalParts int) string {
+	if totalParts > 1 {
+		return fmt.Sprintf(
+			"%s\nServer: %s\nCreated: %s\nTotal size: %.2f MB\nPart: %d/%d\n\nDownload all parts and concatenate them in order to restore the original .tar.gz archive.",
+			telegramBackupTitle, hostname, createdAt, totalSizeMB, part, totalParts,
+		)
+	}
+	return fmt.Sprintf(
+		"%s\nServer: %s\nCreated: %s\nSize: %.2f MB",
+		telegramBackupTitle, hostname, createdAt, totalSizeMB,
+	)
+}
+
+func telegramBackupReassemblyMessage(totalParts int, backupName string) string {
+	return fmt.Sprintf(
+		"✅ SURENA Backup V2 sent in %d parts.\n\nReassemble on Linux:\ncat '%s.part'* > '%s'",
+		totalParts, backupName, backupName,
+	)
+}
+
 func sendTelegramBackupDocument(
 	credentials telegramBackupCredentials,
 	backupPath string,
@@ -705,32 +729,16 @@ func sendTelegramBackupDocument(
 		}
 
 		uploadName := backupName
-		caption := fmt.Sprintf(
-			"IranGate Backup v2\nServer: %s\nCreated: %s\nSize: %.2f MB",
+		caption := telegramBackupCaption(
 			hostname,
-			time.Now().Format(
-				"2006-01-02 15:04:05 MST",
-			),
+			time.Now().Format("2006-01-02 15:04:05 MST"),
 			totalSizeMB,
+			partIndex+1,
+			totalParts,
 		)
 
 		if totalParts > 1 {
-			uploadName = fmt.Sprintf(
-				"%s.part%03d",
-				backupName,
-				partIndex+1,
-			)
-
-			caption = fmt.Sprintf(
-				"IranGate Backup v2\nServer: %s\nCreated: %s\nTotal size: %.2f MB\nPart: %d/%d\n\nDownload all parts and concatenate them in order to restore the original .tar.gz archive.",
-				hostname,
-				time.Now().Format(
-					"2006-01-02 15:04:05 MST",
-				),
-				totalSizeMB,
-				partIndex+1,
-				totalParts,
-			)
+			uploadName = fmt.Sprintf("%s.part%03d", backupName, partIndex+1)
 		}
 
 		fmt.Printf(
@@ -759,12 +767,7 @@ func sendTelegramBackupDocument(
 	}
 
 	if totalParts > 1 {
-		instructions := fmt.Sprintf(
-			"✅ IranGate Backup v2 sent in %d parts.\n\nReassemble on Linux:\ncat '%s.part'* > '%s'",
-			totalParts,
-			backupName,
-			backupName,
-		)
+		instructions := telegramBackupReassemblyMessage(totalParts, backupName)
 
 		if err := sendTelegramMessage(
 			credentials.BotToken,
