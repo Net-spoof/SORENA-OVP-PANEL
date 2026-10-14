@@ -17,14 +17,14 @@ func TestTelegramBackupMultipartOverhead(t *testing.T) {
         {
             name: "ascii",
             chatID: "-100123456789",
-            caption: "IranGate Backup v2",
-            uploadName: "irangate-backup.tar.gz",
+            caption: "🛡️ SURENA Backup V2",
+            uploadName: "backup.tar.gz",
             payload: "sample-backup-bytes",
         },
         {
             name: "unicode and multipart filename",
             chatID: "999963110",
-            caption: "پشتیبان‌گیری ایران‌گیت",
+            caption: "پشتیبان‌گیری سورنا",
             uploadName: "backup.tar.gz.part001",
             payload: "compresseddatacompresseddatacompresseddata",
         },
@@ -88,4 +88,29 @@ func TestTelegramBackupRunTracking(t *testing.T) {
     if running || activeID != runID || completedID != runID {
         t.Fatalf("incorrect completed status: running=%v, active=%q, completed=%q", running, activeID, completedID)
     }
+}
+
+
+func TestTelegramBackupBrandingSinglePart(t *testing.T) {
+	got := telegramBackupCaption("Open", "2026-10-14 17:26:36 UTC", 16.43, 1, 1)
+	want := "🛡️ SURENA Backup V2\nServer: Open\nCreated: 2026-10-14 17:26:36 UTC\nSize: 16.43 MB"
+	if got != want {
+		t.Fatalf("unexpected single-part backup caption:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestTelegramBackupBrandingMultipart(t *testing.T) {
+	got := telegramBackupCaption("Open", "2026-10-14 17:26:36 UTC", 52.01, 2, 3)
+	want := "🛡️ SURENA Backup V2\nServer: Open\nCreated: 2026-10-14 17:26:36 UTC\nTotal size: 52.01 MB\nPart: 2/3\n\nDownload all parts and concatenate them in order to restore the original .tar.gz archive."
+	if got != want {
+		t.Fatalf("unexpected multipart backup caption:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestTelegramBackupBrandingReassemblyNotice(t *testing.T) {
+	got := telegramBackupReassemblyMessage(3, "backup_schedule_telegram_auto_20261014.tar.gz")
+	want := "✅ SURENA Backup V2 sent in 3 parts.\n\nReassemble on Linux:\ncat 'backup_schedule_telegram_auto_20261014.tar.gz.part'* > 'backup_schedule_telegram_auto_20261014.tar.gz'"
+	if got != want {
+		t.Fatalf("unexpected backup reassembly message:\n got: %q\nwant: %q", got, want)
+	}
 }
