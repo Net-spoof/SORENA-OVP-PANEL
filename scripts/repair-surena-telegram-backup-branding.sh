@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Safe, targeted SURENA Telegram backup branding update for an installed Master.
-# Changes only the local Go Telegram sender and the webpanel binary.
+# Changes only the Go backup Telegram caption and its webpanel binary.
 set -Eeuo pipefail
 umask 077
 export PATH="/usr/local/go/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -37,14 +37,12 @@ fi
 [[ -n "$SOURCE" ]] || die "Installed source tree not found; no files changed"
 BACKEND="$SOURCE/webpanel/backend"
 SENDER="$BACKEND/telegram_backup_scheduler.go"
-TELEGRAM="$BACKEND/telegram.go"
-[[ -f "$BACKEND/go.mod" && -f "$TELEGRAM" ]] || die "Unexpected Go source structure"
+[[ -f "$BACKEND/go.mod" ]] || die "Unexpected Go source structure"
 grep -Fq 'func sendTelegramBackupDocument(' "$SENDER" || die "Unexpected backup implementation"
 
 BACK="$(mktemp -d /root/surena-telegram-caption-rollback.XXXXXXXX)"
 cp -a "$BIN" "$BACK/original-binary"
 cp -a "$SENDER" "$BACK/original-sender.go"
-cp -a "$TELEGRAM" "$BACK/original-telegram.go"
 say "Source: $SOURCE"
 say "Rollback files: $BACK"
 SWAPPED=0
@@ -54,7 +52,6 @@ cleanup() {
     trap - EXIT
     if [[ "$DONE" -ne 1 ]]; then
         cp -a "$BACK/original-sender.go" "$SENDER" || true
-        cp -a "$BACK/original-telegram.go" "$TELEGRAM" || true
         if [[ "$SWAPPED" -eq 1 ]]; then
             install -m 0755 "$BACK/original-binary" "$BIN.rollback.$$" &&
                 mv -f "$BIN.rollback.$$" "$BIN"
@@ -70,25 +67,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 - "$SENDER" "$TELEGRAM" <<'PY'
+python3 - "$SENDER" <<'PY'
 from pathlib import Path
 import sys
+
 p = Path(sys.argv[1])
-s = p.read_text()
+s = p.read_text(encoding="utf-8")
 old = "IranGate Backup v2"
-if s.count(old) == 3:
-    s = s.replace('"IranGate Backup v2\\n', '"🛡️ SURENA Backup V2\\n')
+new = "🛡️ SURENA Backup V2"
+old_caption = '"IranGate Backup v2\\n'
+new_caption = '"🛡️ SURENA Backup V2\\n'
+
+# Installed Master versions may have a single caption or multipart variants.
+# Restrict changes to the displayed Telegram backup title only.
+if s.count(old) in (1, 3):
+    if s.count(old_caption) not in (1, 2):
+        raise SystemExit("STOP: unknown caption layout; no code changed")
+    s = s.replace(old_caption, new_caption)
     s = s.replace("✅ IranGate Backup v2 sent in", "✅ SURENA Backup V2 sent in")
-    if old in s:
-        raise SystemExit("Unexpected remaining old branding")
-elif "🛡️ SURENA Backup V2" not in s or old in s:
-    raise SystemExit("Unsupported backup sender version")
-p.write_text(s)
-p = Path(sys.argv[2])
-s = p.read_text()
-s = s.replace("*IranGate Test Message*", "*SURENA Test Message*")
-s = s.replace("*IranGate Configuration Test*", "*SURENA Configuration Test*")
-p.write_text(s)
+    if old in s or new not in s:
+        raise SystemExit("STOP: title substitution did not complete")
+elif s.count(old) == 0 and new in s:
+    print("[SURENA] Local sender already uses SURENA branding")
+else:
+    raise SystemExit(
+        f"STOP: unsupported sender title count: {s.count(old)}"
+    )
+
+p.write_text(s, encoding="utf-8")
 PY
 
 say "Testing and compiling the existing backend before any restart"
