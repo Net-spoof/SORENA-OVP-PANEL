@@ -84,7 +84,7 @@ for name, suffix in formats.items():
 # Optional multipart completion note (if present in this installed build).
 # Also replace it in-place, without changing other notifications.
 old_note = "✅ IranGate Backup v2 sent in %d parts.".encode()
-new_note = "✅ SURENA Backup V2  sent in %d parts.".encode()
+new_note = "✅ SURENA Backup V2   sent in %d parts.".encode()
 if len(old_note) != len(new_note):
     raise SystemExit("STOP: note lengths differ")
 if patched.count(old_note) > 1 or patched.count(new_note) > 1:
