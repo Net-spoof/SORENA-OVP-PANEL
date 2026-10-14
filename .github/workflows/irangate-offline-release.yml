@@ -13,6 +13,7 @@ on:
       - scripts/ovp-panel
       - node/**
       - install.sh
+      - scripts/repair-surena-telegram-backup-branding.sh
       - README.md
       - webpanel/frontend/**
       - webpanel/backend/**
@@ -89,6 +90,7 @@ jobs:
           bash -n scripts/ovp-panel
           bash -n node/install-node.sh
           bash -n node/install-manager-aliases.sh
+          bash -n scripts/repair-surena-telegram-backup-branding.sh
           grep -Fq 'ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel' install.sh
           grep -Fq 'run_stage panel-manager install_panel_manager' scripts/offline/install-master-from-bundle.sh
           grep -Fq 'need surena-panel' scripts/offline/install-master-from-bundle.sh
