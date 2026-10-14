@@ -54,7 +54,7 @@ func telegramTestHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Telegram notifications are disabled", http.StatusBadRequest)
 		return
 	}
-	testMessage := fmt.Sprintf("🧪 *IranGate Test Message*\n\n"+
+	testMessage := fmt.Sprintf("🧪 *SURENA Test Message*\n\n"+
 		"✅ Telegram notifications are working!\n"+
 		"📅 Time: %s\n"+
 		"🤖 Bot Status: Connected",
@@ -99,7 +99,7 @@ func telegramConfigureHandler(w http.ResponseWriter, r *http.Request) {
 	config.Enabled = req.Enabled
 	config.UpdatedAt = time.Now()
 	if config.Enabled {
-		testMessage := "🔧 *IranGate Configuration Test*\n\n✅ Configuration updated successfully!"
+		testMessage := "🔧 *SURENA Configuration Test*\n\n✅ Configuration updated successfully!"
 		err = sendTelegramMessage(config.BotToken, config.ChatID, testMessage)
 		if err != nil {
 			sendError(w, fmt.Sprintf("Configuration test failed: %v", err), http.StatusBadRequest)
