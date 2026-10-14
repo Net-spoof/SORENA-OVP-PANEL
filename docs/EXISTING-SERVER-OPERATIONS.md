@@ -137,6 +137,23 @@ BASH
 
 این دستور سرویس‌ها را ری‌استارت نمی‌کند؛ صفحه مرورگر را با Hard Refresh باز کنید. **برای ارتقای هسته اجرایی و دیتابیس/نود روی سرور فعال، ابتدا نسخه فعلی، نوع نصب، بکاپ و تغییرات سفارشی را بررسی کنید.** این کار نیازمند برنامه ارتقا و Rollback مستقل است.
 
+### اصلاح عنوان بکاپ‌های تلگرام به SURENA
+
+برای مستر نصب‌شده‌ای که عنوان ارسال بکاپ آن هنوز صحیح نیست، می‌توانید **فقط فرستنده پیام Telegram و باینری پنل** را به‌روزرسانی کنید. اسکریپت از سورس واقعی نصب‌شده روی همان سرور استفاده می‌کند، بکاپ اجرایی و سورس می‌گیرد، پیش از جایگزینی تست و کامپایل انجام می‌دهد و در صورت شکست بررسی سلامت، Rollback می‌کند. به کاربران، دیتابیس و فایل‌های بکاپ دست نمی‌زند.
+
+<div dir="ltr" align="left">
+
+```bash
+curl -fsSLo /root/surena-telegram-backup-fix.sh \
+  https://raw.githubusercontent.com/Net-spoof/SORENA-OVP-PANEL/l2tp-dev/scripts/repair-surena-telegram-backup-branding.sh
+bash -n /root/surena-telegram-backup-fix.sh
+sudo bash /root/surena-telegram-backup-fix.sh
+```
+
+</div>
+
+**پیش‌نیاز:** وجود Go سازگار، سورس Backend نصب‌شده و امکان دریافت وابستگی‌های لازم برای Build. در صورت نبود سورس یا ناموفق‌بودن تست/کامپایل، اسکریپت به باینری فعال دست نمی‌زند. عنوان جدید از **بکاپ بعدی** ظاهر می‌شود و فایل‌های قبلی تلگرام تغییر نمی‌کنند.
+
 </div>
 
 ## English — Existing Deployment
@@ -148,5 +165,7 @@ BASH
 **Node configuration:** `sudo Serena-node`. It can show status and edit the Agent port, shared token, advertised client host/port and OpenVPN listen port. Check non-secret fields in `/etc/irangate-node-agent.env`. After changing the Agent port or token, update the pairing settings under **Master → Nodes**.
 
 **Existing-install upgrades:** Fresh offline `.run` installers and the Node installer are **not in-place update mechanisms**. For a branding-only change, the preceding Persian section includes a backed-up, static-files-and-menu-only workflow. Do not update backend binaries, PKI, OpenVPN, IKEv2, databases or production nodes without inspecting current deployment state and preparing a tested rollback.
+
+**Telegram backup branding on an existing Master:** For a targeted caption-only update, use [`scripts/repair-surena-telegram-backup-branding.sh`](../scripts/repair-surena-telegram-backup-branding.sh). It patches the locally deployed sender, compiles the installed source tree, verifies panel health, and rolls back if the new backend fails. Requires a suitable Go toolchain; previous Telegram messages and archive formats remain unchanged.
 
 **Telegram support:** [@NET_SPOOF](https://t.me/NET_SPOOF)
