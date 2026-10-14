@@ -48,6 +48,7 @@ jobs:
     timeout-minutes: 100
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         os:
           - ubuntu-22.04
@@ -129,47 +130,42 @@ jobs:
           grep -q 'run_stage verification' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           (cd "$OUT_DIR" && sha256sum -c "$(basename "$asset").sha256")
 
-      - name: Upload fully-built offline artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: netspoof-${{ matrix.os }}-amd64
-          path: |
-            ${{ runner.temp }}/built/*.run
-            ${{ runner.temp }}/built/*.sha256
-          retention-days: 14
-          if-no-files-found: error
-          compression-level: 0
+      # Direct Release uploads avoid GitHub Actions artifact-storage quota.
+      - name: Upload verified offline bundle to draft GitHub Release
+        env:
+          GH_TOKEN: ${ github.token }}
+          GH_REPO: ${ github.repository }}
+          OUT_DIR: ${ runner.temp }}/built
+        run: |
+          set -Eeuo pipefail
+          tag="offline-${GITHUB_SHA:0:12}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
+              --notes "Self-contained offline installation for fresh Ubuntu 22.04/24.04 amd64 Master servers. Install the .run matching your OS after SHA256 verification. Includes SURENA Backup V2 Telegram captions."
+          fi
+          gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber
 
   release:
-    name: Publish tagged GitHub Release
+    name: Verify offline assets and publish Release
     needs: build
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: netspoof-ubuntu-*-amd64
-          merge-multiple: true
-          path: dist
-
-      - name: Verify both OS bundles and checksums
-        run: |
-          set -Eeuo pipefail
-          for os in 2204 2404; do
-            name="SURENA-offline-ubuntu${os}-amd64.run"
-            test -s "dist/$name"
-            (cd dist && sha256sum -c "$name.sha256")
-          done
-
-      - name: Publish only after both offline builds pass
+      - name: Verify both OS packages and publish
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${ github.token }}
+          GH_REPO: ${ github.repository }}
         run: |
           set -Eeuo pipefail
           tag="offline-${GITHUB_SHA:0:12}"
-          gh release create "$tag" dist/*.run dist/*.sha256 \
-            --target "$GITHUB_SHA" \
-            --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
-            --notes "Self-contained, no international network required on the destination server. Choose the asset matching Ubuntu 22.04 or 24.04 **amd64**. Single command: sudo bash SURENA-offline-ubuntu2204-amd64.run (or ubuntu2404). Includes source, compiled webpanel and CLI, dependency-complete local APT pool, PostgreSQL/OpenVPN/IKEv2 installation logic, sing-box routing engine, Python wheels and Backup v2. Intended for a **fresh systemd VPS with TUN enabled**, and HTTP/IP startup. Does not replace existing deployed installations; public TLS certificates, DNS, remote node credentials and user data are necessarily site-specific. Validate your private backup separately." \
-            --latest
+          assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+          for os in 2204 2404; do
+            name="SURENA-offline-ubuntu${os}-amd64.run"
+            printf '%s\n' "$assets" | grep -Fxq "$name"
+            printf '%s\n' "$assets" | grep -Fxq "$name.sha256"
+          done
+          gh release edit "$tag" --draft=false
+          echo "Published verified SURENA offline installers: $tag"
