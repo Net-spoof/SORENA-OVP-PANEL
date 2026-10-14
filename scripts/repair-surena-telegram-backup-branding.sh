@@ -67,6 +67,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# First ensure that compiling this source reproduces the running binary.
+# If they differ, replacing the binary could discard unrelated installed features.
+say "Verifying installed source matches the running webpanel binary"
+BUILD_FLAG=""
+(
+  cd "$BACKEND"
+  export GOTOOLCHAIN=auto
+  timeout 600 go build -o "$BACK/baseline" .
+)
+if cmp -s "$BACK/baseline" "$BIN"; then
+    say "Exact baseline match (standard build)"
+else
+    (
+      cd "$BACKEND"
+      export GOTOOLCHAIN=auto
+      timeout 600 go build -trimpath -o "$BACK/baseline-trimpath" .
+    )
+    if cmp -s "$BACK/baseline-trimpath" "$BIN"; then
+        BUILD_FLAG="-trimpath"
+        say "Exact baseline match (trimpath build)"
+    else
+        die "STOP: Installed source does not reproduce active binary. No service changes made. Contact support with Go build information; do NOT force reinstall."
+    fi
+fi
+
 python3 - "$SENDER" <<'PY'
 from pathlib import Path
 import sys
@@ -102,7 +127,7 @@ say "Testing and compiling the existing backend before any restart"
   cd "$BACKEND"
   export GOTOOLCHAIN=auto
   timeout 600 go test -run '^TestTelegramBackup' -count=1 .
-  timeout 600 go build -trimpath -o "$BACK/candidate" .
+  timeout 600 go build $BUILD_FLAG -o "$BACK/candidate" .
 )
 [[ -s "$BACK/candidate" ]] || die "Build produced no executable"
 systemctl is-active --quiet "$SERVICE" && health || die "Panel became unhealthy; abort"
