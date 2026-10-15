@@ -363,6 +363,17 @@ def guard_usage(name, limit_bytes, live_clients):
     return True, "OK"
 
 
+def guard_quota_unblock(block_reason, quota_reason):
+    """Fail closed: an administrative/manual block is never auto-cleared."""
+    allowed = {"expired", "traffic_limit", "traffic_limit_exceeded"}
+    reasons = [str(r).strip().lower() for r in (block_reason, quota_reason) if r]
+    if not reasons:
+        return False, "BLOCK_REASON_UNKNOWN"
+    if any(reason not in allowed for reason in reasons):
+        return False, "NON_QUOTA_BLOCK_REASON"
+    return True, "OK"
+
+
 def guard_metadata(name, db_limit, db_expiry, live_clients):
     row = live_clients.get(name)
     if row is None:
@@ -392,6 +403,10 @@ def guard_enforcer_self_test():
     live["a"]["global_total_bytes"] = 150
     assert guard_usage("a", 100, live)[0] is True
     assert guard_usage("a", 151, live)[0] is False
+    assert guard_quota_unblock("expired", "expired")[0] is True
+    assert guard_quota_unblock(None, "traffic_limit")[0] is True
+    assert guard_quota_unblock("manual", "traffic_limit")[0] is False
+    assert guard_quota_unblock(None, None)[0] is False
     print("guarded_enforcer_self_test = PASS")
 
 
@@ -542,6 +557,8 @@ with conn.cursor() as cur:
 
         if guarded:
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
+            if allowed:
+                allowed, why = guard_quota_unblock(block_reason, quota_reason)
             if not allowed:
                 print("GUARDED_SKIP_UNBLOCK", name, why)
                 guarded_skipped += 1
