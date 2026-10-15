@@ -349,6 +349,10 @@ def safe_b64(data):
     ).rstrip(b"=").decode()
 
 
+def min_api_client_count(existing_count):
+    return max(1, (existing_count * 3) // 4) if existing_count else 0
+
+
 def load_live_panel_clients():
     """Fail closed unless the canonical local API returns a usable full list."""
     env = safe_web_env()
@@ -383,8 +387,8 @@ def load_live_panel_clients():
             rows = result.get("data")
     else:
         rows = None
-    if not isinstance(rows, list) or len(rows) < 50:
-        raise RuntimeError("guarded enforcer: missing or truncated API clients")
+    if not isinstance(rows, list):
+        raise RuntimeError("guarded enforcer: missing or invalid API clients")
     clients = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -394,8 +398,18 @@ def load_live_panel_clients():
             if name in clients:
                 raise RuntimeError("guarded enforcer: duplicate API client " + name)
             clients[name] = row
-    if len(clients) < 50:
-        raise RuntimeError("guarded enforcer: insufficient canonical API clients")
+    # Empty/new installs have fewer than 50 users. Tie completeness to
+    # existing PostgreSQL state instead of a hardcoded minimum.
+    with psycopg2.connect(load_env()["IRANGATE_DB_DSN"]) as read_conn:
+        with read_conn.cursor() as read_cur:
+            read_cur.execute("SELECT COUNT(*) FROM clients")
+            existing_count = int(read_cur.fetchone()[0])
+    required = min_api_client_count(existing_count)
+    if len(clients) < required:
+        raise RuntimeError(
+            "guarded enforcer: incomplete API response "
+            + str(len(clients)) + " < " + str(required)
+        )
     print("guarded_panel_client_count =", len(clients))
     return clients
 
@@ -497,6 +511,9 @@ def guard_enforcer_self_test():
     assert guard_quota_unblock(None, "traffic_limit")[0] is True
     assert guard_quota_unblock("manual", "traffic_limit")[0] is False
     assert guard_quota_unblock(None, None)[0] is False
+    assert min_api_client_count(0) == 0
+    assert min_api_client_count(1) == 1
+    assert min_api_client_count(475) == 356
     previous = {"local": True, "ikev2": {"ok": False},
                 "nodes": [{"node": "finland", "ok": True},
                           {"node": "azerbaijan", "ok": False}]}
