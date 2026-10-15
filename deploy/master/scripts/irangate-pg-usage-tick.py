@@ -367,6 +367,7 @@ def self_test_accounting_identity():
     assert not v5_should_baseline_local(True, "ikev2", True, 11_000_000_000)
     assert v5_should_baseline_local(True, "local", True, 0)
     assert v5_should_baseline_local(True, "local", False, 0)
+    assert not v5_should_baseline_local(False, "local", False, 0)
     import os
     import tempfile
     with tempfile.TemporaryDirectory() as dirname:
@@ -754,6 +755,16 @@ with conn.cursor() as cur:
     """)
 
 if args.apply:
+    # Strict fail-closed migration: first v5 activation on a populated Master
+    # must NOT increase anyone's historical usage, even if a node/SA suddenly
+    # reports a fresh counter between dry-run and the actual commit.
+    # The whole transaction is rolled back before any DB write is committed.
+    if local_v5_migration and added_total != 0:
+        conn.rollback()
+        conn.close()
+        raise SystemExit(
+            "V5_MIGRATION_REFUSED_NONZERO_DELTA bytes=" + str(added_total)
+        )
     conn.commit()
 
     if migration_mode:
