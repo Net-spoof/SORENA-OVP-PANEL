@@ -6,7 +6,6 @@ import time
 import subprocess
 import urllib.request
 import urllib.parse
-import psycopg2
 import base64
 import hashlib
 import hmac
@@ -538,6 +537,7 @@ args = ap.parse_args()
 if args.self_test:
     guard_enforcer_self_test()
     raise SystemExit(0)
+import psycopg2  # production-only dependency; regression tests need no DB
 if int(bool(args.apply)) + int(bool(args.guarded_apply)) + int(bool(args.guarded_dry_run)) > 1:
     raise SystemExit("Choose only one mode")
 guarded = bool(args.guarded_apply or args.guarded_dry_run)
