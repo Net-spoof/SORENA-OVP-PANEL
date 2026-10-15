@@ -236,7 +236,7 @@ def normal_expiry(value):
     return dt.astimezone(timezone.utc)
 
 
-def safe_api_items(raw):
+def safe_api_items(raw, existing):
     if not isinstance(raw, list) or len(raw) < 50:
         raise RuntimeError("SYNC FAIL-CLOSED: API client list missing/truncated")
     seen = set()
@@ -249,16 +249,32 @@ def safe_api_items(raw):
         if not name or name in seen:
             raise RuntimeError("SYNC FAIL-CLOSED: missing or duplicate client name")
         seen.add(name)
-        if "traffic_limit_bytes" not in row:
-            raise RuntimeError("SYNC FAIL-CLOSED: quota field absent for " + name)
-        if "connection_limit" not in row:
-            raise RuntimeError("SYNC FAIL-CLOSED: connection field absent for " + name)
-        if "expires_at" not in row:
-            raise RuntimeError("SYNC FAIL-CLOSED: expiry field absent for " + name)
-        quota = safe_count(row["traffic_limit_bytes"], name + ".quota")
-        maxconn = safe_count(row["connection_limit"], name + ".max_connections")
-        maxconn = max(1, maxconn)
-        expiry = normal_expiry(row["expires_at"])
+        # SURENA's Go API can omit zero-valued quota/expiry metadata:
+        # persistCreatedClientMetadata only writes traffic_limit_bytes when >0.
+        # Such an omission is safe ONLY if the existing DB already has the
+        # equivalent default value. Otherwise fail closed (no silent reset).
+        old = existing.get(name)
+        if "traffic_limit_bytes" in row:
+            quota = safe_count(row["traffic_limit_bytes"], name + ".quota")
+        elif old is not None and int(old[0] or 0) == 0:
+            quota = 0
+        else:
+            raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing quota for " + name)
+
+        if "connection_limit" in row:
+            maxconn = max(1, safe_count(row["connection_limit"], name + ".max_connections"))
+        elif old is not None and int(old[1] or 1) == 1:
+            maxconn = 1
+        else:
+            raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing connection limit for " + name)
+
+        if "expires_at" in row:
+            expiry = normal_expiry(row["expires_at"])
+        elif old is not None and normal_expiry(old[2]) is None:
+            expiry = None
+        else:
+            raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing expiry for " + name)
+
         result.append((name, row, quota, maxconn, expiry))
     return result
 
@@ -275,12 +291,26 @@ def self_test():
     assert normal_expiry(None) is None
     assert normal_expiry("0001-01-01T00:00:00Z") is None
     assert normal_expiry("2026-10-15T12:00:00Z").year == 2026
+    # Validate omission handling separately with 50 unique legitimate records.
+    zero_rows = [{"name": "u" + str(i), "connection_limit": 1,
+                  "expires_at": None} for i in range(50)]
+    zero_db = {r["name"]: (0, 1, None) for r in zero_rows}
+    assert len(safe_api_items(zero_rows, zero_db)) == 50
+    for changed in ((10, 1, None), (0, 2, None),
+                    (0, 1, datetime(2026, 10, 20, tzinfo=timezone.utc))):
+        bad_db = dict(zero_db)
+        bad_db["u0"] = changed
+        try:
+            safe_api_items(zero_rows, bad_db)
+            raise AssertionError("ambiguous field omission was accepted")
+        except RuntimeError:
+            pass
     print("pg_sync_guarded_self_test = PASS")
 
 
 def main(apply=False):
     # Acquire a consistent API snapshot before starting any DB updates.
-    records = safe_api_items(api_clients(build_local_api_token()))
+    api_snapshot = api_clients(build_local_api_token())
     env = DB_ENV_DATA
     conn = psycopg2.connect(env["IRANGATE_DB_DSN"], connect_timeout=10)
     conn.autocommit = False
@@ -298,6 +328,7 @@ def main(apply=False):
                 FROM clients
             """)
             existing = {r[0]: r[1:] for r in cur.fetchall()}
+            records = safe_api_items(api_snapshot, existing)
             cur.execute("SELECT COALESCE(SUM(total_bytes),0) FROM traffic_totals")
             historic_usage_before = int(cur.fetchone()[0])
             # A partial API response must never make historical clients vanish
