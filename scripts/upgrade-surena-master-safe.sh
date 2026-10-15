@@ -75,7 +75,7 @@ for tool in irangate-pg-usage-tick.py irangate-local-status-snapshot.py irangate
     python3 "$SRC/deploy/master/scripts/$tool" --self-test
 done
 log "Compiling SURENA Master and CLI without installing them"
-(cd "$SRC/webpanel/backend" && go test -run '^(TestTelegramBackup|TestBackupImport|TestCanonicalTrafficQuotaBytes)' -count=1 . && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/webpanel" .)
+(cd "$SRC/webpanel/backend" && go test -count=1 ./... && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/webpanel" .)
 (cd "$SRC" && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/cli" ./main.go)
 bash -n "$SRC/scripts/ovp-panel"
 log "Current then proposed webpanel SHA256:"
