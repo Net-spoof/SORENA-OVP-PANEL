@@ -192,13 +192,19 @@ def counter_epoch_key(source, x, session):
         ).strip()
         seed = stable_session_id or connected_since or session or "unknown_session"
     else:
-        # Without connected_since, a NAT-port change is not a proven new
-        # session. Stabilize on public IP + VPN IP and reconcile old rows.
-        if not connected_since:
-            parts = ("missing-connected-since", peer_ip(real_address),
-                     str(x.get("virtual_ip") or x.get("virtual_address") or ""))
+        # A NAT port is not a session identity. OpenVPN v2/v3 Client ID and
+        # Connected Since identify a stable per-daemon connection; the status
+        # file also scopes IDs across different local OpenVPN listeners.
+        # For v1/missing time, fall back to public IP + VPN IP, never port.
+        status_file = str(x.get("status_file") or "")
+        vpn_ip = str(x.get("virtual_ip") or x.get("virtual_address") or "")
+        cid = str(x.get("client_id") or x.get("peer_id") or "").strip()
+        if connected_since:
+            parts = ("local", status_file, connected_since,
+                     cid or peer_ip(real_address), vpn_ip)
         else:
-            parts = (connected_since, real_address)
+            parts = ("missing-connected-since", status_file,
+                     peer_ip(real_address), vpn_ip)
         seed = "\x1f".join(parts) if any(parts) else session
 
     digest = hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:24]
@@ -295,6 +301,13 @@ def self_test_accounting_identity():
     no_time_1 = {"real_address": "1.2.3.4:12345", "virtual_ip": "10.8.0.7"}
     no_time_2 = {"real_address": "1.2.3.4:54321", "virtual_ip": "10.8.0.7"}
     assert counter_epoch_key("local", no_time_1, "a") == counter_epoch_key("local", no_time_2, "b")
+    with_time_1 = {"real_address": "1.2.3.4:12345", "virtual_ip": "10.8.0.7",
+                   "connected_since": "2026-10-07T11:00:00Z", "client_id": "10",
+                   "status_file": "/etc/openvpn/status-a.log"}
+    with_time_2 = dict(with_time_1, real_address="1.2.3.4:55555")
+    assert counter_epoch_key("local", with_time_1, "a") == counter_epoch_key("local", with_time_2, "b")
+    with_time_3 = dict(with_time_1, client_id="11")
+    assert counter_epoch_key("local", with_time_1, "a") != counter_epoch_key("local", with_time_3, "b")
     assert peer_ip("[2001:db8::1]:54321") == "2001:db8::1"
     assert likely_replayed_local_counter(11_100_000_000, 11_090_000_000)
     assert not likely_replayed_local_counter(30_000, 11_090_000_000)
