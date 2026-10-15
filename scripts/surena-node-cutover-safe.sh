@@ -118,6 +118,8 @@ db=psycopg2.connect(env["IRANGATE_DB_DSN"],connect_timeout=10)
 db.autocommit=False
 try:
     with db.cursor() as cur:
+        cur.execute("SELECT COALESCE(sum(total_bytes),0) FROM traffic_totals")
+        aggregate_before=int(cur.fetchone()[0])
         seen=set()
         for r in rows:
             src=str(r.get("node_id") or "").strip()
@@ -150,6 +152,10 @@ try:
                   virtual_ip=EXCLUDED.virtual_ip,
                   updated_at=now()
             """,(src,name,fp,rx,tx,total,r.get("real_address"),r.get("virtual_ip")))
+        cur.execute("SELECT COALESCE(sum(total_bytes),0) FROM traffic_totals")
+        aggregate_after=int(cur.fetchone()[0])
+        if aggregate_after != aggregate_before:
+            raise RuntimeError("Traffic totals changed during ledger seeding; rolling back")
     db.commit()
     print("PG_NODE_LEDGERS_BASELINED=",len(rows))
     print("PG_TRAFFIC_TOTALS_MODIFIED=NO")
