@@ -279,6 +279,21 @@ def safe_api_items(raw, existing):
     return result
 
 
+def retain_optional_metadata(row, old):
+    """old is r[1:] for SELECT quota, max_conn, expiry, token, url, nodes, cipher, ..."""
+    old_token = old[3] if old else None
+    old_url = old[4] if old else None
+    old_nodes = old[5] if old else None
+    old_cipher = old[6] if old else None
+    token = row.get("subscription_token") or old_token
+    url = row.get("subscription_url") or old_url
+    nodes = row.get("nodes")
+    if not isinstance(nodes, (dict, list)) or (not nodes and old_nodes):
+        nodes = old_nodes if old_nodes is not None else []
+    cipher = row.get("cipher") or old_cipher
+    return token, url, nodes, cipher
+
+
 def self_test():
     assert safe_count("1000000000000", "quota") == 1000000000000
     for v in (None, "", "-1", "nan", "inf", "100.5", True):
@@ -296,15 +311,50 @@ def self_test():
                   "expires_at": None} for i in range(50)]
     zero_db = {r["name"]: (0, 1, None) for r in zero_rows}
     assert len(safe_api_items(zero_rows, zero_db)) == 50
-    for changed in ((10, 1, None), (0, 2, None),
-                    (0, 1, datetime(2026, 10, 20, tzinfo=timezone.utc))):
+    # Each test must actually OMIT the corresponding API field. Otherwise
+    # its explicit API value should validly override an older DB value.
+    for field, changed in (
+        ("traffic_limit_bytes", (10, 1, None)),
+        ("connection_limit", (0, 2, None)),
+        ("expires_at", (0, 1, datetime(2026, 10, 20, tzinfo=timezone.utc))),
+    ):
+        bad_rows = [dict(r) for r in zero_rows]
+        bad_rows[0].pop(field, None)
         bad_db = dict(zero_db)
         bad_db["u0"] = changed
         try:
-            safe_api_items(zero_rows, bad_db)
-            raise AssertionError("ambiguous field omission was accepted")
+            safe_api_items(bad_rows, bad_db)
         except RuntimeError:
             pass
+        else:
+            raise AssertionError("ambiguous API omission was accepted: " + field)
+
+    # Regression: API explicitly setting a field may intentionally change
+    # the old database value; omission alone must never do that.
+    changed_db = dict(zero_db)
+    changed_db["u0"] = (10, 2, datetime(2026, 10, 20, tzinfo=timezone.utc))
+    explicit_rows = [dict(r) for r in zero_rows]
+    explicit_rows[0].update({
+        "traffic_limit_bytes": 25,
+        "connection_limit": 1,
+        "expires_at": None,
+    })
+    assert safe_api_items(explicit_rows, changed_db)[0][2:4] == (25, 1)
+
+    # Regression: optional database columns follow exact SELECT field order.
+    sample_old = (0, 1, None, "prior-token", "prior-url",
+                  ["finland"], "AES-256-GCM", None, None, None)
+    retained = retain_optional_metadata({}, sample_old)
+    assert retained == ("prior-token", "prior-url",
+                        ["finland"], "AES-256-GCM")
+    assert retain_optional_metadata({
+        "subscription_token": "new-token",
+        "subscription_url": "new-url",
+        "nodes": ["azerbaijan"],
+        "cipher": "AES-128-GCM",
+    }, sample_old) == (
+        "new-token", "new-url", ["azerbaijan"], "AES-128-GCM"
+    )
     print("pg_sync_guarded_self_test = PASS")
 
 
@@ -368,16 +418,7 @@ def main(apply=False):
 
                 # Missing optional fields must not wipe subscription credentials
                 # or node assignments that already exist in PostgreSQL.
-                existing_token = old[4] if old else None
-                existing_url = old[5] if old else None
-                existing_nodes = old[6] if old else None
-                existing_cipher = old[7] if old else None
-                token = row.get("subscription_token") or existing_token
-                url = row.get("subscription_url") or existing_url
-                nodes = row.get("nodes")
-                if not isinstance(nodes, (dict, list)):
-                    nodes = existing_nodes if existing_nodes is not None else []
-                cipher = row.get("cipher") or existing_cipher
+                token, url, nodes, cipher = retain_optional_metadata(row, old)
 
                 total = to_int(row.get("global_total_bytes"))
                 if total <= 0:
