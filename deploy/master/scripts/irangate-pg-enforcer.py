@@ -827,7 +827,7 @@ with conn.cursor() as cur:
             retry_outstanding += int(bool(backend_retry_targets(new_results, configured_nodes)))
 
     print()
-    print("===== connection limit violations =====
+    print("===== connection limit violations =====")
 
     cur.execute("""
         SELECT
