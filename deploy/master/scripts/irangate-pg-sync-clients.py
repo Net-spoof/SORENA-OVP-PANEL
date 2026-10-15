@@ -237,8 +237,10 @@ def normal_expiry(value):
 
 
 def safe_api_items(raw, existing):
-    if not isinstance(raw, list) or len(raw) < 50:
-        raise RuntimeError("SYNC FAIL-CLOSED: API client list missing/truncated")
+    if not isinstance(raw, list):
+        raise RuntimeError("SYNC FAIL-CLOSED: API client list missing or invalid")
+    # An empty API is valid on a genuinely empty fresh installation only.
+    # With existing users, the count floor below refuses truncated snapshots.
     seen = set()
     result = []
     for row in raw:
@@ -279,6 +281,10 @@ def safe_api_items(raw, existing):
     return result
 
 
+def min_api_client_count(existing_count):
+    return max(1, (existing_count * 3) // 4) if existing_count else 0
+
+
 def retain_optional_metadata(row, old):
     """old is r[1:] for SELECT quota, max_conn, expiry, token, url, nodes, cipher, ..."""
     old_token = old[3] if old else None
@@ -311,6 +317,12 @@ def self_test():
                   "expires_at": None} for i in range(50)]
     zero_db = {r["name"]: (0, 1, None) for r in zero_rows}
     assert len(safe_api_items(zero_rows, zero_db)) == 50
+    assert safe_api_items([], {}) == []
+    assert safe_api_items([], {"old": (0, 1, None)}) == []
+    assert min_api_client_count(0) == 0
+    assert min_api_client_count(1) == 1
+    assert min_api_client_count(475) == 356
+    assert min_api_client_count(100) == 75
     # Each test must actually OMIT the corresponding API field. Otherwise
     # its explicit API value should validly override an older DB value.
     for field, changed in (
@@ -383,7 +395,7 @@ def main(apply=False):
             historic_usage_before = int(cur.fetchone()[0])
             # A partial API response must never make historical clients vanish
             # from sync consideration. There are legitimately PG-only accounts.
-            api_floor = max(50, (len(existing) * 3) // 4)
+            api_floor = min_api_client_count(len(existing))
             if len(records) < api_floor:
                 raise RuntimeError(
                     "SYNC FAIL-CLOSED: API returned "
