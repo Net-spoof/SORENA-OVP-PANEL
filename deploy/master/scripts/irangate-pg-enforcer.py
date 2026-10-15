@@ -67,7 +67,9 @@ def call_node(node, path, name):
 
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
-            r.read()
+            payload = json.loads(r.read().decode("utf-8", "replace"))
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            raise RuntimeError("node did not acknowledge successful action")
         print(f"NODE OK {node_name}: {path} {name}")
         return True, "ok"
     except Exception as e:
@@ -260,6 +262,77 @@ def block_everywhere(name):
 
     return results
 
+def backend_retry_targets(prior_results, nodes):
+    """Pure plan: redo only failed backends; successful ones are untouched."""
+    if not isinstance(prior_results, dict):
+        return []
+    targets = []
+    if prior_results.get("local") is False:
+        targets.append(("local", None))
+    ike = prior_results.get("ikev2")
+    if isinstance(ike, dict) and ike.get("ok") is False:
+        targets.append(("ikev2", None))
+    old_nodes = {
+        str(item.get("node") or ""): item
+        for item in (prior_results.get("nodes") or [])
+        if isinstance(item, dict)
+    }
+    for node in nodes:
+        if node.get("is_local"):
+            continue
+        name = str(node.get("id") or node.get("name") or "")
+        old = old_nodes.get(name)
+        if old is not None and old.get("ok") is False:
+            targets.append(("node", node))
+    return targets
+
+
+def redo_failed_backends(name, action, prior, nodes):
+    """Keep successful backend acknowledgments and repair failed ones."""
+    if action not in ("block", "unblock"):
+        raise ValueError("invalid backend action")
+    updated = json.loads(json.dumps(prior))
+    targets = backend_retry_targets(updated, nodes)
+    for kind, node in targets:
+        if kind == "local":
+            try:
+                updated["local"] = (
+                    local_block(name) if action == "block" else local_unblock(name)
+                )
+            except Exception as exc:
+                print("RETRY_LOCAL_FAIL", name, type(exc).__name__, str(exc))
+                updated["local"] = False
+        elif kind == "ikev2":
+            try:
+                ok, msg = (
+                    ikev2_block(name) if action == "block" else ikev2_unblock(name)
+                )
+            except Exception as exc:
+                ok, msg = False, str(exc)
+            updated["ikev2"] = {"ok": bool(ok), "message": str(msg)[:500]}
+        else:
+            node_name = str(node.get("id") or node.get("name") or "")
+            endpoint = "/block-client" if action == "block" else "/unblock-client"
+            ok, msg = call_node(node, endpoint, name)
+            for item in (updated.get("nodes") or []):
+                if isinstance(item, dict) and str(item.get("node") or "") == node_name:
+                    item.update({"ok": bool(ok), "message": str(msg)[:500]})
+                    break
+    return updated, len(targets)
+
+
+def load_db_details(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
 def safe_web_env():
     data = {}
     for raw in WEBPANEL_ENV.read_text().splitlines():
@@ -424,6 +497,18 @@ def guard_enforcer_self_test():
     assert guard_quota_unblock(None, "traffic_limit")[0] is True
     assert guard_quota_unblock("manual", "traffic_limit")[0] is False
     assert guard_quota_unblock(None, None)[0] is False
+    previous = {"local": True, "ikev2": {"ok": False},
+                "nodes": [{"node": "finland", "ok": True},
+                          {"node": "azerbaijan", "ok": False}]}
+    catalog = [{"id": "finland"}, {"id": "azerbaijan"}]
+    plan = backend_retry_targets(previous, catalog)
+    assert [(k, None if n is None else n["id"]) for k, n in plan] == [
+        ("ikev2", None), ("node", "azerbaijan")
+    ]
+    assert backend_retry_targets({"local": True, "ikev2": {"ok": True},
+                                  "nodes": [{"node": "finland", "ok": True}]},
+                                 catalog) == []
+    assert backend_retry_targets({}, catalog) == []
     print("guarded_enforcer_self_test = PASS")
 
 
@@ -450,6 +535,9 @@ applied_guarded_actions = 0
 guarded_eligible_blocks = 0
 guarded_eligible_unblocks = 0
 guarded_skipped = 0
+retry_attempts = 0
+retry_backends = 0
+retry_outstanding = 0
 
 env = load_env()
 conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
@@ -627,7 +715,119 @@ with conn.cursor() as cur:
                 applied_guarded_actions += 1
 
     print()
-    print("===== connection limit violations =====")
+    print("===== retry failed quota backends =====")
+    # A previous run might have changed the PG blocked flag while a remote
+    # node API failed. Do not repeat successful actions or kill sessions twice.
+    cur.execute("""
+        SELECT c.client_name, c.traffic_limit_bytes, c.expire_at,
+               c.block_reason, qb.reason, qb.details, e.reason
+        FROM clients c
+        JOIN quota_blocks qb ON qb.client_name = c.client_name
+        LEFT JOIN enforcement_candidates e ON e.client_name = c.client_name
+        WHERE c.is_blocked = true AND qb.blocked = true
+          AND qb.details ? 'block_results'
+        ORDER BY qb.updated_at ASC
+        LIMIT 1000
+    """)
+    retry_block_rows = cur.fetchall()
+    configured_nodes = get_nodes()
+    for name, limitb, expiry, block_reason, qb_reason, details_raw, current_reason in retry_block_rows:
+        details = load_db_details(details_raw)
+        prior = details.get("block_results")
+        targets = backend_retry_targets(prior, configured_nodes)
+        if not targets:
+            continue
+        if current_reason is None:
+            print("RETRY_BLOCK_SKIP", name, "NOT_OVER_LIMIT_NOW")
+            continue
+        ok, why = guard_quota_unblock(block_reason, qb_reason)
+        if guarded and ok:
+            ok, why = guard_metadata(name, limitb, expiry, panel_clients)
+        if guarded and ok and current_reason == "traffic_limit":
+            ok, why = guard_usage(name, limitb, panel_clients)
+        if guarded and not ok:
+            print("RETRY_BLOCK_SKIP", name, why)
+            continue
+        if guarded and applied_guarded_actions >= max_guarded_actions:
+            print("RETRY_BLOCK_DEFER", name, "PER_RUN_LIMIT")
+            continue
+        print("RETRY_BLOCK_ELIGIBLE", name, "targets=", len(targets))
+        if args.guarded_apply:
+            new_results, attempts = redo_failed_backends(name, "block", prior, configured_nodes)
+            details["block_results"] = new_results
+            cur.execute("""
+                UPDATE quota_blocks SET details=%s::jsonb, updated_at=now()
+                WHERE client_name=%s AND blocked=true
+            """, (json.dumps(details), name))
+            cur.execute("""
+                INSERT INTO enforcement_events(client_name,event_type,reason,details)
+                VALUES (%s,'db_block_retry',%s,%s::jsonb)
+            """, (name, qb_reason, json.dumps({
+                "retried_targets": attempts,
+                "pending_after": len(backend_retry_targets(new_results, configured_nodes)),
+            })))
+            applied_guarded_actions += 1
+            retry_attempts += 1
+            retry_backends += attempts
+            retry_outstanding += int(bool(backend_retry_targets(new_results, configured_nodes)))
+
+    print()
+    print("===== retry failed quota unblocks =====")
+    cur.execute("""
+        SELECT c.client_name, c.traffic_limit_bytes, c.expire_at,
+               c.block_reason, qb.details, e.reason
+        FROM clients c
+        JOIN quota_blocks qb ON qb.client_name = c.client_name
+        LEFT JOIN enforcement_candidates e ON e.client_name = c.client_name
+        WHERE c.is_enabled = true AND c.is_blocked = false
+          AND qb.blocked = false AND qb.details ? 'unblock_results'
+        ORDER BY qb.updated_at ASC
+        LIMIT 1000
+    """)
+    retry_unblock_rows = cur.fetchall()
+    for name, limitb, expiry, current_block_reason, details_raw, current_reason in retry_unblock_rows:
+        details = load_db_details(details_raw)
+        prior = details.get("unblock_results")
+        targets = backend_retry_targets(prior, configured_nodes)
+        if not targets:
+            continue
+        if current_block_reason is not None or current_reason is not None:
+            print("RETRY_UNBLOCK_SKIP", name, "CURRENT_BLOCK_OR_LIMIT")
+            continue
+        ok, why = guard_quota_unblock(
+            details.get("previous_block_reason"),
+            details.get("previous_quota_reason"),
+        )
+        if guarded and ok:
+            ok, why = guard_metadata(name, limitb, expiry, panel_clients)
+        if guarded and not ok:
+            print("RETRY_UNBLOCK_SKIP", name, why)
+            continue
+        if guarded and applied_guarded_actions >= max_guarded_actions:
+            print("RETRY_UNBLOCK_DEFER", name, "PER_RUN_LIMIT")
+            continue
+        print("RETRY_UNBLOCK_ELIGIBLE", name, "targets=", len(targets))
+        if args.guarded_apply:
+            new_results, attempts = redo_failed_backends(name, "unblock", prior, configured_nodes)
+            details["unblock_results"] = new_results
+            cur.execute("""
+                UPDATE quota_blocks SET details=%s::jsonb, updated_at=now()
+                WHERE client_name=%s AND blocked=false
+            """, (json.dumps(details), name))
+            cur.execute("""
+                INSERT INTO enforcement_events(client_name,event_type,reason,details)
+                VALUES (%s,'db_unblock_retry','quota_cleared',%s::jsonb)
+            """, (name, json.dumps({
+                "retried_targets": attempts,
+                "pending_after": len(backend_retry_targets(new_results, configured_nodes)),
+            })))
+            applied_guarded_actions += 1
+            retry_attempts += 1
+            retry_backends += attempts
+            retry_outstanding += int(bool(backend_retry_targets(new_results, configured_nodes)))
+
+    print()
+    print("===== connection limit violations =====
 
     cur.execute("""
         SELECT
@@ -756,3 +956,6 @@ if guarded:
     print("guarded_eligible_blocks =", guarded_eligible_blocks)
     print("guarded_eligible_unblocks =", guarded_eligible_unblocks)
     print("guarded_skipped =", guarded_skipped)
+    print("backend_retry_attempts =", retry_attempts)
+    print("backend_retry_targets =", retry_backends)
+    print("backend_retry_outstanding =", retry_outstanding)
