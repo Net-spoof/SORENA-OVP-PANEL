@@ -4,4 +4,4 @@ After=irangate-webpanel.service postgresql.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/irangate-pg-sync-clients.py
+ExecStart=/usr/local/bin/irangate-pg-sync-clients.py --apply
