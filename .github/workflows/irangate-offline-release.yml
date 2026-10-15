@@ -76,6 +76,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev apt-utils rsync python3-pip gh
 
+      - name: Run full backend Go regression suite before publishing
+        run: |
+          cd webpanel/backend
+          go test -count=1 ./...
+
       - name: Build offline bundle and simulate offline APT dependencies
         env:
           GH_TOKEN: ${{ github.token }}
