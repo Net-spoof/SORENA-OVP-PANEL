@@ -55,6 +55,48 @@ curl -fLsS --config "$AUTH" -H "Accept: application/vnd.github.raw+json" \
   -o "$WORK/node.py"
 python3 -m py_compile "$WORK/node.py"
 python3 "$WORK/node.py" --self-test
+echo "===== PRECHECK LIVE NODE USERS AGAINST MASTER DB (READ ONLY) ====="
+python3 - "$WORK/node.py" <<'PY'
+import runpy, sys
+from pathlib import Path
+import psycopg2
+m=runpy.run_path(sys.argv[1], run_name="surena_node_probe")
+nodes=m["nodes_list"](m["load_json"](m["NODES_FILE"],[]))
+names=set()
+checked=0
+for node in nodes:
+    if node.get("is_local") or not node.get("enabled",True):
+        continue
+    if not node.get("agent_url") or not node.get("token"):
+        continue
+    checked+=1
+    clients=m["fetch_usage"](node)
+    for row in clients:
+        if isinstance(row,dict):
+            name=str(row.get("client_name") or row.get("common_name") or "").strip()
+            if name and name.upper()!="UNDEF":
+                names.add(name)
+if checked==0 or not names:
+    raise SystemExit("PRECHECK STOP: no usable live nodes/clients")
+env={}
+for line in Path("/etc/irangate-db.env").read_text().splitlines():
+    if "=" in line and not line.lstrip().startswith("#"):
+        k,v=line.split("=",1);env[k.strip()]=v.strip()
+db=psycopg2.connect(env["IRANGATE_DB_DSN"],connect_timeout=10)
+db.set_session(readonly=True, autocommit=True)
+with db.cursor() as cur:
+    cur.execute("SELECT client_name FROM clients WHERE client_name = ANY(%s)",(sorted(names),))
+    present={r[0] for r in cur.fetchall()}
+db.close()
+missing=sorted(names-present)
+print("LIVE_NODES=",checked,"UNIQUE_LIVE_NODE_USERS=",len(names))
+print("UNREGISTERED_NODE_USERS=",len(missing))
+if missing:
+    print("PRECHECK STOP: node clients missing in Master PostgreSQL")
+    print("MISSING_CLIENTS=",",".join(missing[:25]))
+    raise SystemExit(1)
+print("MASTER_NODE_CLIENT_PREFLIGHT=PASS")
+PY
 echo "===== BACKUP SCRIPT, NODE STATE, POSTGRES ====="
 cp -a "$SRC" "$BACK/original.py"
 cp -a "$STATE" "$BACK/old_state.json"
