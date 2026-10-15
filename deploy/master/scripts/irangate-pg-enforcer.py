@@ -398,17 +398,21 @@ def guard_enforcer_self_test():
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
 ap.add_argument("--guarded-apply", action="store_true")
+ap.add_argument("--guarded-dry-run", action="store_true")
 ap.add_argument("--self-test", action="store_true")
 args = ap.parse_args()
 if args.self_test:
     guard_enforcer_self_test()
     raise SystemExit(0)
-if args.apply and args.guarded_apply:
-    raise SystemExit("Choose only one apply mode")
+if int(bool(args.apply)) + int(bool(args.guarded_apply)) + int(bool(args.guarded_dry_run)) > 1:
+    raise SystemExit("Choose only one mode")
+guarded = bool(args.guarded_apply or args.guarded_dry_run)
 apply_changes = bool(args.apply or args.guarded_apply)
-mode = "GUARDED-APPLY" if args.guarded_apply else ("APPLY" if args.apply else "DRY-RUN")
+mode = ("GUARDED-APPLY" if args.guarded_apply else
+        "GUARDED-DRY-RUN" if args.guarded_dry_run else
+        "APPLY" if args.apply else "DRY-RUN")
 print("mode =", mode)
-panel_clients = load_live_panel_clients() if args.guarded_apply else {}
+panel_clients = load_live_panel_clients() if guarded else {}
 max_guarded_actions = 3
 applied_guarded_actions = 0
 
@@ -440,7 +444,7 @@ with conn.cursor() as cur:
         # Already-blocked clients must not be killed or reconciled repeatedly.
         print(f"{action} name={name} reason={reason} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
-        if args.guarded_apply and not is_blocked:
+        if guarded and not is_blocked:
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
             if allowed and reason == "traffic_limit":
                 allowed, why = guard_usage(name, limitb, panel_clients)
@@ -529,7 +533,7 @@ with conn.cursor() as cur:
     for name, used, limitb, expire_at, block_reason, quota_reason in unblock_rows:
         print(f"WOULD_UNBLOCK name={name} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
-        if args.guarded_apply:
+        if guarded:
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
             if not allowed:
                 print("GUARDED_SKIP_UNBLOCK", name, why)
@@ -606,7 +610,7 @@ with conn.cursor() as cur:
         extra = int(active_conn) - int(max_conn)
         print(f"WOULD_KILL_OLD_SESSIONS name={name} active={active_conn} limit={max_conn} extra={extra} sessions={sessions}")
 
-        if args.guarded_apply:
+        if guarded:
             print("GUARDED_SKIP_CONNECTION_KILL", name, "LIVE_CONNECTION_PROTECTED")
             continue
 
