@@ -17,6 +17,7 @@ NODES_FILE = Path("/opt/irangate/webpanel/nodes.json")
 TRAFFIC_DIR = Path("/opt/irangate/traffic")
 OUT_FILE = TRAFFIC_DIR / "node_current_stats.json"
 STATE_FILE = TRAFFIC_DIR / "node_usage_state.json"
+NODE_CUTOVER_MARKER = TRAFFIC_DIR / "node_usage_session_v2.marker"
 
 
 def load_json(path, default):
@@ -85,7 +86,7 @@ def stable_session_id(row):
         # Without an epoch, a NAT port change is not a new session.
         seed = "unknown-epoch|" + peer_ip(remote) + "|" + vpn
     else:
-        seed = since + "|" + remote + "|" + vpn
+        seed = since + "|" + peer_ip(remote) + "|" + vpn
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
 
 
@@ -206,6 +207,39 @@ def process_node_clients(state, node_id, node_name, clients, now_iso, now_ts):
     return output
 
 
+def baseline_node_clients(state, node_id, clients, now_ts):
+    """Baseline ALL active node sessions without charging historical counters.
+
+    Never mutate state['totals'] here; it is a durable running aggregate
+    and must be kept byte-for-byte across the cutover.
+    """
+    last = state.setdefault("last", {})
+    sessions = state.setdefault("sessions", {})
+    for key in list(sessions):
+        if key.startswith(node_id + ":"):
+            del sessions[key]
+    grouped = defaultdict(list)
+    for row in clients:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("client_name") or row.get("common_name") or "").strip()
+        if name and name.upper() != "UNDEF":
+            grouped[name].append(row)
+    for name, rows in grouped.items():
+        key = node_id + ":" + name
+        rx_sum = tx_sum = 0
+        for row in rows:
+            rx, tx = nonnegative(row.get("bytes_received")), nonnegative(row.get("bytes_sent"))
+            rx_sum += rx
+            tx_sum += tx
+            sessions[key + ":" + stable_session_id(row)] = {
+                "rx": rx, "tx": tx,
+                "real_address": row.get("real_address") or "",
+                "last_seen": now_ts,
+            }
+        last[key] = {"rx": rx_sum, "tx": tx_sum}
+
+
 def self_test():
     now = "2026-10-15T10:00:00Z"
     state = {"last": {}, "totals": {}, "sessions": {}}
@@ -227,32 +261,61 @@ def self_test():
     z = process_node_clients(legacy, "fi", "Finland", [row(11_100_000_000, 22)], now, 6)
     assert z[0]["total_bytes"] == 15_100_000_000
     assert stable_session_id(row(5, 22, since="")) == stable_session_id(row(5, 99, since=""))
+    assert stable_session_id(row(5, 22, since="1000")) == stable_session_id(row(5, 99, since="1000"))
+    cutover_state = {"last": {"fi:alice": {"rx": 0, "tx": 300}},
+                     "totals": {"fi:alice": {"rx": 500, "tx": 900}},
+                     "sessions": {}}
+    original_total = dict(cutover_state["totals"]["fi:alice"])
+    baseline_node_clients(cutover_state, "fi", [row(700, 12)], 100)
+    assert cutover_state["totals"]["fi:alice"] == original_total
+    out = process_node_clients(cutover_state, "fi", "Finland",
+                               [row(710, 13)], now, 101)
+    assert out[0]["total_bytes"] == 1410
+    assert cutover_state["totals"]["fi:alice"] == {"rx": 500, "tx": 910}
     print("node_usage_sync_self_test = PASS")
 
 
-def main():
+def main(baseline=False):
+    if baseline and NODE_CUTOVER_MARKER.exists():
+        raise RuntimeError("Node session baseline already initialized; refusing second cutover")
     nodes = nodes_list(load_json(NODES_FILE, []))
     state = load_json(STATE_FILE, {"last": {}, "totals": {}, "sessions": {}})
     if not isinstance(state, dict):
         raise ValueError("invalid node state")
+    for field in ("last", "totals", "sessions"):
+        if not isinstance(state.get(field, {}), dict):
+            raise ValueError("invalid node state field " + field)
     out = []
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     now_ts = int(time.time())
+    results = []
+    candidates = 0
     for node in nodes:
         if node.get("is_local") or not node.get("enabled", True):
             continue
         if not node.get("agent_url") or not node.get("token"):
             continue
+        candidates += 1
         node_id = str(node.get("id") or node.get("name") or node.get("agent_url"))
         try:
             clients = fetch_usage(node)
         except Exception as e:
+            if baseline:
+                raise RuntimeError("Baseline refused because node " + node_id
+                                   + " did not provide a valid usage response") from e
             print(node_id, "fetch failed:", type(e).__name__, e)
             continue
-        out.extend(process_node_clients(
-            state, node_id, node.get("name", node_id),
-            clients, now_iso, now_ts,
-        ))
+        results.append((node_id, node.get("name", node_id), clients))
+    if baseline and (candidates == 0 or len(results) != candidates):
+        raise RuntimeError("Baseline refused: incomplete node inventory")
+
+    if baseline:
+        for node_id, _node_name, clients in results:
+            baseline_node_clients(state, node_id, clients, now_ts)
+
+    for node_id, node_name, clients in results:
+        out.extend(process_node_clients(state, node_id, node_name,
+                                        clients, now_iso, now_ts))
     # Retain inactive session ledgers only 30 days, never wipe cumulative totals.
     sessions = state.get("sessions", {})
     if isinstance(sessions, dict):
@@ -261,10 +324,20 @@ def main():
                 del sessions[key]
     save_json(STATE_FILE, state)
     save_json(OUT_FILE, out)
+    if baseline:
+        NODE_CUTOVER_MARKER.write_text(
+            json.dumps({"version": 2, "timestamp": now_iso,
+                        "nodes": [name for name, _, _ in results],
+                        "policy": "live session counters baseline; preserve prior totals"},
+                       ensure_ascii=False, indent=2) + "\n"
+        )
+        print("NODE_BASELINE_COMPLETE", "nodes=", len(results),
+              "live_sessions=", sum(len(rows) for _, _, rows in results),
+              "retained_totals=", len(state.get("totals", {})))
 
 
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
     else:
-        main()
+        main(baseline="--baseline" in sys.argv)
