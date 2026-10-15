@@ -49,12 +49,17 @@ def load_fresh_node_json(path, max_age_seconds=90):
 
 
 def v5_should_baseline_local(is_migration, source, historical_local, existing_total):
-    """Avoid replaying an older local counter during v5 identity migration.
+    """Baseline every currently observed local connection on the v5 cutover.
 
-    A manual quota reset may legitimately zero the aggregate while retaining
-    the historical local source ledger. Zero aggregate is not a new session.
+    Existing OpenVPN session counters can reflect unbilled bytes, already-billed
+    bytes, a manually reset account, or the same bytes under a former source ID.
+    These possibilities cannot be distinguished reliably on first observation.
+    In a live migration, skip the entire first sample for ALL local sessions,
+    establish durable per-session baselines, and charge only subsequent deltas.
+    The historical aggregate is never modified. Newly created sessions after
+    the v5 marker is written follow the usual first-sample policy.
     """
-    return bool(is_migration and source == "local" and historical_local)
+    return bool(is_migration and source == "local")
 
 
 def write_accounting_v5_marker():
@@ -358,9 +363,10 @@ def self_test_accounting_identity():
     assert not likely_replayed_local_counter(50_000_000_000, 11_090_000_000)
     assert v5_should_baseline_local(True, "local", True, 11_000_000_000)
     assert not v5_should_baseline_local(False, "local", True, 11_000_000_000)
-    assert not v5_should_baseline_local(True, "local", False, 11_000_000_000)
+    assert v5_should_baseline_local(True, "local", False, 11_000_000_000)
     assert not v5_should_baseline_local(True, "ikev2", True, 11_000_000_000)
     assert v5_should_baseline_local(True, "local", True, 0)
+    assert v5_should_baseline_local(True, "local", False, 0)
     import os
     import tempfile
     with tempfile.TemporaryDirectory() as dirname:
@@ -579,11 +585,11 @@ with conn.cursor() as cur:
                 """, (name, accounting_source))
                 local_v5_replay = bool(cur.fetchone()[0])
 
-            # Rollout safety: an upgraded database may already contain an
-            # imported aggregate total while having no per-source ledger row.
-            # Baseline only that ambiguous first observation. Fresh clients
-            # (aggregate=0) and all future sources after the marker is created
-            # charge their first sample exactly once.
+            # At this one-time v5 deployment, ALL active local streams are
+            # ambiguous: old source identity changes, prior quota resets, and
+            # long-paused timers can make their first counters replay traffic.
+            # Baseline every new local stream now; charge subsequent deltas.
+            # Post-migration sessions follow normal accounting policy.
             if source == "ikev2" and ike_session_v4_migration and ike_v4_legacy_sources_present:
                 # v3 keyed IKEv2 epochs by connected_since. v4 prefers the
                 # stable strongSwan SA identity. Baseline active SAs once so
