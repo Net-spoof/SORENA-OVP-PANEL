@@ -347,6 +347,22 @@ def safe_date(value):
         return "invalid"
 
 
+def guard_usage(name, limit_bytes, live_clients):
+    """Never disconnect for quota exhaustion unless the API also observes it."""
+    row = live_clients.get(name) or {}
+    raw = None
+    for field in ("global_total_bytes", "total_bytes", "used_bytes"):
+        if row.get(field) is not None:
+            raw = row.get(field)
+            break
+    if raw is None:
+        return False, "API_USAGE_NOT_AVAILABLE"
+    api_total = safe_int(raw)
+    if api_total is None or api_total < int(limit_bytes or 0):
+        return False, "API_USAGE_BELOW_QUOTA"
+    return True, "OK"
+
+
 def guard_metadata(name, db_limit, db_expiry, live_clients):
     row = live_clients.get(name)
     if row is None:
@@ -372,6 +388,10 @@ def guard_enforcer_self_test():
     assert guard_metadata("a", 99, now, live)[0] is False
     assert guard_metadata("missing", 100, now, live)[0] is False
     assert guard_metadata("a", 100, None, live)[0] is False
+    assert guard_usage("a", 100, live)[0] is False
+    live["a"]["global_total_bytes"] = 150
+    assert guard_usage("a", 100, live)[0] is True
+    assert guard_usage("a", 151, live)[0] is False
     print("guarded_enforcer_self_test = PASS")
 
 
@@ -422,6 +442,10 @@ with conn.cursor() as cur:
 
         if args.guarded_apply and not is_blocked:
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
+            if allowed and reason == "traffic_limit":
+                allowed, why = guard_usage(name, limitb, panel_clients)
+            if allowed and panel_clients[name].get("connected") in (True, "true", "True", "1", 1):
+                allowed, why = False, "API_CONNECTED_PROTECTED"
             if allowed:
                 cur.execute(
                     "SELECT count(*) FROM active_sessions "
