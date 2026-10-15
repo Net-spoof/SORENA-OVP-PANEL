@@ -10,7 +10,6 @@ from decimal import Decimal, InvalidOperation
 import urllib.error
 import urllib.request
 from pathlib import Path
-import psycopg2
 from datetime import datetime, timezone
 
 DB_ENV = Path("/etc/irangate-db.env")
@@ -424,6 +423,7 @@ def self_test():
 
 
 def main(apply=False):
+    import psycopg2  # production-only: self-test must not depend on DB drivers
     # Acquire a consistent API snapshot before starting any DB updates.
     api_snapshot = api_clients(build_local_api_token())
     env = DB_ENV_DATA
