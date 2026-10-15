@@ -298,6 +298,8 @@ def main(apply=False):
                 FROM clients
             """)
             existing = {r[0]: r[1:] for r in cur.fetchall()}
+            cur.execute("SELECT COALESCE(SUM(total_bytes),0) FROM traffic_totals")
+            historic_usage_before = int(cur.fetchone()[0])
             # A partial API response must never make historical clients vanish
             # from sync consideration. There are legitimately PG-only accounts.
             api_floor = max(50, (len(existing) * 3) // 4)
@@ -432,7 +434,10 @@ def main(apply=False):
 
                 # Absolute usage is owned exclusively by accounting ticks.
                 cur.execute("SELECT COALESCE(SUM(total_bytes),0) FROM traffic_totals")
-                print("historic_usage_sum_after =", int(cur.fetchone()[0]))
+                historic_usage_after = int(cur.fetchone()[0])
+                if historic_usage_after != historic_usage_before:
+                    raise RuntimeError("SYNC FAIL-CLOSED: historical traffic totals changed")
+                print("historical_usage_unchanged = PASS")
                 conn.commit()
                 print("synced_clients =", len(processed))
             else:
