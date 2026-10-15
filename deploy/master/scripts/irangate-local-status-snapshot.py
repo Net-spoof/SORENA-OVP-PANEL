@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -120,6 +121,10 @@ def read_status_files():
             if canonical in seen_files:
                 continue
             seen_files.add(canonical)
+            if time.time() - p.stat().st_mtime > 180:
+                # A dead listener can leave a believable but stale status
+                # file. Never charge it as a newly active session.
+                continue
             text = p.read_text(errors="replace")
         except OSError:
             continue
