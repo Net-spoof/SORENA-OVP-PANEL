@@ -349,18 +349,24 @@ def safe_date(value):
 
 
 def guard_usage(name, limit_bytes, live_clients):
-    """Never disconnect for quota exhaustion unless the API also observes it."""
+    """Validate against the cross-location total, not a local session counter.
+
+    SURENA /api/clients publishes traffic_used_bytes from the global
+    PostgreSQL-backed usage mirror. total_bytes and used_bytes may be
+    local or session-only, so they cannot independently justify a
+    global-quota block or veto one by being below the quota.
+    """
     row = live_clients.get(name) or {}
     raw = None
-    for field in ("global_total_bytes", "total_bytes", "used_bytes"):
+    for field in ("traffic_used_bytes", "global_total_bytes"):
         if row.get(field) is not None:
             raw = row.get(field)
             break
     if raw is None:
-        return False, "API_USAGE_NOT_AVAILABLE"
+        return False, "API_GLOBAL_USAGE_NOT_AVAILABLE"
     api_total = safe_int(raw)
     if api_total is None or api_total < int(limit_bytes or 0):
-        return False, "API_USAGE_BELOW_QUOTA"
+        return False, "API_GLOBAL_USAGE_BELOW_QUOTA"
     return True, "OK"
 
 
@@ -405,9 +411,15 @@ def guard_enforcer_self_test():
     assert guard_metadata("a;touch/tmp/x", 100, now, live)[0] is False
     assert guard_metadata("a", 100, None, live)[0] is False
     assert guard_usage("a", 100, live)[0] is False
-    live["a"]["global_total_bytes"] = 150
+    live["a"]["total_bytes"] = 200
+    assert guard_usage("a", 100, live)[0] is False
+    live["a"]["traffic_used_bytes"] = 150
+    live["a"]["total_bytes"] = 1
     assert guard_usage("a", 100, live)[0] is True
     assert guard_usage("a", 151, live)[0] is False
+    del live["a"]["traffic_used_bytes"]
+    live["a"]["global_total_bytes"] = 150
+    assert guard_usage("a", 100, live)[0] is True
     assert guard_quota_unblock("expired", "expired")[0] is True
     assert guard_quota_unblock(None, "traffic_limit")[0] is True
     assert guard_quota_unblock("manual", "traffic_limit")[0] is False
