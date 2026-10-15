@@ -551,6 +551,20 @@ with conn.cursor() as cur:
 
         if old is None:
             first_seen += 1
+            local_v5_replay = False
+            if source == "local" and local_v5_migration and aggregate_total_before > 0:
+                # A formerly billed local session obtains a new stream ID
+                # when upgrading from the old port-based epoch identity.
+                # Do not charge the same full counter at the migration boundary.
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM traffic_sources
+                        WHERE client_name = %s
+                          AND source_id LIKE 'local@%%'
+                          AND source_id <> %s
+                    )
+                """, (name, accounting_source))
+                local_v5_replay = bool(cur.fetchone()[0])
 
             # Rollout safety: an upgraded database may already contain an
             # imported aggregate total while having no per-source ledger row.
@@ -569,6 +583,11 @@ with conn.cursor() as cur:
                 # rollout so already-accounted bytes are not charged again.
                 migration_baselines += 1
                 action = "FIRST_LOCAL_V3_BASELINE_ONLY"
+            elif v5_should_baseline_local(
+                local_v5_migration, source, local_v5_replay, aggregate_total_before
+            ):
+                migration_baselines += 1
+                action = "FIRST_LOCAL_V5_BASELINE_ONLY"
             elif migration_mode and aggregate_total_before > 0:
                 migration_baselines += 1
                 action = "FIRST_MIGRATION_BASELINE_ONLY"
@@ -726,6 +745,9 @@ if args.apply:
 
     if ike_session_v4_migration:
         write_accounting_v4_marker()
+
+    if local_v5_migration and any(x.get("_source_id") == "local" for x in items):
+        write_accounting_v5_marker()
 
     try:
         mirror = {"last": {}, "totals": {}, "blocked": {}}
