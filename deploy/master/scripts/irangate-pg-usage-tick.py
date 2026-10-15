@@ -114,6 +114,56 @@ def session_of(x):
     return "|".join(parts)
 
 
+def peer_ip(address):
+    """Normalize a remote peer address without its ephemeral NAT port."""
+    from ipaddress import ip_address
+    raw = str(address or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("[") and "]" in raw:
+        return raw[1:raw.index("]")]
+    try:
+        return str(ip_address(raw))
+    except ValueError:
+        pass
+    host, sep, port = raw.rpartition(":")
+    if sep and port.isdigit():
+        return host
+    return raw
+
+
+def likely_replayed_local_counter(new_total, previous_total):
+    """Guard a first large sample for the same client from the same peer IP."""
+    return (
+        new_total >= 1_000_000_000
+        and previous_total >= 1_000_000_000
+        and previous_total * 75 <= new_total * 100
+        and new_total * 100 <= previous_total * 150
+    )
+
+
+def local_replay_baseline(cur, client_name, real_address, total):
+    """Find a likely already-charged legacy snapshot; never rewrite history."""
+    ip = peer_ip(real_address)
+    if not ip or total < 1_000_000_000:
+        return None
+    cur.execute("""
+        SELECT total_bytes, real_address
+        FROM traffic_sources
+        WHERE client_name = %s AND source_id LIKE 'local@%%'
+          AND real_address IS NOT NULL
+          AND updated_at > now() - interval '30 days'
+        ORDER BY updated_at DESC LIMIT 1000
+    """, (client_name,))
+    candidates = [
+        int(old_total or 0)
+        for old_total, old_peer in cur.fetchall()
+        if peer_ip(old_peer) == ip
+        and likely_replayed_local_counter(total, int(old_total or 0))
+    ]
+    return max(candidates) if candidates else None
+
+
 def counter_mode(source):
     source = str(source or "").strip().lower()
     # current_stats.json contains one row per local OpenVPN session.
@@ -143,10 +193,13 @@ def counter_epoch_key(source, x, session):
         ).strip()
         seed = stable_session_id or connected_since or session or "unknown_session"
     else:
-        # OpenVPN has one row per live session. connected_since + peer address
-        # separates simultaneous sessions of the same CN and remains stable on
-        # replay of the same status snapshot.
-        parts = (connected_since, real_address)
+        # Without connected_since, a NAT-port change is not a proven new
+        # session. Stabilize on public IP + VPN IP and reconcile old rows.
+        if not connected_since:
+            parts = ("missing-connected-since", peer_ip(real_address),
+                     str(x.get("virtual_ip") or x.get("virtual_address") or ""))
+        else:
+            parts = (connected_since, real_address)
         seed = "\x1f".join(parts) if any(parts) else session
 
     digest = hashlib.sha256(seed.encode("utf-8", "replace")).hexdigest()[:24]
@@ -240,6 +293,13 @@ def self_test_accounting_identity():
     ike_key_b = counter_epoch_key("ikev2", ike_b, "same-fallback")
     assert ike_key_a != ike_key_b, (ike_key_a, ike_key_b)
     assert ike_key_a == counter_epoch_key("ikev2", dict(ike_a), "replay")
+    no_time_1 = {"real_address": "1.2.3.4:12345", "virtual_ip": "10.8.0.7"}
+    no_time_2 = {"real_address": "1.2.3.4:54321", "virtual_ip": "10.8.0.7"}
+    assert counter_epoch_key("local", no_time_1, "a") == counter_epoch_key("local", no_time_2, "b")
+    assert peer_ip("[2001:db8::1]:54321") == "2001:db8::1"
+    assert likely_replayed_local_counter(11_100_000_000, 11_090_000_000)
+    assert not likely_replayed_local_counter(30_000, 11_090_000_000)
+    assert not likely_replayed_local_counter(50_000_000_000, 11_090_000_000)
     print("accounting_identity_self_test = PASS")
 
 ap = argparse.ArgumentParser()
@@ -452,17 +512,34 @@ with conn.cursor() as cur:
                 migration_baselines += 1
                 action = "FIRST_MIGRATION_BASELINE_ONLY"
             else:
-                drx = rx
-                dtx = tx
-                dtotal = total
-                action = add_usage_delta(
-                    "FIRST_SAMPLE_ADD",
-                    drx,
-                    dtx,
-                    dtotal,
+                prior = (
+                    local_replay_baseline(cur, name, real_address, total)
+                    if source == "local" else None
                 )
-                if dtotal > 0:
-                    first_sample_added += 1
+                if prior is not None:
+                    # Existing totals are historical records and stay intact.
+                    # Charge only the unambiguously increasing portion.
+                    dtotal = max(0, total - prior)
+                    if total > 0:
+                        drx = (rx * dtotal) // total
+                        dtx = dtotal - drx
+                    action = add_usage_delta(
+                        "SUSPICIOUS_LOCAL_REPLAY_DELTA_ONLY", drx, dtx, dtotal
+                    )
+                    print(
+                        "ACCOUNTING_WARNING likely_duplicate_local_snapshot",
+                        "name=", name, "prior=", prior, "current=", total,
+                        "charged=", dtotal,
+                    )
+                else:
+                    drx = rx
+                    dtx = tx
+                    dtotal = total
+                    action = add_usage_delta(
+                        "FIRST_SAMPLE_ADD", drx, dtx, dtotal,
+                    )
+                    if dtotal > 0:
+                        first_sample_added += 1
 
         else:
             old_session, old_rx, old_tx, old_total = old
