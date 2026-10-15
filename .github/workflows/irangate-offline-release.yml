@@ -139,10 +139,23 @@ jobs:
           grep -q 'run_stage verification' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           (cd "$OUT_DIR" && sha256sum -c "$(basename "$asset").sha256")
 
+      # Store the verified files as a fallback when Release writes are restricted.
+      # Previous repository versions avoided artifacts because of storage quotas.
+      - name: Keep verified bundle as downloadable Actions artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: SURENA-offline-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/built/*.run
+            ${{ runner.temp }}/built/*.sha256
+          if-no-files-found: error
+          retention-days: 3
+
       # Direct Release uploads avoid GitHub Actions artifact-storage quota.
       - name: Upload verified offline bundle to draft GitHub Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SURENA_RELEASE_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           OUT_DIR: ${{ runner.temp }}/built
         run: |
@@ -155,7 +168,9 @@ jobs:
               --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
               --notes "Self-contained offline installation for fresh Ubuntu 22.04/24.04 amd64 Master servers. Install the .run matching your OS after SHA256 verification. Includes SURENA Backup V2 Telegram captions."
           fi
-          gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber
+          if ! gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber; then
+            echo "::warning::Release upload denied by GitHub token policy. Build verified. Configure repository secret SURENA_RELEASE_TOKEN (Contents write) to publish, or download Actions artifacts."
+          fi
 
   release:
     name: Verify offline assets and publish Release
@@ -165,11 +180,15 @@ jobs:
     steps:
       - name: Verify both OS packages and publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SURENA_RELEASE_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
           tag="offline-${GITHUB_SHA:0:12}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "::warning::Verified offline bundles could not be published as a Release (token policy). See build job artifacts."
+            exit 0
+          fi
           assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
           for os in 2204 2404; do
             name="SURENA-offline-ubuntu${os}-amd64.run"
