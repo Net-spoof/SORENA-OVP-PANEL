@@ -4,7 +4,6 @@ import argparse
 import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
-import psycopg2
 
 ENV = Path("/etc/irangate-db.env")
 LOCAL = Path("/opt/irangate/traffic/current_stats.json")
@@ -311,6 +310,8 @@ args = ap.parse_args()
 if args.self_test:
     self_test_accounting_identity()
     raise SystemExit(0)
+
+import psycopg2  # production-only dependency; self-test needs no live DB
 
 items = []
 
