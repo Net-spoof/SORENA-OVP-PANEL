@@ -2,6 +2,7 @@
 import json
 import argparse
 import hashlib
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -13,6 +14,7 @@ GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
 ACCOUNTING_V2_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v2.marker")
 ACCOUNTING_V3_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v3.marker")
 ACCOUNTING_V4_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v4.marker")
+ACCOUNTING_V5_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v5.marker")
 
 
 def load_env():
@@ -32,6 +34,35 @@ def load_json(path):
         return data if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def load_fresh_node_json(path, max_age_seconds=90):
+    """Do not bill an old node snapshot or treat its sessions as connected."""
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return []
+    if age < -30 or age > max_age_seconds:
+        print("NODE_SNAPSHOT_SKIPPED_STALE age_seconds=", round(age))
+        return []
+    return load_json(path)
+
+
+def v5_should_baseline_local(is_migration, source, historical_local, existing_total):
+    """Charge no first sample from a historical local stream on the v5 cutover."""
+    return (is_migration and source == "local"
+            and historical_local and existing_total > 0)
+
+
+def write_accounting_v5_marker():
+    ACCOUNTING_V5_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNTING_V5_MARKER.with_suffix(".marker.tmp")
+    tmp.write_text(json.dumps({
+        "version": 5,
+        "activated_at": datetime.now(timezone.utc).isoformat(),
+        "policy": "baseline existing local clients after source-key migration",
+    }, ensure_ascii=False, indent=2) + "\n")
+    tmp.replace(ACCOUNTING_V5_MARKER)
 
 
 def to_int(v):
@@ -322,6 +353,11 @@ def self_test_accounting_identity():
     assert likely_replayed_local_counter(11_100_000_000, 11_090_000_000)
     assert not likely_replayed_local_counter(30_000, 11_090_000_000)
     assert not likely_replayed_local_counter(50_000_000_000, 11_090_000_000)
+    assert v5_should_baseline_local(True, "local", True, 11_000_000_000)
+    assert not v5_should_baseline_local(False, "local", True, 11_000_000_000)
+    assert not v5_should_baseline_local(True, "local", False, 11_000_000_000)
+    assert not v5_should_baseline_local(True, "ikev2", True, 11_000_000_000)
+    assert not v5_should_baseline_local(True, "local", True, 0)
     print("accounting_identity_self_test = PASS")
 
 ap = argparse.ArgumentParser()
@@ -342,7 +378,7 @@ for x in load_json(LOCAL):
     x["_source_id"] = "local"
     items.append(x)
 
-for x in load_json(NODE):
+for x in load_fresh_node_json(NODE):
     x["_source_id"] = str(
         pick(x, "source_id", "node_id", "node_name", "node") or "node"
     )
@@ -360,6 +396,7 @@ migration_mode = not ACCOUNTING_V2_MARKER.exists()
 local_session_v3_migration = not ACCOUNTING_V3_MARKER.exists()
 local_v3_legacy_source_present = False
 ike_session_v4_migration = not ACCOUNTING_V4_MARKER.exists()
+local_v5_migration = not ACCOUNTING_V5_MARKER.exists()
 ike_v4_legacy_sources_present = False
 processed = 0
 first_seen = 0
@@ -751,6 +788,7 @@ print("accounting_v2_migration_mode =", migration_mode)
 print("accounting_v3_local_migration_mode =", local_session_v3_migration)
 print("accounting_v3_legacy_local_source =", local_v3_legacy_source_present)
 print("accounting_v4_ikev2_migration_mode =", ike_session_v4_migration)
+print("accounting_v5_local_migration_mode =", local_v5_migration)
 print("accounting_v4_legacy_ikev2_sources =", ike_v4_legacy_sources_present)
 print("processed =", processed)
 print("active =", active_count)
