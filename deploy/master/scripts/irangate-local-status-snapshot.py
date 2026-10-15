@@ -60,6 +60,8 @@ def normalized_row(header, values, captured):
         "connected": True,
         "real_address": real,
         "virtual_ip": (item.get("Virtual Address") or "").strip(),
+        "client_id": (item.get("Client ID") or "").strip(),
+        "peer_id": (item.get("Peer ID") or "").strip(),
         "connected_since": connected_since,
     }
 
@@ -127,6 +129,7 @@ def read_status_files():
                 client["connected_since"], client["virtual_ip"],
             )
             if key not in seen_sessions:
+                client["status_file"] = canonical
                 result.append(client)
                 seen_sessions.add(key)
     return result
@@ -163,6 +166,7 @@ END
     assert a[0]["connected_since"].startswith("Wed Oct")
     assert b[0]["connected_since"] and b[0]["connected_since"] == c[0]["connected_since"]
     assert b[0]["current_total"] == 11000000370
+    assert b[0]["client_id"] == "1"
     assert a[0]["current_total"] == 11000000250
     assert parse_status_text("bad status\nEND", stamp) == []
     print("local_status_snapshot_self_test = PASS")
