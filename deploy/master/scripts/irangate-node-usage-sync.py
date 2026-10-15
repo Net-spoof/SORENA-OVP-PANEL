@@ -215,9 +215,9 @@ def baseline_node_clients(state, node_id, clients, now_ts):
     """
     last = state.setdefault("last", {})
     sessions = state.setdefault("sessions", {})
-    for key in list(sessions):
-        if key.startswith(node_id + ":"):
-            del sessions[key]
+    # Preserve historical session ledgers for disconnected peers. Dropping
+    # them would make a later reconnect look new and could replay old traffic.
+    # Only refresh baselines for sessions observed in this cutover snapshot.
     grouped = defaultdict(list)
     for row in clients:
         if not isinstance(row, dict):
