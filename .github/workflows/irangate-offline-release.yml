@@ -162,11 +162,14 @@ jobs:
           set -Eeuo pipefail
           tag="offline-${GITHUB_SHA:0:12}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" \
+            if ! gh release create "$tag" \
               --target "$GITHUB_SHA" \
               --draft \
               --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
-              --notes "Self-contained offline installation for fresh Ubuntu 22.04/24.04 amd64 Master servers. Install the .run matching your OS after SHA256 verification. Includes SURENA Backup V2 Telegram captions."
+              --notes "Self-contained offline installation for fresh Ubuntu 22.04/24.04 amd64 Master servers. Install the .run matching your OS after SHA256 verification. Includes SURENA Backup V2 Telegram captions."; then
+              echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
+              exit 0
+            fi
           fi
           if ! gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber; then
             echo "::warning::Release upload denied by GitHub token policy. Build verified. Configure repository secret SURENA_RELEASE_TOKEN (Contents write) to publish, or download Actions artifacts."
