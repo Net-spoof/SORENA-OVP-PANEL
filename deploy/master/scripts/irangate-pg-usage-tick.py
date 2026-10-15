@@ -49,9 +49,12 @@ def load_fresh_node_json(path, max_age_seconds=90):
 
 
 def v5_should_baseline_local(is_migration, source, historical_local, existing_total):
-    """Charge no first sample from a historical local stream on the v5 cutover."""
-    return (is_migration and source == "local"
-            and historical_local and existing_total > 0)
+    """Avoid replaying an older local counter during v5 identity migration.
+
+    A manual quota reset may legitimately zero the aggregate while retaining
+    the historical local source ledger. Zero aggregate is not a new session.
+    """
+    return bool(is_migration and source == "local" and historical_local)
 
 
 def write_accounting_v5_marker():
@@ -357,7 +360,7 @@ def self_test_accounting_identity():
     assert not v5_should_baseline_local(False, "local", True, 11_000_000_000)
     assert not v5_should_baseline_local(True, "local", False, 11_000_000_000)
     assert not v5_should_baseline_local(True, "ikev2", True, 11_000_000_000)
-    assert not v5_should_baseline_local(True, "local", True, 0)
+    assert v5_should_baseline_local(True, "local", True, 0)
     import os
     import tempfile
     with tempfile.TemporaryDirectory() as dirname:
@@ -562,7 +565,7 @@ with conn.cursor() as cur:
         if old is None:
             first_seen += 1
             local_v5_replay = False
-            if source == "local" and local_v5_migration and aggregate_total_before > 0:
+            if source == "local" and local_v5_migration:
                 # A formerly billed local session obtains a new stream ID
                 # when upgrading from the old port-based epoch identity.
                 # Do not charge the same full counter at the migration boundary.
@@ -570,7 +573,7 @@ with conn.cursor() as cur:
                     SELECT EXISTS (
                         SELECT 1 FROM traffic_sources
                         WHERE client_name = %s
-                          AND source_id LIKE 'local@%%'
+                          AND (source_id LIKE 'local@%%' OR source_id = 'local')
                           AND source_id <> %s
                     )
                 """, (name, accounting_source))
