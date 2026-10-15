@@ -329,10 +329,19 @@ func TestOpenVPNMultiPortTrafficExternalReset(
 		t.Fatal(err)
 	}
 
-	future :=
-		now.Add(
-			2 * time.Hour,
-		)
+	// The collector's state file is written using the real filesystem
+	// clock, while this test feeds a deliberately fixed simulated "now".
+	// Derive the external reset timestamp from the actual state-file mtime;
+	// otherwise a test timestamp from August can be older than a state file
+	// written in October and falsely appear to be a failed reset.
+	stateInfo, err := os.Stat(filepath.Join(
+		database.DataDir,
+		"openvpn_multiport_state.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := stateInfo.ModTime().Add(2 * time.Hour)
 
 	if err := os.Chtimes(
 		cumulativePath,
