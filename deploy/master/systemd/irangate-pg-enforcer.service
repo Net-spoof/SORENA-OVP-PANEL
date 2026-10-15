@@ -4,4 +4,4 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/irangate-pg-enforcer.py --apply
+ExecStart=/usr/local/bin/irangate-pg-enforcer.py --guarded-apply
