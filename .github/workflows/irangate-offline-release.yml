@@ -97,7 +97,9 @@ jobs:
           bash -n scripts/offline/install-master-from-bundle.sh
           bash -n scripts/offline/build-release-bundle.sh
           python3 -m py_compile scripts/irangate-routing
-          python3 -m py_compile deploy/master/scripts/irangate-local-status-snapshot.py deploy/master/scripts/irangate-node-usage-sync.py deploy/master/scripts/irangate-pg-usage-tick.py
+          python3 -m py_compile deploy/master/scripts/irangate-local-status-snapshot.py deploy/master/scripts/irangate-node-usage-sync.py deploy/master/scripts/irangate-pg-usage-tick.py deploy/master/scripts/irangate-pg-enforcer.py deploy/master/scripts/irangate-pg-sync-clients.py
+          python3 deploy/master/scripts/irangate-pg-enforcer.py --self-test
+          python3 deploy/master/scripts/irangate-pg-sync-clients.py --self-test
           python3 deploy/master/scripts/irangate-local-status-snapshot.py --self-test
           python3 deploy/master/scripts/irangate-node-usage-sync.py --self-test
           python3 deploy/master/scripts/irangate-pg-usage-tick.py --self-test
@@ -139,6 +141,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/offline-smoke"
           tail -n "+$((marker_line+1))" "$asset" | tar -xzf - -C "$RUNNER_TEMP/offline-smoke"
           bash -n "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
+          python3 -m py_compile "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-enforcer.py" "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-sync-clients.py"
+          python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-enforcer.py" --self-test
+          python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-sync-clients.py" --self-test
           test -s "$RUNNER_TEMP/offline-smoke/offline-assets/apt/Packages.gz"
           grep -q 'select_port' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           grep -q 'run_stage verification' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
