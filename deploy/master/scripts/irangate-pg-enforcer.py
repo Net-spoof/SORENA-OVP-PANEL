@@ -7,10 +7,15 @@ import subprocess
 import urllib.request
 import urllib.parse
 import psycopg2
+import base64
+import hashlib
+import hmac
+from datetime import datetime, timezone
 
 ENV = Path("/etc/irangate-db.env")
 NODES_FILE = Path("/opt/irangate/webpanel/nodes.json")
 BLOCK_DIR = Path("/etc/openvpn/blocked-clients")
+WEBPANEL_ENV = Path("/etc/irangate/webpanel.env")
 
 def load_env():
     d = {}
@@ -254,12 +259,138 @@ def block_everywhere(name):
 
     return results
 
+def safe_web_env():
+    data = {}
+    for raw in WEBPANEL_ENV.read_text().splitlines():
+        if "=" not in raw or raw.lstrip().startswith("#"):
+            continue
+        k, v = raw.split("=", 1)
+        data[k.strip()] = v.strip().strip('"').strip("'")
+    return data
+
+
+def safe_b64(data):
+    return base64.urlsafe_b64encode(
+        json.dumps(data, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+
+
+def load_live_panel_clients():
+    """Fail closed unless the canonical local API returns a usable full list."""
+    env = safe_web_env()
+    secret = env.get("JWT_SECRET") or ""
+    if not secret:
+        raise RuntimeError("guarded enforcer: missing JWT_SECRET")
+    root_dir = Path(env.get("IRANGATE_DATA_DIR") or "/opt/irangate")
+    admin = json.loads((root_dir / "webpanel/admin.json").read_text())
+    username = str(admin.get("username") or "").strip()
+    if not username:
+        raise RuntimeError("guarded enforcer: missing canonical admin")
+    now = int(time.time())
+    message = safe_b64({"alg": "HS256", "typ": "JWT"}) + "." + safe_b64({
+        "username": username, "iat": now, "exp": now + 300
+    })
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), message.encode(), hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    port = int(env.get("WEBPANEL_PORT") or 8080)
+    req = urllib.request.Request(
+        "http://127.0.0.1:" + str(port) + "/api/clients",
+        headers={"Authorization": "Bearer " + message + "." + signature,
+                 "Cache-Control": "no-cache"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as response:
+        result = json.load(response)
+    if isinstance(result, list):
+        rows = result
+    elif isinstance(result, dict):
+        rows = result.get("clients")
+        if rows is None:
+            rows = result.get("data")
+    else:
+        rows = None
+    if not isinstance(rows, list) or len(rows) < 50:
+        raise RuntimeError("guarded enforcer: missing or truncated API clients")
+    clients = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError("guarded enforcer: invalid API client row")
+        name = str(row.get("name") or row.get("client_name") or row.get("common_name") or "").strip()
+        if name:
+            if name in clients:
+                raise RuntimeError("guarded enforcer: duplicate API client " + name)
+            clients[name] = row
+    if len(clients) < 50:
+        raise RuntimeError("guarded enforcer: insufficient canonical API clients")
+    print("guarded_panel_client_count =", len(clients))
+    return clients
+
+
+def safe_int(value):
+    try:
+        return int(float(value or 0))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def safe_date(value):
+    if not value or str(value).startswith("0001-01-01"):
+        return None
+    try:
+        dt = value if isinstance(value, datetime) else datetime.fromisoformat(
+            str(value).replace("Z", "+00:00")
+        )
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return "invalid"
+
+
+def guard_metadata(name, db_limit, db_expiry, live_clients):
+    row = live_clients.get(name)
+    if row is None:
+        return False, "ABSENT_FROM_CANONICAL_API"
+    api_limit = safe_int(row.get("traffic_limit_bytes"))
+    if api_limit is None or api_limit != int(db_limit or 0):
+        return False, "QUOTA_MISMATCH"
+    panel_exp = safe_date(row.get("expires_at"))
+    db_exp = safe_date(db_expiry)
+    if panel_exp == "invalid" or db_exp == "invalid":
+        return False, "INVALID_EXPIRY"
+    if (panel_exp is None) != (db_exp is None):
+        return False, "EXPIRY_MISMATCH"
+    if panel_exp is not None and abs((panel_exp - db_exp).total_seconds()) > 60:
+        return False, "EXPIRY_MISMATCH"
+    return True, "OK"
+
+
+def guard_enforcer_self_test():
+    now = datetime.now(timezone.utc)
+    live = {"a": {"traffic_limit_bytes": 100, "expires_at": now.isoformat()}}
+    assert guard_metadata("a", 100, now, live) == (True, "OK")
+    assert guard_metadata("a", 99, now, live)[0] is False
+    assert guard_metadata("missing", 100, now, live)[0] is False
+    assert guard_metadata("a", 100, None, live)[0] is False
+    print("guarded_enforcer_self_test = PASS")
+
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
+ap.add_argument("--guarded-apply", action="store_true")
+ap.add_argument("--self-test", action="store_true")
 args = ap.parse_args()
-
-mode = "APPLY_DB_ONLY" if args.apply else "DRY-RUN"
+if args.self_test:
+    guard_enforcer_self_test()
+    raise SystemExit(0)
+if args.apply and args.guarded_apply:
+    raise SystemExit("Choose only one apply mode")
+apply_changes = bool(args.apply or args.guarded_apply)
+mode = "GUARDED-APPLY" if args.guarded_apply else ("APPLY" if args.apply else "DRY-RUN")
 print("mode =", mode)
+panel_clients = load_live_panel_clients() if args.guarded_apply else {}
+max_guarded_actions = 3
+applied_guarded_actions = 0
 
 env = load_env()
 conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
@@ -289,7 +420,24 @@ with conn.cursor() as cur:
         # Already-blocked clients must not be killed or reconciled repeatedly.
         print(f"{action} name={name} reason={reason} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
-        if args.apply and not is_blocked:
+        if args.guarded_apply and not is_blocked:
+            allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
+            if allowed:
+                cur.execute(
+                    "SELECT count(*) FROM active_sessions "
+                    "WHERE client_name = %s AND last_seen > now() - interval '90 seconds'",
+                    (name,),
+                )
+                if cur.fetchone()[0] > 0:
+                    allowed, why = False, "ACTIVE_SESSION_PROTECTED"
+            if not allowed:
+                print("GUARDED_SKIP_BLOCK", name, why)
+                continue
+            if applied_guarded_actions >= max_guarded_actions:
+                print("GUARDED_DEFER_BLOCK", name, "PER_RUN_LIMIT")
+                continue
+
+        if apply_changes and not is_blocked:
             details = {
                 "used_bytes": int(used or 0),
                 "traffic_limit_bytes": int(limitb or 0),
@@ -324,6 +472,8 @@ with conn.cursor() as cur:
 
             blocked_now += 1
             events_now += 1
+            if args.guarded_apply:
+                applied_guarded_actions += 1
 
     print()
     print("===== unblock candidates =====")
@@ -355,7 +505,16 @@ with conn.cursor() as cur:
     for name, used, limitb, expire_at, block_reason, quota_reason in unblock_rows:
         print(f"WOULD_UNBLOCK name={name} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
-        if args.apply:
+        if args.guarded_apply:
+            allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
+            if not allowed:
+                print("GUARDED_SKIP_UNBLOCK", name, why)
+                continue
+            if applied_guarded_actions >= max_guarded_actions:
+                print("GUARDED_DEFER_UNBLOCK", name, "PER_RUN_LIMIT")
+                continue
+
+        if apply_changes:
             details = {
                 "used_bytes": int(used or 0),
                 "traffic_limit_bytes": int(limitb or 0),
@@ -392,6 +551,8 @@ with conn.cursor() as cur:
 
             unblocked_now += 1
             events_now += 1
+            if args.guarded_apply:
+                applied_guarded_actions += 1
 
     print()
     print("===== connection limit violations =====")
@@ -421,7 +582,11 @@ with conn.cursor() as cur:
         extra = int(active_conn) - int(max_conn)
         print(f"WOULD_KILL_OLD_SESSIONS name={name} active={active_conn} limit={max_conn} extra={extra} sessions={sessions}")
 
-        if args.apply:
+        if args.guarded_apply:
+            print("GUARDED_SKIP_CONNECTION_KILL", name, "LIVE_CONNECTION_PROTECTED")
+            continue
+
+        if apply_changes:
             cur.execute("""
                 SELECT source_id, client_name, session_fingerprint,
                        real_address, virtual_ip, connected_since, last_seen
@@ -504,7 +669,7 @@ with conn.cursor() as cur:
 
             events_now += 1
 
-if args.apply:
+if apply_changes:
     conn.commit()
 else:
     conn.rollback()
