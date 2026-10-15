@@ -111,7 +111,8 @@ group nogroup
 persist-key
 persist-tun
 
-status /etc/openvpn/openvpn-status.log
+status-version 2
+status /etc/openvpn/openvpn-status.log 10
 log-append /var/log/openvpn.log
 verb 3
 explicit-exit-notify 1
