@@ -12,6 +12,9 @@ on:
       - scripts/irangate-routing
       - scripts/ovp-panel
       - node/**
+      - deploy/master/scripts/**
+      - deploy/master/systemd/**
+      - deploy/master/ikev2/**
       - install.sh
       - scripts/repair-surena-telegram-backup-branding.sh
       - README.md
@@ -88,6 +91,10 @@ jobs:
           bash -n scripts/offline/install-master-from-bundle.sh
           bash -n scripts/offline/build-release-bundle.sh
           python3 -m py_compile scripts/irangate-routing
+          python3 -m py_compile deploy/master/scripts/irangate-local-status-snapshot.py deploy/master/scripts/irangate-node-usage-sync.py deploy/master/scripts/irangate-pg-usage-tick.py
+          python3 deploy/master/scripts/irangate-local-status-snapshot.py --self-test
+          python3 deploy/master/scripts/irangate-node-usage-sync.py --self-test
+          python3 deploy/master/scripts/irangate-pg-usage-tick.py --self-test
           bash -n scripts/ovp-panel
           bash -n node/install-node.sh
           bash -n node/install-manager-aliases.sh
