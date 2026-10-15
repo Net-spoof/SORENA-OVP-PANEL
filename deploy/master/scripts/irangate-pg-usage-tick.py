@@ -267,13 +267,19 @@ def write_accounting_v4_marker():
 
 
 def self_test_accounting_identity():
+    # Distinct OpenVPN Client IDs represent concurrent sessions, even with
+    # identical peer IP and connection time. A NAT port alone does not.
     local_a = {
         "connected_since": "2026-09-15 10:00:00",
         "real_address": "1.2.3.4:10001",
+        "client_id": "101",
+        "status_file": "/etc/openvpn/openvpn-status.log",
     }
     local_b = {
         "connected_since": "2026-09-15 10:00:00",
         "real_address": "1.2.3.4:10002",
+        "client_id": "102",
+        "status_file": "/etc/openvpn/openvpn-status.log",
     }
     assert counter_mode("local") == "session"
     assert counter_mode("ikev2") == "session"
@@ -282,6 +288,10 @@ def self_test_accounting_identity():
     key_b = counter_epoch_key("local", local_b, "b")
     assert key_a != key_b, (key_a, key_b)
     assert key_a == counter_epoch_key("local", dict(local_a), "replay")
+    # Same OpenVPN session with a rebound NAT port retains one ledger key.
+    assert key_a == counter_epoch_key(
+        "local", dict(local_a, real_address="1.2.3.4:33333"), "port-rebind"
+    )
     assert counter_epoch_key("turkey", local_a, "a") == "turkey"
 
     ike_a = {
