@@ -4,6 +4,8 @@ import base64
 import hashlib
 import hmac
 import time
+import argparse
+from decimal import Decimal, InvalidOperation
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -206,72 +208,250 @@ def status_from_usage(raw_status, limit_bytes, total, expire_at, connected=False
     return "active" if truthy(connected) else "inactive"
 
 
-env = DB_ENV_DATA
-token = build_local_api_token()
-clients = api_clients(token)
 
-conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
-conn.autocommit = False
+def safe_count(value, field, allow_zero=True):
+    if isinstance(value, bool) or value is None or value == "":
+        raise ValueError(field + " missing")
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite() or number != number.to_integral_value():
+            raise ValueError("not an integer")
+        result = int(number)
+    except (InvalidOperation, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(field + " invalid") from exc
+    if result < 0 or (not allow_zero and result < 1):
+        raise ValueError(field + " out of range")
+    return result
 
-with conn.cursor() as cur:
-    for c in clients:
-        name = c.get("name") or c.get("client_name") or c.get("common_name")
-        if not name:
-            continue
 
-        limit_bytes = to_int(c.get("traffic_limit_bytes"))
-        max_conn = to_int(c.get("connection_limit")) or 1
+def normal_expiry(value):
+    if value is None or value == "" or str(value).startswith("0001-01-01"):
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid expires_at") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
-        rx = to_int(c.get("global_bytes_received") or c.get("bytes_received"))
-        tx = to_int(c.get("global_bytes_sent") or c.get("bytes_sent"))
-        total = to_int(c.get("global_total_bytes") or c.get("total_bytes") or c.get("used_bytes"))
-        if total <= 0:
-            total = rx + tx
 
-        expire_at_clean = clean_time(c.get("expires_at"))
-        status = status_from_usage(c.get("status"), limit_bytes, total, expire_at_clean, c.get("connected"))
+def safe_api_items(raw):
+    if not isinstance(raw, list) or len(raw) < 50:
+        raise RuntimeError("SYNC FAIL-CLOSED: API client list missing/truncated")
+    seen = set()
+    result = []
+    for row in raw:
+        if not isinstance(row, dict):
+            raise RuntimeError("SYNC FAIL-CLOSED: non-object API record")
+        name = row.get("name") or row.get("client_name") or row.get("common_name")
+        name = str(name or "").strip()
+        if not name or name in seen:
+            raise RuntimeError("SYNC FAIL-CLOSED: missing or duplicate client name")
+        seen.add(name)
+        if "traffic_limit_bytes" not in row:
+            raise RuntimeError("SYNC FAIL-CLOSED: quota field absent for " + name)
+        if "connection_limit" not in row:
+            raise RuntimeError("SYNC FAIL-CLOSED: connection field absent for " + name)
+        if "expires_at" not in row:
+            raise RuntimeError("SYNC FAIL-CLOSED: expiry field absent for " + name)
+        quota = safe_count(row["traffic_limit_bytes"], name + ".quota")
+        maxconn = safe_count(row["connection_limit"], name + ".max_connections")
+        maxconn = max(1, maxconn)
+        expiry = normal_expiry(row["expires_at"])
+        result.append((name, row, quota, maxconn, expiry))
+    return result
 
-        cur.execute("""
-            INSERT INTO clients (
-                client_name, display_name, traffic_limit_bytes, expire_at,
-                max_connections, is_enabled, subscription_token,
-                subscription_url, nodes, status, cipher,
-                last_seen, last_connection, created_at, updated_at
+
+def self_test():
+    assert safe_count("1000000000000", "quota") == 1000000000000
+    for v in (None, "", "-1", "nan", "inf", "100.5", True):
+        try:
+            safe_count(v, "quota")
+            raise AssertionError("invalid quota accepted")
+        except ValueError:
+            pass
+    assert safe_count(0, "quota") == 0
+    assert normal_expiry(None) is None
+    assert normal_expiry("0001-01-01T00:00:00Z") is None
+    assert normal_expiry("2026-10-15T12:00:00Z").year == 2026
+    print("pg_sync_guarded_self_test = PASS")
+
+
+def main(apply=False):
+    # Acquire a consistent API snapshot before starting any DB updates.
+    records = safe_api_items(api_clients(build_local_api_token()))
+    env = DB_ENV_DATA
+    conn = psycopg2.connect(env["IRANGATE_DB_DSN"], connect_timeout=10)
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            if apply:
+                # Serialize manual invocation with the systemd one-shot service.
+                cur.execute("SELECT pg_try_advisory_xact_lock(740015, 1405)")
+                if not cur.fetchone()[0]:
+                    raise RuntimeError("SYNC FAIL-CLOSED: concurrent metadata sync")
+            cur.execute("""
+                SELECT client_name, traffic_limit_bytes, max_connections,
+                       expire_at, subscription_token, subscription_url,
+                       nodes, cipher, last_seen, last_connection, created_at
+                FROM clients
+            """)
+            existing = {r[0]: r[1:] for r in cur.fetchall()}
+            # A partial API response must never make historical clients vanish
+            # from sync consideration. There are legitimately PG-only accounts.
+            api_floor = max(50, (len(existing) * 3) // 4)
+            if len(records) < api_floor:
+                raise RuntimeError(
+                    "SYNC FAIL-CLOSED: API returned "
+                    + str(len(records)) + " clients; expected >="
+                    + str(api_floor)
+                )
+
+            changed_limits = 0
+            changed_dates = 0
+            changed_connections = 0
+            new_accounts = 0
+            preserved_pg_only = len(existing) - sum(
+                1 for name, *_ in records if name in existing
             )
-            VALUES (
-                %s,%s,%s,%s,%s,true,%s,%s,%s::jsonb,%s,%s,%s,%s,
-                COALESCE(%s::timestamptz, now()), now()
+            processed = []
+            for name, row, quota, maxconn, expiry in records:
+                old = existing.get(name)
+                if old is None:
+                    new_accounts += 1
+                else:
+                    old_quota, old_max, old_exp, *_ = old
+                    changed_limits += int(quota != int(old_quota or 0))
+                    changed_connections += int(maxconn != int(old_max or 1))
+                    norm_old_exp = normal_expiry(old_exp)
+                    changed_dates += int(
+                        (expiry is None) != (norm_old_exp is None)
+                        or (
+                            expiry is not None and norm_old_exp is not None
+                            and abs((expiry - norm_old_exp).total_seconds()) > 60
+                        )
+                    )
+
+                # Missing optional fields must not wipe subscription credentials
+                # or node assignments that already exist in PostgreSQL.
+                existing_token = old[4] if old else None
+                existing_url = old[5] if old else None
+                existing_nodes = old[6] if old else None
+                existing_cipher = old[7] if old else None
+                token = row.get("subscription_token") or existing_token
+                url = row.get("subscription_url") or existing_url
+                nodes = row.get("nodes")
+                if not isinstance(nodes, (dict, list)):
+                    nodes = existing_nodes if existing_nodes is not None else []
+                cipher = row.get("cipher") or existing_cipher
+
+                total = to_int(row.get("global_total_bytes"))
+                if total <= 0:
+                    total = to_int(row.get("total_bytes"))
+                if total <= 0:
+                    total = to_int(row.get("used_bytes"))
+                if total <= 0:
+                    total = to_int(row.get("bytes_received")) + to_int(
+                        row.get("bytes_sent")
+                    )
+                status = status_from_usage(
+                    row.get("status"), quota, total, expiry,
+                    row.get("connected"),
+                )
+
+                last_seen = clean_time(row.get("last_seen"))
+                last_connection = clean_time(row.get("last_connection"))
+                created_at = clean_time(row.get("created_at"))
+                processed.append((
+                    name, quota, expiry, maxconn, token, url,
+                    json.dumps(nodes), status, cipher,
+                    last_seen, last_connection, created_at,
+                ))
+
+            changed_total = (
+                changed_limits + changed_dates + changed_connections + new_accounts
             )
-            ON CONFLICT (client_name) DO UPDATE SET
-                display_name = EXCLUDED.display_name,
-                traffic_limit_bytes = EXCLUDED.traffic_limit_bytes,
-                expire_at = EXCLUDED.expire_at,
-                max_connections = EXCLUDED.max_connections,
-                subscription_token = EXCLUDED.subscription_token,
-                subscription_url = EXCLUDED.subscription_url,
-                nodes = EXCLUDED.nodes,
-                status = EXCLUDED.status,
-                cipher = EXCLUDED.cipher,
-                last_seen = EXCLUDED.last_seen,
-                last_connection = EXCLUDED.last_connection,
-                updated_at = now()
-        """, (
-            name, name, limit_bytes, expire_at_clean,
-            max_conn, c.get("subscription_token"), c.get("subscription_url"),
-            json.dumps(c.get("nodes") or []), status,
-            c.get("cipher"), clean_time(c.get("last_seen")),
-            clean_time(c.get("last_connection")), clean_time(c.get("created_at"))
-        ))
+            # A bulk update across almost the whole user-base is more likely
+            # a broken API response than a legitimate renewal operation.
+            change_ceiling = max(10, len(records) // 20)
+            if changed_total > change_ceiling:
+                raise RuntimeError(
+                    "SYNC FAIL-CLOSED: metadata changes "
+                    + str(changed_total) + " exceed max "
+                    + str(change_ceiling)
+                )
+            print("mode =", "APPLY" if apply else "DRY-RUN")
+            print("api_clients =", len(records))
+            print("pg_clients =", len(existing))
+            print("pg_only_preserved =", preserved_pg_only)
+            print("new_clients =", new_accounts)
+            print("quota_changes =", changed_limits)
+            print("expiry_changes =", changed_dates)
+            print("connection_changes =", changed_connections)
+            print("change_ceiling =", change_ceiling)
 
-        cur.execute("""
-            INSERT INTO traffic_totals (
-                client_name, rx_bytes, tx_bytes, total_bytes, updated_at
-            )
-            VALUES (%s,0,0,0,now())
-            ON CONFLICT (client_name) DO NOTHING
-        """, (name,))
+            if apply:
+                for rec in processed:
+                    cur.execute("""
+                        INSERT INTO clients (
+                            client_name, display_name, traffic_limit_bytes,
+                            expire_at, max_connections, is_enabled,
+                            subscription_token, subscription_url, nodes,
+                            status, cipher, last_seen, last_connection,
+                            created_at, updated_at
+                        )
+                        VALUES (
+                            %s,%s,%s,%s,%s,true,%s,%s,%s::jsonb,%s,%s,%s,%s,
+                            COALESCE(%s::timestamptz,now()),now()
+                        )
+                        ON CONFLICT (client_name) DO UPDATE SET
+                            display_name = EXCLUDED.display_name,
+                            traffic_limit_bytes = EXCLUDED.traffic_limit_bytes,
+                            expire_at = EXCLUDED.expire_at,
+                            max_connections = EXCLUDED.max_connections,
+                            subscription_token = EXCLUDED.subscription_token,
+                            subscription_url = EXCLUDED.subscription_url,
+                            nodes = EXCLUDED.nodes,
+                            status = EXCLUDED.status,
+                            cipher = EXCLUDED.cipher,
+                            last_seen = COALESCE(EXCLUDED.last_seen,clients.last_seen),
+                            last_connection = COALESCE(
+                                EXCLUDED.last_connection,clients.last_connection
+                            ),
+                            updated_at = now()
+                    """, (rec[0], rec[0], rec[1], rec[2], rec[3],
+                          rec[4], rec[5], rec[6], rec[7], rec[8],
+                          rec[9], rec[10], rec[11]))
+                    cur.execute("""
+                        INSERT INTO traffic_totals(
+                            client_name,rx_bytes,tx_bytes,total_bytes,updated_at
+                        ) VALUES(%s,0,0,0,now())
+                        ON CONFLICT (client_name) DO NOTHING
+                    """, (rec[0],))
 
-conn.commit()
-conn.close()
+                # Absolute usage is owned exclusively by accounting ticks.
+                cur.execute("SELECT COALESCE(SUM(total_bytes),0) FROM traffic_totals")
+                print("historic_usage_sum_after =", int(cur.fetchone()[0]))
+                conn.commit()
+                print("synced_clients =", len(processed))
+            else:
+                conn.rollback()
+                print("database_modified = NO")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
-print("synced_clients =", len(clients))
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if args.self_test:
+        self_test()
+    else:
+        main(apply=args.apply)
