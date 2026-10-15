@@ -466,9 +466,13 @@ def main(apply=False):
                 # Absolute usage is owned exclusively by accounting ticks.
                 cur.execute("SELECT COALESCE(SUM(total_bytes),0) FROM traffic_totals")
                 historic_usage_after = int(cur.fetchone()[0])
-                if historic_usage_after != historic_usage_before:
-                    raise RuntimeError("SYNC FAIL-CLOSED: historical traffic totals changed")
-                print("historical_usage_unchanged = PASS")
+                # The OpenVPN accounting tick updates traffic_totals concurrently.
+                # A strictly increasing aggregate is expected; the metadata
+                # sync SQL only inserts zero-valued rows for new accounts.
+                # A decrease is never expected and must fail closed.
+                if historic_usage_after < historic_usage_before:
+                    raise RuntimeError("SYNC FAIL-CLOSED: historical traffic total decreased")
+                print("historical_usage_non_decreasing = PASS")
                 conn.commit()
                 print("synced_clients =", len(processed))
             else:
