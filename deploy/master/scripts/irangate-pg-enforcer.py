@@ -10,6 +10,7 @@ import psycopg2
 import base64
 import hashlib
 import hmac
+import re
 from datetime import datetime, timezone
 
 ENV = Path("/etc/irangate-db.env")
@@ -375,6 +376,9 @@ def guard_quota_unblock(block_reason, quota_reason):
 
 
 def guard_metadata(name, db_limit, db_expiry, live_clients):
+    # Client names feed an OpenVPN management command. Reject unsafe names.
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.@+-]{1,128}", name):
+        return False, "UNSAFE_CLIENT_IDENTIFIER"
     row = live_clients.get(name)
     if row is None:
         return False, "ABSENT_FROM_CANONICAL_API"
@@ -398,6 +402,7 @@ def guard_enforcer_self_test():
     assert guard_metadata("a", 100, now, live) == (True, "OK")
     assert guard_metadata("a", 99, now, live)[0] is False
     assert guard_metadata("missing", 100, now, live)[0] is False
+    assert guard_metadata("a;touch/tmp/x", 100, now, live)[0] is False
     assert guard_metadata("a", 100, None, live)[0] is False
     assert guard_usage("a", 100, live)[0] is False
     live["a"]["global_total_bytes"] = 150
