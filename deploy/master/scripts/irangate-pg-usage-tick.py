@@ -645,6 +645,16 @@ with conn.cursor() as cur:
                 total,
             )
 
+# Accounting epochs remain durable, but a long-gone session is not connected.
+# Never delete its already-booked usage or its deduplication ledger here.
+with conn.cursor() as cur:
+    cur.execute("""
+        UPDATE traffic_sources SET connected = false
+        WHERE connected = true
+          AND (source_id LIKE 'local@%' OR source_id LIKE 'ikev2@%')
+          AND updated_at < now() - interval '90 seconds'
+    """)
+
 if args.apply:
     conn.commit()
 
