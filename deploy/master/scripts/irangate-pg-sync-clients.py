@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import time
 import argparse
+import re
 from decimal import Decimal, InvalidOperation
 import urllib.error
 import urllib.request
@@ -236,7 +237,25 @@ def normal_expiry(value):
     return dt.astimezone(timezone.utc)
 
 
-def safe_api_items(raw, existing):
+def new_client_json(name):
+    """Read canonical local metadata for an API client not yet in PostgreSQL."""
+    if not re.fullmatch(r"[A-Za-z0-9_.@+-]{1,128}", name):
+        raise RuntimeError("SYNC FAIL-CLOSED: unsafe new client identifier")
+    path = IRANGATE_DATA_DIR / "database" / "clients" / (name + ".json")
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "SYNC FAIL-CLOSED: new client missing canonical metadata: " + name
+        ) from exc
+    if not isinstance(data, dict) or str(data.get("name") or "") != name:
+        raise RuntimeError(
+            "SYNC FAIL-CLOSED: canonical client metadata mismatch: " + name
+        )
+    return data
+
+
+def safe_api_items(raw, existing, canonical_loader=new_client_json):
     if not isinstance(raw, list):
         raise RuntimeError("SYNC FAIL-CLOSED: API client list missing or invalid")
     # An empty API is valid on a genuinely empty fresh installation only.
@@ -256,10 +275,24 @@ def safe_api_items(raw, existing):
         # Such an omission is safe ONLY if the existing DB already has the
         # equivalent default value. Otherwise fail closed (no silent reset).
         old = existing.get(name)
+        canonical = None
+        if old is None and any(
+            field not in row
+            for field in ("traffic_limit_bytes", "connection_limit", "expires_at")
+        ):
+            canonical = canonical_loader(name)
+
         if "traffic_limit_bytes" in row:
             quota = safe_count(row["traffic_limit_bytes"], name + ".quota")
         elif old is not None and int(old[0] or 0) == 0:
             quota = 0
+        elif old is None and canonical is not None:
+            # The Go client's json:"traffic_limit_bytes,omitempty" tag
+            # removes a zero quota from both API and canonical JSON.
+            if "traffic_limit_bytes" not in canonical:
+                quota = 0
+            else:
+                raise RuntimeError("SYNC FAIL-CLOSED: omitted quota conflicts with disk for " + name)
         else:
             raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing quota for " + name)
 
@@ -267,12 +300,16 @@ def safe_api_items(raw, existing):
             maxconn = max(1, safe_count(row["connection_limit"], name + ".max_connections"))
         elif old is not None and int(old[1] or 1) == 1:
             maxconn = 1
+        elif old is None and canonical is not None and "connection_limit" not in canonical:
+            maxconn = 1
         else:
             raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing connection limit for " + name)
 
         if "expires_at" in row:
             expiry = normal_expiry(row["expires_at"])
         elif old is not None and normal_expiry(old[2]) is None:
+            expiry = None
+        elif old is None and canonical is not None and "expires_at" not in canonical:
             expiry = None
         else:
             raise RuntimeError("SYNC FAIL-CLOSED: ambiguous missing expiry for " + name)
@@ -323,6 +360,22 @@ def self_test():
     assert min_api_client_count(1) == 1
     assert min_api_client_count(475) == 356
     assert min_api_client_count(100) == 75
+    first_client = [{"name": "fresh", "expires_at": None}]
+    assert safe_api_items(
+        first_client, {},
+        canonical_loader=lambda name: {"name": name}
+    )[0][2:4] == (0, 1)
+    try:
+        safe_api_items(
+            first_client, {},
+            canonical_loader=lambda name: {
+                "name": name, "traffic_limit_bytes": 10_000_000
+            }
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("missing quota masked a real disk limit")
     # Each test must actually OMIT the corresponding API field. Otherwise
     # its explicit API value should validly override an older DB value.
     for field, changed in (
