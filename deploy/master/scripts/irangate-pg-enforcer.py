@@ -463,19 +463,18 @@ with conn.cursor() as cur:
         print(f"{action} name={name} reason={reason} used={gb(used)} limit={gb(limitb)} expire_at={expire_at}")
 
         if guarded and not is_blocked:
+            cur.execute("SELECT is_enabled FROM clients WHERE client_name=%s", (name,))
+            enabled_row = cur.fetchone()
+            if not enabled_row or not enabled_row[0]:
+                print("GUARDED_SKIP_BLOCK", name, "MASTER_DISABLED")
+                guarded_skipped += 1
+                continue
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
             if allowed and reason == "traffic_limit":
                 allowed, why = guard_usage(name, limitb, panel_clients)
-            if allowed and panel_clients[name].get("connected") in (True, "true", "True", "1", 1):
-                allowed, why = False, "API_CONNECTED_PROTECTED"
-            if allowed:
-                cur.execute(
-                    "SELECT count(*) FROM active_sessions "
-                    "WHERE client_name = %s AND last_seen > now() - interval '90 seconds'",
-                    (name,),
-                )
-                if cur.fetchone()[0] > 0:
-                    allowed, why = False, "ACTIVE_SESSION_PROTECTED"
+            # Quota and expiry are hard limits even for clients online now.
+            # Guard against stale metadata/API disagreements above instead
+            # of allowing connected clients to use expired/over-quota plans.
             if not allowed:
                 print("GUARDED_SKIP_BLOCK", name, why)
                 guarded_skipped += 1
