@@ -242,7 +242,7 @@ def counter_epoch_key(source, x, session):
     return f"{source}@{digest}"
 
 def gb(n):
-    return f"{int(n) / 1024 / 1024 / 1024:.3f} GB"
+    return f"{int(n) / 1_000_000_000:.3f} GB"
 
 
 def write_accounting_v2_marker():
@@ -358,6 +358,16 @@ def self_test_accounting_identity():
     assert not v5_should_baseline_local(True, "local", False, 11_000_000_000)
     assert not v5_should_baseline_local(True, "ikev2", True, 11_000_000_000)
     assert not v5_should_baseline_local(True, "local", True, 0)
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as dirname:
+        p = Path(dirname) / "nodes.json"
+        p.write_text('[{"client_name": "test"}]')
+        then = time.time()
+        os.utime(p, (then - 604800, then - 604800))
+        assert load_fresh_node_json(p) == []
+        os.utime(p, (then, then))
+        assert len(load_fresh_node_json(p)) == 1
     print("accounting_identity_self_test = PASS")
 
 ap = argparse.ArgumentParser()
