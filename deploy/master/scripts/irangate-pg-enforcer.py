@@ -415,6 +415,9 @@ print("mode =", mode)
 panel_clients = load_live_panel_clients() if guarded else {}
 max_guarded_actions = 3
 applied_guarded_actions = 0
+guarded_eligible_blocks = 0
+guarded_eligible_unblocks = 0
+guarded_skipped = 0
 
 env = load_env()
 conn = psycopg2.connect(env["IRANGATE_DB_DSN"])
@@ -460,10 +463,14 @@ with conn.cursor() as cur:
                     allowed, why = False, "ACTIVE_SESSION_PROTECTED"
             if not allowed:
                 print("GUARDED_SKIP_BLOCK", name, why)
+                guarded_skipped += 1
                 continue
             if applied_guarded_actions >= max_guarded_actions:
                 print("GUARDED_DEFER_BLOCK", name, "PER_RUN_LIMIT")
+                guarded_skipped += 1
                 continue
+            guarded_eligible_blocks += 1
+            print("GUARDED_ELIGIBLE_BLOCK", name, reason)
 
         if apply_changes and not is_blocked:
             details = {
@@ -537,10 +544,14 @@ with conn.cursor() as cur:
             allowed, why = guard_metadata(name, limitb, expire_at, panel_clients)
             if not allowed:
                 print("GUARDED_SKIP_UNBLOCK", name, why)
+                guarded_skipped += 1
                 continue
             if applied_guarded_actions >= max_guarded_actions:
                 print("GUARDED_DEFER_UNBLOCK", name, "PER_RUN_LIMIT")
+                guarded_skipped += 1
                 continue
+            guarded_eligible_unblocks += 1
+            print("GUARDED_ELIGIBLE_UNBLOCK", name)
 
         if apply_changes:
             details = {
@@ -708,3 +719,7 @@ print()
 print("blocked_now =", blocked_now)
 print("unblocked_now =", unblocked_now)
 print("events_now =", events_now)
+if guarded:
+    print("guarded_eligible_blocks =", guarded_eligible_blocks)
+    print("guarded_eligible_unblocks =", guarded_eligible_unblocks)
+    print("guarded_skipped =", guarded_skipped)
