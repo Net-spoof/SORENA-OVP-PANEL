@@ -14,7 +14,10 @@ NODETIMER=irangate-node-usage-sync.timer
 [[ -s "$SRC" && -s "$STATE" && -s "$OUT" && ! -e "$MARKER" ]] ||
   { echo "STOP: missing files or node migration already completed"; exit 2; }
 systemctl is-active --quiet irangate-webpanel || exit 2
-systemctl is-active --quiet "$PGTIMER" || exit 2
+systemctl is-active --quiet "$PGTIMER" || { echo "STOP: PG timer must be active"; exit 2; }
+systemctl is-active --quiet irangate-pg-enforcer.timer &&
+  { echo "STOP: enforcer must remain inactive during migration"; exit 2; }
+[[ -s /etc/irangate-db.env ]] || { echo "STOP: missing database configuration"; exit 2; }
 if systemctl is-active --quiet "$NODETIMER" ||
    systemctl is-active --quiet irangate-node-usage-sync.service; then
   echo "STOP: node sync already running"; exit 2
@@ -93,7 +96,21 @@ import json,sys
 from pathlib import Path
 old,new,rows=(json.loads(Path(x).read_text()) for x in sys.argv[1:])
 assert isinstance(old,dict) and isinstance(new,dict)
-assert old.get("totals",{})==new.get("totals",{}), "HISTORIC NODE TOTALS CHANGED"
+old_totals=old.get("totals",{})
+new_totals=new.get("totals",{})
+assert isinstance(old_totals,dict) and isinstance(new_totals,dict)
+for key, value in old_totals.items():
+    assert key in new_totals, "HISTORIC NODE ROW DELETED: "+key
+    assert new_totals[key] == value, "HISTORIC NODE TOTAL MODIFIED: "+key
+new_keys=set(new_totals)-set(old_totals)
+for key in new_keys:
+    value=new_totals[key]
+    assert isinstance(value,dict), "INVALID NEW NODE ROW: "+key
+    assert int(value.get("rx",-1)) == 0 and int(value.get("tx",-1)) == 0, (
+        "UNEXPECTED NEW NODE TRAFFIC: "+key
+    )
+print("PRESERVED_HISTORIC_NODE_ROWS=",len(old_totals))
+print("NEW_ZERO_ONLY_NODE_ROWS=",len(new_keys))
 assert isinstance(rows,list) and len(rows)>0, "No baseline output"
 for r in rows:
     assert r.get("node_id") and r.get("client_name")
