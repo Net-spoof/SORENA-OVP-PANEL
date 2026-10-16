@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import time
 import argparse
+import sys
 import re
 from decimal import Decimal, InvalidOperation
 import urllib.error
@@ -31,8 +32,11 @@ def env_load(path):
     return data
 
 
-DB_ENV_DATA = env_load(DB_ENV)
-WEBPANEL_ENV_DATA = env_load(WEBPANEL_ENV)
+# Standalone regression tests must run on GitHub's clean Ubuntu runners.
+# Production execution still strictly requires the actual environment files.
+_SELF_TEST = "--self-test" in sys.argv
+DB_ENV_DATA = {} if _SELF_TEST else env_load(DB_ENV)
+WEBPANEL_ENV_DATA = {} if _SELF_TEST else env_load(WEBPANEL_ENV)
 
 WEBPANEL_PORT = WEBPANEL_ENV_DATA.get("WEBPANEL_PORT", "8080")
 BASE = f"http://127.0.0.1:{WEBPANEL_PORT}"
