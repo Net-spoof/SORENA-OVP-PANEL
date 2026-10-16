@@ -160,7 +160,7 @@ rsync -a --exclude=/.git --exclude=/offline-bundles \
     --exclude='__pycache__' --exclude='*.pyc' \
     "$ROOT/" "$PAYLOAD/"
 printf '%s\n' "$DISTRO" > "$PAYLOAD/offline-assets/ubuntu-version"
-printf '%s\n' "$(git rev-parse HEAD)" > "$PAYLOAD/offline-assets/source-commit"
+printf '%s\n' "$(git -C "$ROOT" rev-parse HEAD)" > "$PAYLOAD/offline-assets/source-commit"
 
 # Files are checksummed and verified by the offline installer before mutation.
 (
