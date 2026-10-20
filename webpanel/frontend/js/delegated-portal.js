@@ -188,7 +188,7 @@
     if (isDelegated) {
         let quotaReadOnly = false;
         const mutatingButtonPattern =
-            /^(showAddModal|showEditClient|submitEditClient|removeClient|deleteClient|reworkClient|activateClient|deactivateClient|showBulk|bulkCreate|bulkDelete)\\s*\\(/;
+            /^(showAddModal|showEditClient|submitEditClient|removeClient|deleteClient|reworkClient|activateClient|deactivateClient|showBulk|bulkCreate|bulkDelete)\s*\(/;
 
         function refreshWriteControls() {
             if (!isClientsPage) return;
