@@ -766,6 +766,22 @@ func delegatedAdminToView(admin DelegatedAdmin) delegatedAdminView {
 	}
 }
 
+// Quota exhaustion limits delegated administration, not authenticated visibility.
+// Explicitly disabled accounts remain unable to sign in; owned client VPN
+// suspension remains controlled by the existing quota reconciliation.
+func delegatedQuotaReadOnly(admin DelegatedAdmin, now time.Time) bool {
+    reason := delegatedEffectiveReason(admin, now)
+    return admin.Active && (reason == "expired" || reason == "traffic_exhausted")
+}
+
+func delegatedLoginPermitted(admin DelegatedAdmin, now time.Time) bool {
+    return delegatedEffectiveReason(admin, now) == "" || delegatedQuotaReadOnly(admin, now)
+}
+
+func delegatedMutationAllowed(admin DelegatedAdmin, now time.Time) bool {
+    return admin.Active && delegatedEffectiveReason(admin, now) == "" && !admin.Suspended
+}
+
 func delegatedRootOnly(w http.ResponseWriter, r *http.Request) bool {
 	principal := currentDelegatedPrincipal(r)
 	if principal.Role != delegatedRoleRoot {
@@ -817,8 +833,8 @@ func delegatedLoginHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, "Authentication failed", http.StatusInternalServerError)
 		return
 	}
-	if delegatedEffectiveReason(admin, time.Now().UTC()) != "" || admin.Suspended {
-		sendError(w, "Admin account is disabled or its quota has expired", http.StatusForbidden)
+	if !delegatedLoginPermitted(admin, time.Now().UTC()) {
+		sendError(w, "Admin account is disabled", http.StatusForbidden)
 		return
 	}
 
@@ -927,8 +943,13 @@ func delegatedAuthMiddleware(next http.Handler) http.Handler {
 				sendError(w, "Failed to validate delegated admin", http.StatusInternalServerError)
 				return
 			}
-			if delegatedEffectiveReason(admin, time.Now().UTC()) != "" || admin.Suspended {
-				sendError(w, "Admin quota expired or account disabled", http.StatusForbidden)
+			now := time.Now().UTC()
+			if !delegatedLoginPermitted(admin, now) {
+				sendError(w, "Admin account is disabled", http.StatusForbidden)
+				return
+			}
+			if !delegatedMutationAllowed(admin, now) && r.Method != http.MethodGet {
+				sendError(w, "Panel quota or time exhausted: read-only access until renewal", http.StatusForbidden)
 				return
 			}
 			principal.Role = delegatedRoleAdmin
