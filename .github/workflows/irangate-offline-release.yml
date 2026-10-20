@@ -114,6 +114,7 @@ jobs:
           grep -Fq 'for alias_name in surena-node serena-node Serena-node' node/install-node.sh
           grep -Fq 'ln -sfn /usr/local/bin/ovp-node "$alias_path"' node/install-node.sh
           node --check webpanel/frontend/js/sidebar.js
+          node --check webpanel/frontend/js/delegated-portal.js
           node --check webpanel/frontend/js/i18n.js
           test -s webpanel/frontend/logo/surena.webp
           test ! -e scripts/irangate-gost-tunnel-manager.sh
