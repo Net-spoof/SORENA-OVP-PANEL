@@ -182,6 +182,104 @@
     const isDelegated = (localStorage.getItem('role') || 'root') === 'delegated_admin';
     const rootCreateSidebar = window.createSidebar;
 
+    // Display quotas after exhaustion instead of logging a reseller out.
+    // This is only a usability layer; the Go API enforces read-only on every
+    // mutation independently of JavaScript, localStorage, or UI state.
+    if (isDelegated) {
+        let quotaReadOnly = false;
+        const mutatingButtonPattern =
+            /^(showAddModal|showEditClient|submitEditClient|removeClient|deleteClient|reworkClient|activateClient|deactivateClient|showBulk|bulkCreate|bulkDelete)\\s*\\(/;
+
+        function refreshWriteControls() {
+            if (!isClientsPage) return;
+            document.querySelectorAll('button[onclick]').forEach((button) => {
+                if (!mutatingButtonPattern.test(button.getAttribute('onclick') || '')) return;
+                if (quotaReadOnly) {
+                    if (!button.dataset.surenaQuotaDisabled) {
+                        button.dataset.surenaQuotaDisabled = button.disabled ? 'already' : 'quota';
+                    }
+                    button.disabled = true;
+                    button.title = 'Panel expired or traffic exhausted — renewal required';
+                    button.setAttribute('aria-disabled', 'true');
+                    button.style.opacity = '0.45';
+                } else if (button.dataset.surenaQuotaDisabled) {
+                    if (button.dataset.surenaQuotaDisabled === 'quota') button.disabled = false;
+                    delete button.dataset.surenaQuotaDisabled;
+                    button.removeAttribute('aria-disabled');
+                    button.style.removeProperty('opacity');
+                }
+            });
+        }
+
+        function showQuotaBanner(reason) {
+            const host = document.querySelector('.main-content') || document.body;
+            if (!host) return;
+            let banner = document.getElementById('surena-delegated-quota-banner');
+            if (!reason) {
+                if (banner) banner.remove();
+                return;
+            }
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'surena-delegated-quota-banner';
+                banner.setAttribute('role', 'status');
+                banner.style.cssText = 'margin:16px auto;padding:14px 18px;max-width:1200px;border:1px solid #f59e0b;border-radius:12px;background:#fffbeb;color:#78350f;font-weight:600;line-height:1.8;';
+                host.prepend(banner);
+            }
+            banner.textContent = reason === 'expired'
+                ? 'اعتبار زمانی پنل پایان یافته است. فقط مشاهده کاربران و گزارش‌ها مجاز است؛ برای ساخت، ویرایش یا حذف کاربر، اعتبار پنل را تمدید کنید. / Panel expired — read-only until renewal.'
+                : 'حجم نمایندگی به پایان رسیده است. فقط مشاهده کاربران و گزارش‌ها مجاز است؛ برای ساخت، ویرایش یا حذف کاربر، حجم پنل را شارژ کنید. / Traffic exhausted — read-only until renewal.';
+        }
+
+        async function syncDelegatedQuotaState() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            try {
+                const response = await fetch('/api/me', {
+                    headers: { Authorization: 'Bearer ' + token },
+                    cache: 'no-store'
+                });
+                if (!response.ok) return;
+                const payload = await response.json();
+                const quota = payload && payload.data && payload.data.quota;
+                if (!quota) return;
+                const reason = quota.suspended && ['expired', 'traffic_exhausted'].includes(quota.suspend_reason)
+                    ? quota.suspend_reason : '';
+                quotaReadOnly = Boolean(reason);
+                window.surenaDelegatedReadOnly = quotaReadOnly;
+                showQuotaBanner(reason);
+                refreshWriteControls();
+            } catch (error) {
+                console.warn('SURENA: delegated quota refresh unavailable', error);
+            }
+        }
+
+        function initializeDelegatedQuotaView() {
+            // Keep dynamically-rendered client action controls in sync.
+            if (isClientsPage) {
+                const table = document.getElementById('clientsTable');
+                if (table) {
+                    new MutationObserver(refreshWriteControls).observe(table, { childList: true, subtree: true });
+                }
+                document.addEventListener('submit', (event) => {
+                    if (quotaReadOnly && event.target.closest('#addClientForm, #editClientForm, #createClientForm')) {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                    }
+                }, true);
+            }
+            syncDelegatedQuotaState();
+            window.setInterval(syncDelegatedQuotaState, 30000);
+            window.addEventListener('focus', syncDelegatedQuotaState);
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeDelegatedQuotaView, { once: true });
+        } else {
+            initializeDelegatedQuotaView();
+        }
+    }
+
+
     // The orphan-certificate controls are root-only. The legacy clients page checks
     // them automatically, so suppress that request for delegated admins and hide
     // the corresponding card without granting any additional backend access.
