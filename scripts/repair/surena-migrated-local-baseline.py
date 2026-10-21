@@ -54,7 +54,7 @@ def candidates(raw: list, fn: dict) -> list:
         if not isinstance(row, dict):
             raise RuntimeError("Malformed local OpenVPN snapshot")
         name = str(fn["name_of"](row) or "").strip()
-        if not name or name.upper() == "UNDEF" or not fn["connected_of"](row):
+        if not name or name.upper() == "UNDEF":
             continue
         rx = max(0, fn["rx_of"](row))
         tx = max(0, fn["tx_of"](row))
@@ -66,6 +66,7 @@ def candidates(raw: list, fn: dict) -> list:
             raise RuntimeError("Duplicate live stream in snapshot")
         seen.add((source, name))
         result.append((source, name, fn["session_of"](row), rx, tx, total,
+                       bool(fn["connected_of"](row)),
                        row.get("real_address"), row.get("virtual_ip")))
     return result
 
@@ -90,6 +91,9 @@ def self_test() -> None:
         "local", example, fn["session_of"](example))
     assert records[0][2] == fn["session_of"](example)
     assert records[0][5] == 5000
+    assert records[0][6] is True
+    disconnected = dict(example, client_name="disconnected-user", connected=False)
+    assert candidates([disconnected], fn)[0][6] is False
     print("surena_migrated_baseline_self_test = PASS")
 
 
@@ -124,7 +128,7 @@ def main() -> None:
             total_rows, historic_before = cur.fetchone()
             if total_rows < 1:
                 raise RuntimeError("Historical traffic ledger is empty")
-            for source, name, session, rx, tx, total, address, vpn_ip in rows:
+            for source, name, session, rx, tx, total, connected, address, vpn_ip in rows:
                 cur.execute(
                     "SELECT 1 FROM traffic_sources WHERE source_id=%s AND client_name=%s",
                     (source, name))
@@ -142,11 +146,12 @@ def main() -> None:
                 if not old_total or previous == 0:
                     raise RuntimeError("A new stream lacks historical identity; "
                                        "refuse to baseline an unknown account")
-                planned.append((source, name, session, rx, tx, total, address, vpn_ip))
+                planned.append((source, name, session, rx, tx, total, connected, address, vpn_ip))
 
             print("CUTOVER_MODE =", "APPLY" if args.apply else "AUDIT")
             print("LOCAL_SNAPSHOT_AGE_SECONDS =", round(age))
-            print("LOCAL_ACTIVE_STREAMS =", len(rows))
+            print("LOCAL_SNAPSHOT_STREAMS =", len(rows))
+            print("LOCAL_ACTIVE_STREAMS =", sum(int(row[6]) for row in rows))
             print("NEW_LOCAL_STREAM_BASELINES =", len(planned))
             print("LOCAL_BASELINE_BYTES_NOT_CHARGED =",
                   sum(r[5] for r in planned))
@@ -156,17 +161,17 @@ def main() -> None:
                 if SNAPSHOT.stat().st_mtime_ns != stat_before.st_mtime_ns or \
                         SNAPSHOT.read_bytes() != source_bytes:
                     raise RuntimeError("Local snapshot changed during preparation")
-                for source, name, session, rx, tx, total, address, vpn_ip in planned:
+                for source, name, session, rx, tx, total, connected, address, vpn_ip in planned:
                     cur.execute("""
                         INSERT INTO traffic_sources (
                           source_id, client_name, session_fingerprint,
                           rx_bytes, tx_bytes, total_bytes, connected,
                           real_address, virtual_ip, updated_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,true,%s,%s,now())
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
                         ON CONFLICT (source_id,client_name) DO NOTHING
                         RETURNING source_id
                     """, (source, name, session,
-                          rx, tx, total, address, vpn_ip))
+                          rx, tx, total, connected, address, vpn_ip))
                     if cur.fetchone() is None:
                         raise RuntimeError("Concurrent source insert during baseline")
                 cur.execute("SELECT COUNT(*),COALESCE(SUM(total_bytes),0) FROM traffic_totals")
