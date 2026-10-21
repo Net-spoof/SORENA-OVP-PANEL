@@ -74,6 +74,9 @@ def self_test() -> None:
     # Standalone copies in /root do not have a .parents[2] entry.
     source = Path(__file__).resolve().parent.parent.parent / "deploy/master/scripts/irangate-pg-usage-tick.py"
     if not source.is_file():
+        # Allows a shallow-path self-test copied to /tmp in GitHub CI.
+        source = Path.cwd() / "deploy/master/scripts/irangate-pg-usage-tick.py"
+    if not source.is_file():
         source = TICK
     fn = tick_functions(source)
     example = {"client_name": "test-subscriber", "connected": True,
