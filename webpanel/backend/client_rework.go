@@ -549,31 +549,28 @@ func clientReworkIKEv2(
 			}
 		}
 	}
+	// Rotate only this user's IKEv2 credential, without an intervening delete.
+	// A global users.tsv rollback can otherwise revert unrelated concurrent
+	// client additions, revocations, or password changes.
 	if oldInfo.Available {
-		deleteOutput, deleteErr := ikev2Run("del", name)
-		if deleteErr != nil {
+		output, rotateErr := ikev2Run("rotate", name)
+		if rotateErr != nil {
 			return IKEv2SubscriptionInfo{}, fmt.Errorf(
-				"IKEv2 delete failed: %v; output=%s",
-				deleteErr,
-				strings.TrimSpace(deleteOutput),
+				"IKEv2 rotation failed: %v; safety=%s",
+				rotateErr, ikeSafety,
 			)
 		}
-	}
-	newInfo, err := ensureIKEv2Account(name, true)
-	if err != nil || (oldInfo.Available && oldInfo.Password == newInfo.Password) {
-		cause := err
-		if cause == nil {
-			cause = fmt.Errorf("IKEv2 password did not rotate")
+		newInfo := parseIKEv2AccountOutput(output)
+		if !newInfo.Available || newInfo.Password == oldInfo.Password {
+			return newInfo, fmt.Errorf(
+				"IKEv2 rotation verification failed; safety=%s", ikeSafety,
+			)
 		}
-		rollbackErr := clientReworkRestoreIKEv2(ikeSafety)
-		return newInfo, fmt.Errorf(
-			"%w; rollback=%v; safety=%s",
-			cause,
-			rollbackErr,
-			ikeSafety,
-		)
+		return newInfo, nil
 	}
-	return newInfo, nil
+	// Only create a credential for clients without an existing IKEv2 record.
+	// The user must download its newly issued password before connecting.
+	return ensureIKEv2Account(name, true)
 }
 
 func clientReworkRevokeIKEv2(name string) (bool, error) {
