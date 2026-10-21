@@ -461,6 +461,11 @@ check_final_services() {
         die "charon-systemd not running"
     need irangate-backup-v2-export
     need irangate-backup-v2-import
+    need irangate-ikev2-backup-guard
+    # Verify canonical TSV/EAP parity after the offline IKEv2 stage.
+    # Do not mark an installation complete if backups would be unsafe.
+    /usr/local/sbin/irangate-ikev2-backup-guard --live >/dev/null ||
+        die "IKEv2 backup credential guard failed final validation"
     need irangate-routing
     need sing-box
     need ovp-panel
