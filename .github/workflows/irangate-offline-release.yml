@@ -184,20 +184,7 @@ jobs:
               --target "$GITHUB_SHA" \
               --draft \
               --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 | amd64 | ${GITHUB_SHA:0:12}" \
-              --notes "Offline installer for FRESH Ubuntu 22.04/24.04 AMD64 Master only. Includes panel and delegated-admin access controls, OpenVPN/IKEv2, PostgreSQL, Backup V2, and bundled packages.
-
-Choose the matching installer and SHA256:
-- Ubuntu 22.04 AMD64: SURENA-offline-ubuntu2204-amd64.run + .run.sha256
-- Ubuntu 24.04 AMD64: SURENA-offline-ubuntu2404-amd64.run + .run.sha256
-
-Verify: sha256sum -c FILE.run.sha256
-Install: sudo bash FILE.run
-
-Not for existing deployments, not ARM64. Public downloads require no GitHub login.
-
-فارسی: نصب آفلاین مستر سورنا فقط روی سرور تازه؛ برای آپدیت پنل دارای کاربر استفاده نشود.
-
-Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
+              --notes "SURENA Offline Master (Ubuntu 22.04/24.04, AMD64). Verified complete offline installation for fresh Master VPS only. Both .run installers and matching .sha256 files are attached. Includes panel and delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL, and Backup V2. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi
