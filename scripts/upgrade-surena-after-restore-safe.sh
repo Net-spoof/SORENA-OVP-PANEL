@@ -10,7 +10,7 @@ COMMIT="4b928bcd8c510aaf3d51eb05cf21d714afc14402"
 RELEASE="offline-4b928bcd8c51"
 FRONT="/opt/irangate/webpanel/frontend"
 SOURCE_POINTER="/etc/irangate/source_dir"
-AUTH_FILE="\${SURENA_GITHUB_AUTH_CONFIG:-}"
+AUTH_FILE="${SURENA_GITHUB_AUTH_CONFIG:-}"
 BACK=""
 TMP=""
 MODIFIED=0
@@ -83,7 +83,7 @@ finish() {
     exit "$rc"
 }
 trap finish EXIT
-FILE="/root/SURENA-offline-ubuntu\${VERSION_ID//./}-amd64.run"
+FILE="/root/SURENA-offline-ubuntu${VERSION_ID//./}-amd64.run"
 if [[ "$VERSION_ID" == "22.04" ]]; then
     DIGEST="e7b18ba73499b7c8441fa97a8cc61b3a4ab7f872f3f6377d8088c14c4024f472"
     ASSET="660364875"
