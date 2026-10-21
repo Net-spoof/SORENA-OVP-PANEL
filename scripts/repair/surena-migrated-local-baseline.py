@@ -71,7 +71,8 @@ def candidates(raw: list, fn: dict) -> list:
 
 
 def self_test() -> None:
-    source = Path(__file__).resolve().parents[2] / "deploy/master/scripts/irangate-pg-usage-tick.py"
+    # Standalone copies in /root do not have a .parents[2] entry.
+    source = Path(__file__).resolve().parent.parent.parent / "deploy/master/scripts/irangate-pg-usage-tick.py"
     if not source.is_file():
         source = TICK
     fn = tick_functions(source)
