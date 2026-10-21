@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -u
+umask 077
 
 CONN_NAME="irangate-ikev2-mschapv2"
 
@@ -110,30 +111,85 @@ gen_pass() {
   openssl rand -base64 24 | tr -d '=+/' | cut -c1-22
 }
 
+credential_tx_exit() {
+  local rc="$1"
+  trap - EXIT
+  if [[ "$rc" -ne 0 && -n "${CRED_TX_DIR:-}" ]]; then
+    cp -p "$CRED_TX_DIR/users.tsv" "$USERS_DB" || true
+    if [[ -f "$CRED_TX_DIR/users.conf" ]]; then
+      cp -p "$CRED_TX_DIR/users.conf" "$USERS_CONF" || true
+    else
+      rm -f "$USERS_CONF"
+    fi
+    swanctl --load-all --noprompt >/dev/null 2>&1 || true
+    echo "ERROR: IKEv2 credential operation rolled back" >&2
+  fi
+  if [[ -n "${CRED_TX_DIR:-}" ]]; then
+    rm -rf -- "$CRED_TX_DIR"
+  fi
+}
+
+begin_credential_transaction() {
+  command -v flock >/dev/null 2>&1 || die "flock is required"
+  exec 9>"$BASE_DIR/.credentials.lock"
+  flock -x -w 30 9 || die "another IKEv2 credential operation is running"
+  CRED_TX_DIR="$(mktemp -d "$BASE_DIR/.credentials-tx.XXXXXXXX")" || die "cannot create credential safety directory"
+  chmod 0700 "$CRED_TX_DIR"
+  cp -p "$USERS_DB" "$CRED_TX_DIR/users.tsv" || die "cannot back up IKEv2 users"
+  if [[ -e "$USERS_CONF" ]]; then
+    cp -p "$USERS_CONF" "$CRED_TX_DIR/users.conf" || die "cannot back up StrongSwan credentials"
+  fi
+  trap 'credential_tx_exit "$?"' EXIT
+}
+
 render_users_conf() {
-  {
-    echo "secrets {"
-    awk -F'\t' '$4=="active" {
+  local tmp
+  tmp="$(mktemp "${USERS_CONF}.tmp.XXXXXXXX")" || return 1
+  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  printf 'secrets {\n' > "$tmp"
+  if ! awk -F'\t' '
+    NF != 4 { print "ERROR: invalid IKEv2 TSV row" > "/dev/stderr"; exit 1 }
+    {
       user=$1
+      if (user == "" || seen[user]++) {
+        print "ERROR: empty or duplicate IKEv2 user" > "/dev/stderr"
+        exit 1
+      }
+      if ($4 != "active" && $4 != "blocked") {
+        print "ERROR: invalid IKEv2 status" > "/dev/stderr"
+        exit 1
+      }
+    }
+    $4=="active" {
       pass=$2
+      if (pass == "") {
+        print "ERROR: missing IKEv2 password" > "/dev/stderr"
+        exit 1
+      }
       key=user
       gsub(/[^a-zA-Z0-9_-]/, "_", key)
+      if (labels[key]++) {
+        print "ERROR: conflicting normalized IKEv2 account labels" > "/dev/stderr"
+        exit 1
+      }
       print "    eap-" key " {"
       print "        id = \"" user "\""
       print "        secret = \"" pass "\""
       print "    }"
-    }' "$USERS_DB"
-    echo "}"
-  } > "$USERS_CONF"
-
-  chmod 600 "$USERS_CONF"
+    }
+  ' "$USERS_DB" >> "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  printf '}\n' >> "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f -- "$tmp" "$USERS_CONF"
 }
 
 reload_swanctl() {
-  swanctl --load-all --noprompt >/dev/null 2>&1 || {
-    echo "WARNING: swanctl reload failed" >&2
-    swanctl --load-all --noprompt 2>&1 || true
-  }
+  if ! swanctl --load-all --noprompt >/dev/null 2>&1; then
+    echo "ERROR: StrongSwan credential reload failed" >&2
+    return 1
+  fi
 }
 
 terminate_user() {
@@ -185,14 +241,13 @@ set_status() {
   created="$(echo "$row" | awk -F'\t' '{print $3}')"
   old_status="$(echo "$row" | awk -F'\t' '{print $4}')"
 
-  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
-  mv "$USERS_DB.tmp" "$USERS_DB"
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || die "unable to update IKEv2 users"
+  printf "%s\t%s\t%s\t%s\n" "$user" "$pass" "$created" "$status" >> "$USERS_DB.tmp" || die "unable to append IKEv2 user"
+  chmod 600 "$USERS_DB.tmp"
+  mv -f "$USERS_DB.tmp" "$USERS_DB" || die "unable to commit IKEv2 users"
 
-  printf "%s\t%s\t%s\t%s\n" "$user" "$pass" "$created" "$status" >> "$USERS_DB"
-  chmod 600 "$USERS_DB"
-
-  render_users_conf
-  reload_swanctl
+  render_users_conf || die "IKEv2 credential rendering failed"
+  reload_swanctl || die "IKEv2 credential reload failed"
 
   if [ "$status" = "blocked" ]; then
     terminate_user "$user" >/dev/null 2>&1 || true
@@ -215,16 +270,18 @@ add_user() {
   valid_pass "$pass" || die "invalid password. min 8, no spaces or quotes"
 
   local created
-  created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  created="$(awk -F'\t' -v u="$user" '$1==u {print $3; exit}' "$USERS_DB")"
+  if [[ -z "$created" ]]; then
+    created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
 
-  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
-  mv "$USERS_DB.tmp" "$USERS_DB"
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || die "unable to update IKEv2 users"
+  printf "%s\t%s\t%s\tactive\n" "$user" "$pass" "$created" >> "$USERS_DB.tmp" || die "unable to append IKEv2 user"
+  chmod 600 "$USERS_DB.tmp"
+  mv -f "$USERS_DB.tmp" "$USERS_DB" || die "unable to commit IKEv2 users"
 
-  printf "%s\t%s\t%s\tactive\n" "$user" "$pass" "$created" >> "$USERS_DB"
-  chmod 600 "$USERS_DB"
-
-  render_users_conf
-  reload_swanctl
+  render_users_conf || die "IKEv2 credential rendering failed"
+  reload_swanctl || die "IKEv2 credential reload failed"
 
   echo "IKEv2 user created ✅"
   echo
@@ -238,14 +295,26 @@ delete_user() {
 
   terminate_user "$user" >/dev/null 2>&1 || true
 
-  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || true
-  mv "$USERS_DB.tmp" "$USERS_DB"
-  chmod 600 "$USERS_DB"
+  awk -F'\t' -v u="$user" '$1 != u' "$USERS_DB" > "$USERS_DB.tmp" || die "unable to update IKEv2 users"
+  chmod 600 "$USERS_DB.tmp"
+  mv -f "$USERS_DB.tmp" "$USERS_DB" || die "unable to commit IKEv2 users"
 
-  render_users_conf
-  reload_swanctl
+  render_users_conf || die "IKEv2 credential rendering failed"
+  reload_swanctl || die "IKEv2 credential reload failed"
 
   echo "IKEv2 user deleted ✅ $user"
+}
+
+rotate_user() {
+  local user="${1:-}"
+  [ -n "$user" ] || die "usage: irangate-ikev2 rotate USER"
+  valid_user "$user" || die "invalid username"
+  local row
+  row="$(awk -F'\t' -v u="$user" '$1==u {print; exit}' "$USERS_DB")"
+  [[ -n "$row" ]] || die "cannot rotate missing IKEv2 user"
+  [[ "$(printf '%s\n' "$row" | awk -F'\t' '{print $4}')" == "active" ]] ||
+    die "cannot rotate blocked IKEv2 user"
+  add_user "$user"
 }
 
 list_users() {
@@ -330,8 +399,17 @@ show_config() {
 }
 
 case "${1:-}" in
+  add|rotate|del|delete|remove|block|unblock|reload)
+    begin_credential_transaction
+    ;;
+esac
+
+case "${1:-}" in
   add)
     add_user "${2:-}" "${3:-}"
+    ;;
+  rotate)
+    rotate_user "${2:-}"
     ;;
   del|delete|remove)
     delete_user "${2:-}"
@@ -358,8 +436,8 @@ case "${1:-}" in
     show_config "${2:-}"
     ;;
   reload)
-    render_users_conf
-    reload_swanctl
+    render_users_conf || die "IKEv2 credential rendering failed"
+    reload_swanctl || die "IKEv2 credential reload failed"
     echo "IKEv2 users reloaded ✅"
     ;;
   *)
@@ -368,6 +446,7 @@ IranGate IKEv2 user manager
 
 Usage:
   irangate-ikev2 add USER [PASSWORD]
+  irangate-ikev2 rotate USER
   irangate-ikev2 del USER
   irangate-ikev2 block USER
   irangate-ikev2 unblock USER
