@@ -245,6 +245,20 @@ restore_item() {
 }
 
 # IKEv2
+# Serialize restore with password rotation; never replace the whole IKEv2
+# directory (that would swap the flock inode and permit split-brain writes).
+if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
+    [[ -x /usr/local/sbin/irangate-ikev2 ]] || {
+        echo "[backup-extras] IKEv2 manager missing; refusing unsafe restore" >&2
+        exit 1
+    }
+    mkdir -p -m 0700 /opt/irangate/ikev2
+    exec 8>>/opt/irangate/ikev2/.credentials.lock
+    flock -x -w 60 8 || {
+        echo "[backup-extras] IKEv2 credential lock timeout" >&2
+        exit 1
+    }
+fi
 # Restore only IranGate-owned strongSwan files.
 restore_item /etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf
 # Generated from users.tsv by irangate-ikev2 reload, NEVER restored as independent secret source.
@@ -253,7 +267,7 @@ restore_item /etc/swanctl/private/irangate-server-key.pem
 restore_item /etc/swanctl/x509ca/irangate-ca-cert.pem
 restore_item /etc/swanctl/x509/irangate-server-cert.pem
 restore_item /etc/sysctl.d/99-irangate-ikev2.conf
-restore_item /opt/irangate/ikev2
+restore_item /opt/irangate/ikev2/users.tsv
 restore_item /opt/irangate/traffic/ikev2_current_stats.json
 restore_item /opt/irangate/traffic/ikev2_last_seen.json
 restore_item /opt/irangate/traffic/global_usage_totals.json
@@ -332,6 +346,10 @@ if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
         { echo "[backup-extras] IKEv2 EAP reload FAILED" >&2; exit 1; }
     /usr/bin/python3 /usr/local/sbin/irangate-ikev2-backup-guard --live ||
         { echo "[backup-extras] IKEv2 live credentials diverged" >&2; exit 1; }
+fi
+if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
+    flock -u 8
+    exec 8>&-
 fi
 
 if [[ -x /usr/local/bin/irangate-routing &&
