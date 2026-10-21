@@ -69,6 +69,7 @@ check() {
 num() {
     awk -F' = ' -v k="$1" '$1==k {print $2}' "$2" | tail -1
 }
+check BASELINE_SELF_TEST python3 "$HELPER" --self-test
 check SYNC_DRY python3 /usr/local/bin/irangate-pg-sync-clients.py
 grep -Fxq 'database_modified = NO' "$LOG/SYNC_DRY.log" || die "Sync was not read-only"
 check USAGE_DRY python3 /usr/local/bin/irangate-pg-usage-tick.py
@@ -113,6 +114,14 @@ log "SAFETY_BACKUP=PASS $BACK"
 
 check REFRESH_LOCAL python3 /usr/local/bin/irangate-local-status-snapshot.py
 check BASELINE_PRECHECK python3 "$HELPER" --audit
+BEFORE_ACTIVE="$(num LOCAL_ACTIVE_STREAMS "$LOG/BASELINE_AUDIT.log")"
+LIVE_ACTIVE="$(num LOCAL_ACTIVE_STREAMS "$LOG/BASELINE_PRECHECK.log")"
+[[ "$BEFORE_ACTIVE" =~ ^[0-9]+$ && "$LIVE_ACTIVE" =~ ^[0-9]+$ ]] ||
+    die "Malformed active session count"
+MIN_ACTIVE=$(( BEFORE_ACTIVE > 1 ? BEFORE_ACTIVE - 1 : 1 ))
+[[ "$LIVE_ACTIVE" -ge "$MIN_ACTIVE" ]] ||
+    die "Live snapshot unexpectedly empty/incomplete ($LIVE_ACTIVE < $MIN_ACTIVE); no baseline applied"
+log "LIVE_LOCAL_STREAMS=$LIVE_ACTIVE"
 log "LIVE_LOCAL_BASELINES=$(num NEW_LOCAL_STREAM_BASELINES "$LOG/BASELINE_PRECHECK.log")"
 check BASELINE_APPLY python3 "$HELPER" --apply
 grep -Fxq 'BASELINE_COMMIT = PASS' "$LOG/BASELINE_APPLY.log" ||
