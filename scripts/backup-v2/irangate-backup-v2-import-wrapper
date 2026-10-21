@@ -71,6 +71,67 @@ done
     exit 1
 }
 
+# Validate the archive AND its IKEv2 canonical store before PostgreSQL,
+# clients, timers or VPN state can be modified by the core importer.
+# The core alone does not validate runtime extras (they are restored below).
+if [[ -n "$ARCHIVE" ]]; then
+    "$BASE" --validate-only "$ARCHIVE" >/dev/null || {
+        echo "[backup-extras] core archive validation failed before restore" >&2
+        exit 1
+    }
+    GUARD="/usr/local/sbin/irangate-ikev2-backup-guard"
+    if [[ ! -f "$GUARD" ]]; then
+        echo "[backup-extras] credential guard missing; no restore performed" >&2
+        exit 1
+    fi
+    python3 - "$ARCHIVE" "$GUARD" <<'PY_GUARD'
+import pathlib
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+archive, guard = sys.argv[1:]
+wanted = {
+    "etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf",
+    "etc/swanctl/conf.d/irangate-ikev2-users.conf",
+    "opt/irangate/ikev2/users.tsv",
+}
+with tempfile.TemporaryDirectory(prefix="ikev2-archive-guard-") as tmp:
+    seen = set()
+    with tarfile.open(archive, "r:*") as tar:
+        for member in tar:
+            path = member.name.removeprefix("./")
+            parts = path.split("/")
+            if len(parts) < 3 or parts[0:2] not in (
+                ["extras", "runtime"], ["extras", "ikev2"]
+            ):
+                continue
+            rel = "/".join(parts[2:])
+            if rel not in wanted:
+                continue
+            if (rel in seen or not member.isfile() or
+                    member.size > 16 * 1024 * 1024):
+                raise SystemExit("IKEv2 backup invalid/duplicate credential entry")
+            seen.add(rel)
+            fileobj = tar.extractfile(member)
+            if fileobj is None:
+                raise SystemExit("IKEv2 backup credential unreadable")
+            destination = pathlib.Path(tmp, rel)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("wb") as output:
+                output.write(fileobj.read(16 * 1024 * 1024 + 1))
+    if not seen and pathlib.Path(
+        "/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf"
+    ).is_file():
+        raise SystemExit("Backup lacks IKEv2 credentials; refusing unsafe restore")
+    result = subprocess.run(
+        [sys.executable, guard, "--snapshot", tmp], check=False
+    )
+    raise SystemExit(result.returncode)
+PY_GUARD
+fi
+
 set +e
 "$BASE" "$@" >"$CORE_LOG" 2>&1
 RC=$?
@@ -184,20 +245,40 @@ restore_item() {
 }
 
 # IKEv2
+# Serialize restore with password rotation; never replace the whole IKEv2
+# directory (that would swap the flock inode and permit split-brain writes).
+if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
+    [[ -x /usr/local/sbin/irangate-ikev2 ]] || {
+        echo "[backup-extras] IKEv2 manager missing; refusing unsafe restore" >&2
+        exit 1
+    }
+    mkdir -p -m 0700 /opt/irangate/ikev2
+    exec 8>>/opt/irangate/ikev2/.credentials.lock
+    flock -x -w 60 8 || {
+        echo "[backup-extras] IKEv2 credential lock timeout" >&2
+        exit 1
+    }
+fi
 # Restore only IranGate-owned strongSwan files.
 restore_item /etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf
-restore_item /etc/swanctl/conf.d/irangate-ikev2-users.conf
+# Generated from users.tsv by irangate-ikev2 reload, NEVER restored as independent secret source.
 restore_item /etc/swanctl/private/irangate-ca-key.pem
 restore_item /etc/swanctl/private/irangate-server-key.pem
 restore_item /etc/swanctl/x509ca/irangate-ca-cert.pem
 restore_item /etc/swanctl/x509/irangate-server-cert.pem
 restore_item /etc/sysctl.d/99-irangate-ikev2.conf
-restore_item /opt/irangate/ikev2
+restore_item /opt/irangate/ikev2/users.tsv
+# Release before invoking the manager: its reload operation independently
+# acquires this same flock. The manager reloads from current canonical TSV.
+if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
+    flock -u 8
+    exec 8>&-
+fi
 restore_item /opt/irangate/traffic/ikev2_current_stats.json
 restore_item /opt/irangate/traffic/ikev2_last_seen.json
 restore_item /opt/irangate/traffic/global_usage_totals.json
 restore_item /opt/irangate/webpanel/server.json
-restore_item /usr/local/sbin/irangate-ikev2
+# Preserve installed credential manager; old backups may contain an unsafe older version.
 restore_item /usr/local/sbin/irangate-ikev2-stats-snapshot
 restore_item /usr/local/sbin/irangate-ikev2-firewall.sh
 restore_item /etc/systemd/system/irangate-ikev2-firewall.service
@@ -250,6 +331,11 @@ then
     fi
 fi
 
+if [[ -s /opt/irangate/ikev2/users.tsv && ! -x /usr/local/sbin/irangate-ikev2 ]]; then
+    echo "[backup-extras] IKEv2 credential manager missing: refusing incomplete restore" >&2
+    exit 1
+fi
+
 if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
     systemctl enable --now strongswan \
         >/dev/null 2>&1 || true
@@ -260,10 +346,13 @@ if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
     systemctl enable --now irangate-ikev2-stats.timer \
         >/dev/null 2>&1 || true
 
+    # Fail loudly; never report restore success with unavailable or stale EAP.
     /usr/local/sbin/irangate-ikev2 reload \
-        >/dev/null 2>&1 || true
+        >/dev/null ||
+        { echo "[backup-extras] IKEv2 EAP reload FAILED" >&2; exit 1; }
+    /usr/bin/python3 /usr/local/sbin/irangate-ikev2-backup-guard --live ||
+        { echo "[backup-extras] IKEv2 live credentials diverged" >&2; exit 1; }
 fi
-
 if [[ -x /usr/local/bin/irangate-routing &&
       -x "$(command -v sing-box 2>/dev/null || true)" ]]
 then

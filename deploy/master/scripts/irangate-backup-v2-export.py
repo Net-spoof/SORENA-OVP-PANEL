@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
@@ -363,13 +364,13 @@ def copy_runtime_extras(stage: Path) -> int:
 
     sources = (
         "/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf",
-        "/etc/swanctl/conf.d/irangate-ikev2-users.conf",
+        # Derived EAP credentials are regenerated from canonical users.tsv.
         "/etc/swanctl/private/irangate-ca-key.pem",
         "/etc/swanctl/private/irangate-server-key.pem",
         "/etc/swanctl/x509ca/irangate-ca-cert.pem",
         "/etc/swanctl/x509/irangate-server-cert.pem",
         "/etc/sysctl.d/99-irangate-ikev2.conf",
-        "/opt/irangate/ikev2",
+        # Canonical IKEv2 store is snapshotted under its mutation lock below.
         "/opt/irangate/traffic/ikev2_current_stats.json",
         "/opt/irangate/traffic/ikev2_last_seen.json",
         "/opt/irangate/traffic/global_usage_totals.json",
@@ -393,6 +394,27 @@ def copy_runtime_extras(stage: Path) -> int:
 
     copied = 0
 
+    # Use the SAME flock as irangate-ikev2 mutations to ensure that the
+    # canonical credential store cannot rotate while it is copied.
+    canonical = Path("/opt/irangate/ikev2/users.tsv")
+    conn = Path("/etc/swanctl/conf.d/irangate-ikev2-mschapv2.conf")
+    runtime_guard = Path("/usr/local/sbin/irangate-ikev2-backup-guard")
+    if conn.is_file() or canonical.is_file():
+        if not runtime_guard.is_file():
+            raise RuntimeError("IKEv2 backup guard not installed; refusing unsafe export")
+        lock = canonical.parent / ".credentials.lock"
+        with lock.open("a") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            checked = subprocess.run(
+                [sys.executable, str(runtime_guard), "--live"],
+                capture_output=True, text=True, check=False,
+            )
+            if checked.returncode != 0:
+                raise RuntimeError("IKEv2 live credential parity check failed; backup aborted")
+            if copy_optional(canonical.parent, root / "opt/irangate/ikev2"):
+                copied += 1
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     for raw_source in sources:
         source = Path(raw_source)
         destination = (
@@ -402,6 +424,14 @@ def copy_runtime_extras(stage: Path) -> int:
 
         if copy_optional(source, destination):
             copied += 1
+
+    if conn.is_file() or canonical.is_file():
+        checked = subprocess.run(
+            [sys.executable, str(runtime_guard), "--snapshot", str(root)],
+            capture_output=True, text=True, check=False,
+        )
+        if checked.returncode != 0:
+            raise RuntimeError("IKEv2 archived credential consistency check failed")
 
     manifest = root / "MANIFEST.txt"
     manifest.write_text(
@@ -1069,6 +1099,8 @@ def write_manifest(
             "database_credentials_included": False,
             "traffic_daily_history_included": False,
             "subscription_tokens_preserved": True,
+            "ikev2_password_source": "extras/runtime/opt/irangate/ikev2/users.tsv",
+            "ikev2_eap_secrets_generated_on_restore": True,
             "openvpn_private_key_material_included": True,
             "remote_node_snapshots_included": (
                 "node-snapshots" in components

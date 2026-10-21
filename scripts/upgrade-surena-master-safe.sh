@@ -88,7 +88,12 @@ log "Compiling SURENA Master and CLI without installing them"
 (cd "$SRC" && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/cli" ./main.go)
 bash -n "$SRC/scripts/ovp-panel"
 bash "$SRC/scripts/test-ikev2-credential-integrity.sh"
-log "IKEV2_CREDENTIAL_TESTS=PASS"
+bash -n "$SRC/scripts/backup-v2/irangate-backup-v2-import-wrapper"
+bash -n "$SRC/scripts/backup-v2/irangate-backup-v2-export-wrapper"
+python3 -m py_compile "$SRC/deploy/master/scripts/irangate-backup-v2-export.py" "$SRC/deploy/master/scripts/irangate-backup-v2-import.py" "$SRC/scripts/backup-v2/ikev2-credential-guard.py"
+python3 "$SRC/scripts/backup-v2/ikev2-credential-guard.py" --self-test
+python3 "$SRC/scripts/backup-v2/ikev2-credential-guard.py" --live
+log "IKEV2_CREDENTIAL_AND_BACKUP_TESTS=PASS"
 log "Current then proposed webpanel SHA256:"
 sha256sum "$BIN" "$WORK/build/webpanel"
 if [[ "$MODE" == --preflight ]]; then
@@ -104,11 +109,13 @@ BACK="/root/surena-code-rollback.$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACK/bin" "$BACK/sbin"
 log "Backup and database export: $BACK"
 for f in irangate-webpanel irangate ovp-panel irangate-routing \
+         irangate-backup-v2-export irangate-backup-v2-import \
+         irangate-backup-v2-export.py irangate-backup-v2-import.py \
          irangate-local-status-snapshot.py irangate-node-usage-sync.py \
          irangate-pg-usage-tick.py irangate-pg-enforcer.py irangate-pg-sync-clients.py; do
     [[ ! -f "/usr/local/bin/$f" ]] || cp -a "/usr/local/bin/$f" "$BACK/bin/"
 done
-for f in irangate-ikev2 irangate-ikev2-credential-audit irangate-ikev2-stats-snapshot; do
+for f in irangate-ikev2 irangate-ikev2-credential-audit irangate-ikev2-backup-guard irangate-ikev2-stats-snapshot; do
     [[ ! -f "/usr/local/sbin/$f" ]] || cp -a "/usr/local/sbin/$f" "$BACK/sbin/"
 done
 install -d -m 0700 "$BACK/ikev2-secrets"
@@ -152,6 +159,16 @@ install -m 0755 "$SRC/deploy/master/ikev2/irangate-ikev2" \
     /usr/local/sbin/irangate-ikev2
 install -m 0755 "$SRC/scripts/audit-ikev2-credential-parity.py" \
     /usr/local/sbin/irangate-ikev2-credential-audit
+install -m 0755 "$SRC/scripts/backup-v2/ikev2-credential-guard.py" \
+    /usr/local/sbin/irangate-ikev2-backup-guard
+install -m 0755 "$SRC/deploy/master/scripts/irangate-backup-v2-export.py" \
+    /usr/local/bin/irangate-backup-v2-export.py
+install -m 0755 "$SRC/deploy/master/scripts/irangate-backup-v2-import.py" \
+    /usr/local/bin/irangate-backup-v2-import.py
+install -m 0755 "$SRC/scripts/backup-v2/irangate-backup-v2-export-wrapper" \
+    /usr/local/bin/irangate-backup-v2-export
+install -m 0755 "$SRC/scripts/backup-v2/irangate-backup-v2-import-wrapper" \
+    /usr/local/bin/irangate-backup-v2-import
 rm -rf -- "$FRONT"
 cp -a "$SRC/webpanel/frontend" "$FRONT"
 ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel
@@ -173,7 +190,8 @@ for f in /opt/irangate/ikev2/users.tsv /etc/swanctl/conf.d/irangate-ikev2-users.
             die "Credential data changed unexpectedly during code-only upgrade: $f"
     fi
 done
-/usr/local/sbin/irangate-ikev2-credential-audit || true
+/usr/local/sbin/irangate-ikev2-credential-audit --strict
+/usr/local/sbin/irangate-ikev2-backup-guard --live
 mkdir -p "/opt/surena-releases/$REV"
 cp -a "$SRC/deploy" "$SRC/scripts" "$SRC/webpanel/backend" "/opt/surena-releases/$REV/"
 printf '%s\n' "$REV" > /opt/surena-releases/CURRENT
