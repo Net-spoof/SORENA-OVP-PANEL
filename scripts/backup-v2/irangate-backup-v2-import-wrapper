@@ -268,6 +268,12 @@ restore_item /etc/swanctl/x509ca/irangate-ca-cert.pem
 restore_item /etc/swanctl/x509/irangate-server-cert.pem
 restore_item /etc/sysctl.d/99-irangate-ikev2.conf
 restore_item /opt/irangate/ikev2/users.tsv
+# Release before invoking the manager: its reload operation independently
+# acquires this same flock. The manager reloads from current canonical TSV.
+if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
+    flock -u 8
+    exec 8>&-
+fi
 restore_item /opt/irangate/traffic/ikev2_current_stats.json
 restore_item /opt/irangate/traffic/ikev2_last_seen.json
 restore_item /opt/irangate/traffic/global_usage_totals.json
@@ -347,11 +353,6 @@ if [[ -x /usr/local/sbin/irangate-ikev2 ]]; then
     /usr/bin/python3 /usr/local/sbin/irangate-ikev2-backup-guard --live ||
         { echo "[backup-extras] IKEv2 live credentials diverged" >&2; exit 1; }
 fi
-if [[ -f "$ROOT/opt/irangate/ikev2/users.tsv" ]]; then
-    flock -u 8
-    exec 8>&-
-fi
-
 if [[ -x /usr/local/bin/irangate-routing &&
       -x "$(command -v sing-box 2>/dev/null || true)" ]]
 then
