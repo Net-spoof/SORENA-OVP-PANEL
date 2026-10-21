@@ -72,6 +72,8 @@ def candidates(raw: list, fn: dict) -> list:
 
 def self_test() -> None:
     source = Path(__file__).resolve().parents[2] / "deploy/master/scripts/irangate-pg-usage-tick.py"
+    if not source.is_file():
+        source = TICK
     fn = tick_functions(source)
     example = {"client_name": "test-subscriber", "connected": True,
                "client_id": "7", "connected_since": "2026-10-21T02:00:00Z",
