@@ -109,6 +109,9 @@ jobs:
           bash -n scripts/repair-surena-telegram-backup-branding.sh
           bash -n scripts/upgrade-surena-master-safe.sh
           bash -n scripts/upgrade-surena-after-restore-safe.sh
+          bash -n scripts/repair-surena-master-migration.sh
+          python3 -m py_compile scripts/repair/surena-migrated-local-baseline.py
+          python3 scripts/repair/surena-migrated-local-baseline.py --self-test
           grep -Fq 'ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel' install.sh
           grep -Fq 'run_stage panel-manager install_panel_manager' scripts/offline/install-master-from-bundle.sh
           grep -Fq 'need surena-panel' scripts/offline/install-master-from-bundle.sh
