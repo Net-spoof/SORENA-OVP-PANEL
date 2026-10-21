@@ -33,6 +33,29 @@ done
     stop "OpenVPN PKI missing: restore original CA from Backup V2. Never generate a new CA."
 CLIENTS="$(find /opt/irangate/database/clients -maxdepth 1 -type f -name '*.json' | wc -l)"
 [[ "$CLIENTS" -gt 0 ]] || stop "No restored clients found. Confirm Backup V2 restoration before upgrade."
+# Do not silently mistake an empty PostgreSQL ledger for a completed migration.
+python3 - <<'PY'
+from pathlib import Path
+import psycopg2
+dsn = None
+for line in Path("/etc/irangate-db.env").read_text().splitlines():
+    if line.startswith("IRANGATE_DB_DSN="):
+        dsn = line.split("=", 1)[1].strip().strip('"').strip("'")
+        break
+if not dsn:
+    raise SystemExit("STOP: PostgreSQL DSN missing")
+with psycopg2.connect(dsn, connect_timeout=10) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM clients")
+        users = int(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(total_bytes),0) FROM traffic_totals")
+        rows, used = (int(x) for x in cur.fetchone())
+print("POSTGRES_CLIENTS =", users)
+print("TRAFFIC_LEDGER_USERS =", rows)
+print("TRAFFIC_LEDGER_TOTAL_BYTES =", used)
+if users == 0 or rows == 0:
+    raise SystemExit("STOP: PostgreSQL user or traffic ledger empty: restore Backup V2 before updating code.")
+PY
 PORT="$(sed -nE 's/^WEBPANEL_PORT="?([0-9]+)"?$/\1/p' /etc/irangate/webpanel.env | tail -1)"
 [[ "$PORT" =~ ^[0-9]+$ ]] || stop "Cannot read WEBPANEL_PORT."
 healthy() {
