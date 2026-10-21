@@ -87,6 +87,8 @@ log "Compiling SURENA Master and CLI without installing them"
 (cd "$SRC/webpanel/backend" && go test -count=1 ./... && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/webpanel" .)
 (cd "$SRC" && CGO_ENABLED=0 go build -trimpath -o "$WORK/build/cli" ./main.go)
 bash -n "$SRC/scripts/ovp-panel"
+bash "$SRC/scripts/test-ikev2-credential-integrity.sh"
+log "IKEV2_CREDENTIAL_TESTS=PASS"
 log "Current then proposed webpanel SHA256:"
 sha256sum "$BIN" "$WORK/build/webpanel"
 if [[ "$MODE" == --preflight ]]; then
@@ -106,8 +108,13 @@ for f in irangate-webpanel irangate ovp-panel irangate-routing \
          irangate-pg-usage-tick.py irangate-pg-enforcer.py irangate-pg-sync-clients.py; do
     [[ ! -f "/usr/local/bin/$f" ]] || cp -a "/usr/local/bin/$f" "$BACK/bin/"
 done
-[[ ! -f /usr/local/sbin/irangate-ikev2-stats-snapshot ]] ||
-    cp -a /usr/local/sbin/irangate-ikev2-stats-snapshot "$BACK/sbin/"
+for f in irangate-ikev2 irangate-ikev2-credential-audit irangate-ikev2-stats-snapshot; do
+    [[ ! -f "/usr/local/sbin/$f" ]] || cp -a "/usr/local/sbin/$f" "$BACK/sbin/"
+done
+install -d -m 0700 "$BACK/ikev2-secrets"
+for f in /opt/irangate/ikev2/users.tsv /etc/swanctl/conf.d/irangate-ikev2-users.conf; do
+    [[ ! -f "$f" ]] || cp -a "$f" "$BACK/ikev2-secrets/$(basename "$f")"
+done
 cp -a "$FRONT" "$BACK/frontend"
 cp -a /opt/irangate/webpanel/nodes.json "$BACK/nodes.json"
 cp -a /opt/irangate/database/clients "$BACK/clients"
@@ -141,6 +148,10 @@ install -m 0755 "$SRC/scripts/ovp-panel" /usr/local/bin/ovp-panel
 [[ ! -f "$SRC/deploy/master/ikev2/irangate-ikev2-stats-snapshot.py" ]] ||
     install -m 0755 "$SRC/deploy/master/ikev2/irangate-ikev2-stats-snapshot.py" \
         /usr/local/sbin/irangate-ikev2-stats-snapshot
+install -m 0755 "$SRC/deploy/master/ikev2/irangate-ikev2" \
+    /usr/local/sbin/irangate-ikev2
+install -m 0755 "$SRC/scripts/audit-ikev2-credential-parity.py" \
+    /usr/local/sbin/irangate-ikev2-credential-audit
 rm -rf -- "$FRONT"
 cp -a "$SRC/webpanel/frontend" "$FRONT"
 ln -sfn /usr/local/bin/ovp-panel /usr/local/bin/surena-panel
@@ -155,6 +166,14 @@ NOW_CLIENTS="$(find /opt/irangate/database/clients -maxdepth 1 -name '*.json' -t
 NOW_NODES="$(sha256sum /opt/irangate/webpanel/nodes.json | cut -d' ' -f1)"
 [[ "$NOW_CLIENTS" == "$ORIG_CLIENTS" && "$NOW_NODES" == "$ORIG_NODES" ]] ||
     die "Client count or nodes metadata unexpectedly changed"
+for f in /opt/irangate/ikev2/users.tsv /etc/swanctl/conf.d/irangate-ikev2-users.conf; do
+    saved="$BACK/ikev2-secrets/$(basename "$f")"
+    if [[ -f "$saved" ]]; then
+        [[ -f "$f" && "$(sha256sum "$f" | cut -d' ' -f1)" == "$(sha256sum "$saved" | cut -d' ' -f1)" ]] ||
+            die "Credential data changed unexpectedly during code-only upgrade: $f"
+    fi
+done
+/usr/local/sbin/irangate-ikev2-credential-audit || true
 mkdir -p "/opt/surena-releases/$REV"
 cp -a "$SRC/deploy" "$SRC/scripts" "$SRC/webpanel/backend" "/opt/surena-releases/$REV/"
 printf '%s\n' "$REV" > /opt/surena-releases/CURRENT

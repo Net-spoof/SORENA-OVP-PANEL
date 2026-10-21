@@ -3854,7 +3854,10 @@ func subscriptionPageHandler(w http.ResponseWriter, r *http.Request) {
 		"local",
 	)
 
-	ikev2Cfg, _ := ensureIKEv2Account(clientName, masterAllowed)
+	// Subscription views must never silently issue a new IKEv2 password
+	// when a restored account is missing from the credential store.
+	// Such auto-creation invalidates existing phone configurations.
+	ikev2Cfg, _ := ensureIKEv2Account(clientName, false)
 	if !masterAllowed {
 		ikev2Cfg.Available = false
 	}
@@ -4221,7 +4224,9 @@ func subscriptionIKEv2DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := ensureIKEv2Account(clientName, true)
+	// Do not silently replace a missing IKEv2 credential on download.
+	// Administrators must recover the old secret or explicitly reset it.
+	info, err := ensureIKEv2Account(clientName, false)
 	if err != nil || !info.Available {
 		msg := "IKEv2 config is not ready"
 		if err != nil {
