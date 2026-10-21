@@ -65,9 +65,26 @@ def candidates(raw: list, fn: dict) -> list:
         if (source, name) in seen:
             raise RuntimeError("Duplicate live stream in snapshot")
         seen.add((source, name))
-        result.append((source, name, rx, tx, total,
+        result.append((source, name, fn["session_of"](row), rx, tx, total,
                        row.get("real_address"), row.get("virtual_ip")))
     return result
+
+
+def self_test() -> None:
+    source = Path(__file__).resolve().parents[2] / "deploy/master/scripts/irangate-pg-usage-tick.py"
+    fn = tick_functions(source)
+    example = {"client_name": "test-subscriber", "connected": True,
+               "client_id": "7", "connected_since": "2026-10-21T02:00:00Z",
+               "real_address": "192.0.2.10:12000", "virtual_ip": "10.8.0.5",
+               "current_received": 2000, "current_sent": 3000,
+               "current_total": 5000}
+    records = candidates([example], fn)
+    assert len(records) == 1
+    assert records[0][0] == fn["counter_epoch_key"](
+        "local", example, fn["session_of"](example))
+    assert records[0][2] == fn["session_of"](example)
+    assert records[0][5] == 5000
+    print("surena_migrated_baseline_self_test = PASS")
 
 
 def main() -> None:
@@ -101,7 +118,7 @@ def main() -> None:
             total_rows, historic_before = cur.fetchone()
             if total_rows < 1:
                 raise RuntimeError("Historical traffic ledger is empty")
-            for source, name, rx, tx, total, address, vpn_ip in rows:
+            for source, name, session, rx, tx, total, address, vpn_ip in rows:
                 cur.execute(
                     "SELECT 1 FROM traffic_sources WHERE source_id=%s AND client_name=%s",
                     (source, name))
@@ -119,21 +136,21 @@ def main() -> None:
                 if not old_total or previous == 0:
                     raise RuntimeError("A new stream lacks historical identity; "
                                        "refuse to baseline an unknown account")
-                planned.append((source, name, rx, tx, total, address, vpn_ip))
+                planned.append((source, name, session, rx, tx, total, address, vpn_ip))
 
             print("CUTOVER_MODE =", "APPLY" if args.apply else "AUDIT")
             print("LOCAL_SNAPSHOT_AGE_SECONDS =", round(age))
             print("LOCAL_ACTIVE_STREAMS =", len(rows))
             print("NEW_LOCAL_STREAM_BASELINES =", len(planned))
             print("LOCAL_BASELINE_BYTES_NOT_CHARGED =",
-                  sum(r[4] for r in planned))
+                  sum(r[5] for r in planned))
             print("HISTORICAL_TOTAL_BYTES =", int(historic_before))
 
             if args.apply:
                 if SNAPSHOT.stat().st_mtime_ns != stat_before.st_mtime_ns or \
                         SNAPSHOT.read_bytes() != source_bytes:
                     raise RuntimeError("Local snapshot changed during preparation")
-                for source, name, rx, tx, total, address, vpn_ip in planned:
+                for source, name, session, rx, tx, total, address, vpn_ip in planned:
                     cur.execute("""
                         INSERT INTO traffic_sources (
                           source_id, client_name, session_fingerprint,
@@ -142,7 +159,7 @@ def main() -> None:
                         ) VALUES (%s,%s,%s,%s,%s,%s,true,%s,%s,now())
                         ON CONFLICT (source_id,client_name) DO NOTHING
                         RETURNING source_id
-                    """, (source, name, "surena-migrated-baseline",
+                    """, (source, name, session,
                           rx, tx, total, address, vpn_ip))
                     if cur.fetchone() is None:
                         raise RuntimeError("Concurrent source insert during baseline")
@@ -165,7 +182,10 @@ def main() -> None:
 
 if __name__ == "__main__":
     try:
-        main()
+        if "--self-test" in sys.argv:
+            self_test()
+        else:
+            main()
     except Exception as error:
         print("BASELINE_STOP =", str(error), file=sys.stderr)
         raise SystemExit(1)
