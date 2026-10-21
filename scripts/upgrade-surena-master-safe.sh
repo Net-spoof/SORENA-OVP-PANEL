@@ -6,7 +6,16 @@ umask 077
 export PATH="/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 MODE="$1"
 REV="$2"
-AUTH="$SURENA_GITHUB_AUTH_CONFIG"
+AUTH_OPTS=()
+# Repository is public. Authentication is optional and only used if supplied.
+if [[ -n "${SURENA_GITHUB_AUTH_CONFIG:-}" ]]; then
+    AUTH="${SURENA_GITHUB_AUTH_CONFIG}"
+    [[ -f "$AUTH" && ! -L "$AUTH" ]] || {
+        echo "Invalid optional SURENA_GITHUB_AUTH_CONFIG" >&2
+        exit 1
+    }
+    AUTH_OPTS=(--config "$AUTH")
+fi
 FRONT="/opt/irangate/webpanel/frontend"
 BIN="/usr/local/bin/irangate-webpanel"
 CLI="/usr/local/bin/irangate"
@@ -19,12 +28,12 @@ die() { log "STOP: $*" >&2; exit 1; }
 [[ "$EUID" -eq 0 ]] || die "Must run as root"
 [[ "$MODE" == --preflight || "$MODE" == --apply ]] || die "Usage: --preflight|--apply COMMIT"
 [[ "$REV" =~ ^[a-f0-9]{40}$ ]] || die "Pin an exact 40-character commit"
-[[ -f "$AUTH" && ! -L "$AUTH" ]] || die "Provide secure curl config"
 for cmd in curl tar go python3 systemctl sha256sum pg_dump flock; do
     command -v "$cmd" >/dev/null || die "Missing $cmd"
 done
-[[ -s "$BIN" && -d "$FRONT" && -f /etc/irangate-db.env ]] ||
-    die "Not an existing SURENA Master"
+[[ -s "$BIN" ]] || die "Master binary missing at $BIN (migrated servers may use another ExecStart; inspect systemctl cat irangate-webpanel)"
+[[ -d "$FRONT" ]] || die "Master frontend missing at $FRONT (inspect WEBPANEL_STATIC_DIR in systemd config)"
+[[ -f /etc/irangate-db.env ]] || die "PostgreSQL environment missing at /etc/irangate-db.env (inspect installed DB config; do not recreate blindly)"
 PORT="$(sed -nE 's/^WEBPANEL_PORT=([0-9]+)$/\1/p' /etc/irangate/webpanel.env | tail -1)"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "Unknown webpanel port"
 health() {
@@ -61,9 +70,9 @@ on_exit() {
 trap on_exit EXIT
 
 mkdir "$WORK/source" "$WORK/build"
-log "Downloading pinned private source $REV"
+log "Downloading pinned public source $REV"
 curl -fLsS --retry 2 --connect-timeout 15 --max-time 240 \
-    --config "$AUTH" \
+    "${AUTH_OPTS[@]}" \
     "https://api.github.com/repos/Net-spoof/SORENA-OVP-PANEL/tarball/$REV" \
     -o "$WORK/source.tar.gz"
 tar -tzf "$WORK/source.tar.gz" >/dev/null || die "Invalid source archive"
