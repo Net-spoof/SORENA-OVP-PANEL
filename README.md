@@ -45,6 +45,15 @@
 
 > **نکته معماری:** لوکیشن‌های پورت‌دار به‌تنهایی به معنی داشتن IP خروجی متفاوت نیستند. کشور و IP خروجی به سرور و مسیر واقعی ترافیک بستگی دارد. تنظیم مسیرهای خروجی باید به‌صورت جداگانه انجام شود.
 
+### 📦 دانلود آخرین نسخه آفلاین Master
+
+**[آخرین Release رسمی SURENA](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest)**
+
+- **Ubuntu 22.04 / AMD64:** [فایل نصب](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
+- **Ubuntu 24.04 / AMD64:** [فایل نصب](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+
+**فقط نصب تازه روی AMD64**؛ برای ارتقای پنل دارای کاربر یا ARM64 نیست. [آموزش نصب](docs/OFFLINE-RELEASE.md) · [آرشیو نسخه‌ها](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases)
+
 ### 🖥️ نصب آنلاین پنل مرکزی (Master)
 
 **پیش‌نیازها:** سرور تازه با Ubuntu **22.04 یا 24.04**، معماری **amd64**، دسترسی `root` یا `sudo`، اینترنت، `systemd` و دستگاه `TUN` فعال.
@@ -219,6 +228,15 @@ sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@s
 > **Network design:** A named, port-based location is not necessarily a separate exit IP. The actual egress address depends on your configured routing and infrastructure.
 
 ### 🖥️ Online Master Installation
+
+### 📦 Latest verified offline Master
+
+**[Latest SURENA offline Release](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest)**
+
+- **Ubuntu 22.04 / AMD64:** [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
+- **Ubuntu 24.04 / AMD64:** [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+
+**Fresh AMD64 installations only; not an upgrade or ARM64 installer.** [Guide](docs/OFFLINE-RELEASE.md) · [Older releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases)
 
 **Requirements:** a **fresh Ubuntu 22.04 or 24.04 (amd64)** server with `root` or `sudo`, Internet connectivity, `systemd`, and an enabled `TUN` device.
 

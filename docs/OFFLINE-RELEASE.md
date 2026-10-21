@@ -23,6 +23,17 @@
 
 ### دریافت فایل از Release عمومی
 
+[**دانلود آخرین نسخه آفلاین تأییدشده SURENA**](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest)
+
+| سیستم | فایل نصب | SHA256 |
+| --- | --- | --- |
+| Ubuntu 22.04 / AMD64 | [دانلود](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) | [دریافت هش](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256) |
+| Ubuntu 24.04 / AMD64 | [دانلود](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) | [دریافت هش](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256) |
+
+از هر Release فقط فایل نصب و هش متناظر همان نسخه را دانلود کنید. آخرین نسخه تنها پس از ساخته‌شدن هر دو فایل منتشر می‌شود؛ نسخه‌های قدیمی حذف نمی‌شوند.
+
+
+
 از [صفحه Releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases) یا با GitHub CLI روی گوشی/رایانه متصل به اینترنت دریافت کنید:
 
 <div dir="ltr" align="left">
@@ -125,6 +136,15 @@ The build pipeline downloads dependencies on an online GitHub Actions runner. Th
 Foreign nodes use the [separate Node installer](../node/README.md), which is not offline.
 
 ### Download from public Releases
+
+[**Verified Latest SURENA offline release**](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest)
+
+- Ubuntu 22.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
+- Ubuntu 24.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+
+Only promote a release after both installers are built and checked. Older per-commit versions stay in the archive.
+
+
 
 ~~~bash
 gh release download -R Net-spoof/SORENA-OVP-PANEL \

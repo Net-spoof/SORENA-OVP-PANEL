@@ -19,6 +19,7 @@ on:
       - scripts/repair-surena-telegram-backup-branding.sh
       - scripts/upgrade-surena-master-safe.sh
       - README.md
+      - docs/OFFLINE-RELEASE.md
       - webpanel/frontend/**
       - webpanel/backend/**
       - pkg/menu/menu.go
@@ -182,15 +183,26 @@ jobs:
             if ! gh release create "$tag" \
               --target "$GITHUB_SHA" \
               --draft \
-              --title "SURENA complete offline installer (${GITHUB_SHA:0:12})" \
-              --notes "Self-contained offline installation for fresh Ubuntu 22.04/24.04 amd64 Master servers. Install the .run matching your OS after SHA256 verification. Includes SURENA Backup V2 Telegram captions."; then
+              --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 | amd64 | ${GITHUB_SHA:0:12}" \
+              --notes "Offline installer for FRESH Ubuntu 22.04/24.04 AMD64 Master only. Includes panel and delegated-admin access controls, OpenVPN/IKEv2, PostgreSQL, Backup V2, and bundled packages.
+
+Choose the matching installer and SHA256:
+- Ubuntu 22.04 AMD64: SURENA-offline-ubuntu2204-amd64.run + .run.sha256
+- Ubuntu 24.04 AMD64: SURENA-offline-ubuntu2404-amd64.run + .run.sha256
+
+Verify: sha256sum -c FILE.run.sha256
+Install: sudo bash FILE.run
+
+Not for existing deployments, not ARM64. Public downloads require no GitHub login.
+
+فارسی: نصب آفلاین مستر سورنا فقط روی سرور تازه؛ برای آپدیت پنل دارای کاربر استفاده نشود.
+
+Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi
           fi
-          if ! gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber; then
-            echo "::warning::Release upload denied by GitHub token policy. Build verified. Configure repository secret SURENA_RELEASE_TOKEN (Contents write) to publish, or download Actions artifacts."
-          fi
+          gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber
 
   release:
     name: Verify offline assets and publish Release
@@ -214,6 +226,13 @@ jobs:
             name="SURENA-offline-ubuntu${os}-amd64.run"
             printf '%s\n' "$assets" | grep -Fxq "$name"
             printf '%s\n' "$assets" | grep -Fxq "$name.sha256"
+            size="$(gh release view "$tag" --json assets --jq ".assets[] | select(.name == \"$name\") | .size" | head -n1)"
+            [[ "$size" =~ ^[0-9]+$ && "$size" -ge 100000000 ]] || {
+              echo "::error::Package size invalid: $name ($size)"
+              exit 1
+            }
           done
-          gh release edit "$tag" --draft=false
-          echo "Published verified SURENA offline installers: $tag"
+          # Mark the newly verified release as Latest; keep all older tags for rollback.
+          gh release edit "$tag" --draft=false --latest
+          echo "LATEST_RELEASE_TAG=$tag"
+          echo "STABLE_DOWNLOAD=https://github.com/$GH_REPO/releases/latest"
