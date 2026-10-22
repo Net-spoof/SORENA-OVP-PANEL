@@ -13,7 +13,7 @@
 
 ### نیازمندی‌ها و محدوده نصب
 
-- VPS تازه **Ubuntu 22.04 یا 24.04، معماری amd64**
+- VPS تازه **Ubuntu 22.04، 24.04 یا 26.04، معماری amd64**
 - دسترسی root، systemd، دستگاه TUN و فضای دیسک کافی
 - فایل نصب `.run` و فایل متناظر `.sha256`
 - نصب فقط روی مستر **تازه** انجام شود. اسکریپت از جایگزینی اطلاعات، PKI یا دیتابیس قبلی خودداری می‌کند.
@@ -29,8 +29,9 @@
 | --- | --- | --- |
 | Ubuntu 22.04 / AMD64 | [دانلود](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) | [دریافت هش](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256) |
 | Ubuntu 24.04 / AMD64 | [دانلود](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) | [دریافت هش](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256) |
+| Ubuntu 26.04 / AMD64 | [دانلود](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run) | [دریافت هش](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run.sha256) |
 
-از هر Release فقط فایل نصب و هش متناظر همان نسخه را دانلود کنید. آخرین نسخه تنها پس از ساخته‌شدن هر دو فایل منتشر می‌شود؛ نسخه‌های قدیمی حذف نمی‌شوند.
+از هر Release فقط فایل نصب و هش متناظر همان نسخه را دانلود کنید. آخرین نسخه تنها پس از ساخته‌شدن هر سه فایل منتشر می‌شود؛ نسخه‌های قدیمی حذف نمی‌شوند.
 
 
 
@@ -46,7 +47,7 @@ sha256sum -c SURENA-offline-ubuntu2204-amd64.run.sha256
 
 </div>
 
-اگر مقصد Ubuntu 24.04 است، `ubuntu2204` را با `ubuntu2404` عوض کنید.
+اگر مقصد Ubuntu 24.04 یا 26.04 است، به‌ترتیب `ubuntu2204` را با `ubuntu2404` یا `ubuntu2604` عوض کنید.
 
 برای ارسال از Termux:
 
@@ -129,7 +130,7 @@ Checkpointهای نصب در `/var/lib/irangate-offline/` نگهداری می‌
 
 ### Scope and prerequisites
 
-The self-extracting `.run` release installs a **fresh** Master on **Ubuntu 22.04/24.04 amd64** with root privileges, systemd, TUN and sufficient disk space. It is **not** an upgrade/restore script for existing installations.
+The self-extracting `.run` release installs a **fresh** Master on **Ubuntu 22.04/24.04/26.04 amd64** with root privileges, systemd, TUN and sufficient disk space. It is **not** an upgrade/restore script for existing installations.
 
 The build pipeline downloads dependencies on an online GitHub Actions runner. The destination server installs from an **embedded file-based APT repository**, prebuilt executables and a bundled wheelhouse.
 
@@ -141,8 +142,9 @@ Foreign nodes use the [separate Node installer](../node/README.md), which is not
 
 - Ubuntu 22.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
 - Ubuntu 24.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+- Ubuntu 26.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run.sha256)
 
-Only promote a release after both installers are built and checked. Older per-commit versions stay in the archive.
+Only promote a release after all three installers are built and checked. Older per-commit versions stay in the archive.
 
 
 
@@ -156,7 +158,7 @@ scp SURENA-offline-ubuntu2204-amd64.run \
     root@YOUR_MASTER_IP:/root/
 ~~~
 
-Replace `ubuntu2204` with `ubuntu2404` for Ubuntu 24.04. These assets are published under the [public Releases page](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases); GitHub authentication is not required to browse or download public assets.
+Replace `ubuntu2204` with `ubuntu2404` or `ubuntu2604` for Ubuntu 24.04 or 26.04, respectively. These assets are published under the [public Releases page](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases); GitHub authentication is not required to browse or download public assets.
 
 ### Install on the fresh Master
 
