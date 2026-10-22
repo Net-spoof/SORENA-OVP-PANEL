@@ -51,6 +51,7 @@
 
 - **Ubuntu 22.04 / AMD64:** [فایل نصب](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
 - **Ubuntu 24.04 / AMD64:** [فایل نصب](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+- **Ubuntu 26.04 / AMD64:** [فایل نصب](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run.sha256)
 
 **فقط نصب تازه روی AMD64**؛ برای ارتقای پنل دارای کاربر یا ARM64 نیست. [آموزش نصب](docs/OFFLINE-RELEASE.md) · [آرشیو نسخه‌ها](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases)
 
@@ -235,6 +236,7 @@ sudo systemctl status irangate-node-agent irangate-node-control openvpn-server@s
 
 - **Ubuntu 22.04 / AMD64:** [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2204-amd64.run.sha256)
 - **Ubuntu 24.04 / AMD64:** [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
+- **Ubuntu 26.04 / AMD64:** [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run.sha256)
 
 **Fresh AMD64 installations only; not an upgrade or ARM64 installer.** [Guide](docs/OFFLINE-RELEASE.md) · [Older releases](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases)
 
