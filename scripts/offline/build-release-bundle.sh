@@ -8,7 +8,7 @@ umask 022
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$ROOT"
 . /etc/os-release
-[[ "$ID" == "ubuntu" && ( "$VERSION_ID" == "22.04" || "$VERSION_ID" == "24.04" ) ]] ||
+[[ "$ID" == "ubuntu" && ( "$VERSION_ID" == "22.04" || "$VERSION_ID" == "24.04" || "$VERSION_ID" == "26.04" ) ]] ||
     { echo "Unsupported build runner OS" >&2; exit 1; }
 [[ "$(dpkg --print-architecture)" == "amd64" ]] || exit 1
 
