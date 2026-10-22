@@ -61,6 +61,7 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+          - ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -170,6 +171,9 @@ jobs:
           python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-enforcer.py" --self-test
           python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-sync-clients.py" --self-test
           test -s "$RUNNER_TEMP/offline-smoke/offline-assets/apt/Packages.gz"
+          . /etc/os-release
+          test "$(cat "$RUNNER_TEMP/offline-smoke/offline-assets/ubuntu-version")" = "$VERSION_ID"
+          grep -Fq '"$VERSION_ID" == "26.04"' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           grep -q 'select_port' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           grep -q 'run_stage verification' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
           (cd "$OUT_DIR" && sha256sum -c "$(basename "$asset").sha256")
@@ -200,8 +204,8 @@ jobs:
             if ! gh release create "$tag" \
               --target "$GITHUB_SHA" \
               --draft \
-              --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 | amd64 | ${GITHUB_SHA:0:12}" \
-              --notes "SURENA Offline Master (Ubuntu 22.04/24.04, AMD64). Verified complete offline installation for fresh Master VPS only. Both .run installers and matching .sha256 files are attached. Includes panel and delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL, and Backup V2. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
+              --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 + 26.04 | amd64 | ${GITHUB_SHA:0:12}" \
+              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure and bundle integrity for fresh Master VPS only. All three .run installers and matching .sha256 files are attached. Includes panel and delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL, and Backup V2. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi
@@ -214,7 +218,7 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
-      - name: Verify both OS packages and publish
+      - name: Verify all three OS packages and publish
         env:
           GH_TOKEN: ${{ secrets.SURENA_RELEASE_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
@@ -226,7 +230,7 @@ jobs:
             exit 0
           fi
           assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
-          for os in 2204 2404; do
+          for os in 2204 2404 2604; do
             name="SURENA-offline-ubuntu${os}-amd64.run"
             printf '%s\n' "$assets" | grep -Fxq "$name"
             printf '%s\n' "$assets" | grep -Fxq "$name.sha256"
