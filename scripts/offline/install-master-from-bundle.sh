@@ -22,7 +22,7 @@ CREDENTIALS="/root/irangate-offline-initial-credentials.txt"
 if [[ "$MODE" == "--resume" && ! -s "$STATE_FILE" ]]; then
     die "No resumable offline install on this server"
 fi
-[[ "$EUID" == 0 ]] || die "Run as root: sudo bash SURENA-offline-ubuntu2204-amd64.run"
+[[ "$EUID" == 0 ]] || die "Run as root: sudo bash SURENA-offline-ubuntu<version>-amd64.run"
 [[ -f "$ROOT/install.sh" ]] || die "Project source is missing"
 [[ -s "$ROOT/offline-assets/irangate-webpanel" ]] || die "Bundled webpanel binary is missing"
 [[ -s "$ROOT/offline-assets/irangate-cli" ]] || die "Bundled SURENA CLI binary is missing"
@@ -36,8 +36,8 @@ need awk
 need sed
 [[ -f /etc/os-release ]] || die "Unsupported Linux distribution"
 . /etc/os-release
-[[ "$ID" == ubuntu && ( "$VERSION_ID" == "22.04" || "$VERSION_ID" == "24.04" ) ]] ||
-    die "This bundle requires matching Ubuntu 22.04 or 24.04 amd64. Got $ID $VERSION_ID"
+[[ "$ID" == ubuntu && ( "$VERSION_ID" == "22.04" || "$VERSION_ID" == "24.04" || "$VERSION_ID" == "26.04" ) ]] ||
+    die "This bundle requires matching Ubuntu 22.04, 24.04 or 26.04 amd64. Got $ID $VERSION_ID"
 [[ "$(dpkg --print-architecture)" == amd64 ]] || die "Only amd64 is supported"
 EXPECTED_OS="$(cat "$ROOT/offline-assets/ubuntu-version")"
 [[ "$EXPECTED_OS" == "$VERSION_ID" ]] ||
