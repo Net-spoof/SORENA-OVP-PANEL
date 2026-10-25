@@ -1601,7 +1601,22 @@ func getOrphanedClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var result interface{}
 	if err := json.Unmarshal(output, &result); err != nil {
-		sendSuccess(w, "No orphaned certificates", map[string]int{"count": 0})
+		sendError(w, "Invalid orphaned certificate scan output", http.StatusInternalServerError)
+		return
+	}
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		sendError(w, "Invalid orphaned certificate scan response", http.StatusInternalServerError)
+		return
+	}
+	count, ok := resultMap["count"].(float64)
+	if !ok || count < 0 || count != float64(int(count)) {
+		sendError(w, "Invalid orphaned certificate count", http.StatusInternalServerError)
+		return
+	}
+	orphaned, ok := resultMap["orphaned"].([]interface{})
+	if !ok || len(orphaned) != int(count) {
+		sendError(w, "Invalid orphaned certificate list", http.StatusInternalServerError)
 		return
 	}
 	sendSuccess(w, "Orphaned clients retrieved", result)

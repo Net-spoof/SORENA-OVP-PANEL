@@ -192,8 +192,9 @@
 
         function refreshWriteControls() {
             if (!isClientsPage) return;
-            document.querySelectorAll('button[onclick]').forEach((button) => {
-                if (!mutatingButtonPattern.test(button.getAttribute('onclick') || '')) return;
+            document.querySelectorAll('button[onclick], button[data-client-write="true"]').forEach((button) => {
+                if (!button.matches('[data-client-write="true"]') &&
+                    !mutatingButtonPattern.test(button.getAttribute('onclick') || '')) return;
                 if (quotaReadOnly) {
                     if (!button.dataset.surenaQuotaDisabled) {
                         button.dataset.surenaQuotaDisabled = button.disabled ? 'already' : 'quota';
@@ -258,8 +259,12 @@
             // Keep dynamically-rendered client action controls in sync.
             if (isClientsPage) {
                 const table = document.getElementById('clientsTable');
+                const cards = document.getElementById('clientsMobileList');
                 if (table) {
                     new MutationObserver(refreshWriteControls).observe(table, { childList: true, subtree: true });
+                }
+                if (cards) {
+                    new MutationObserver(refreshWriteControls).observe(cards, { childList: true, subtree: true });
                 }
                 document.addEventListener('submit', (event) => {
                     if (quotaReadOnly && event.target.closest('#addClientForm, #editClientForm, #createClientForm')) {
@@ -308,7 +313,7 @@
 
         document.addEventListener('DOMContentLoaded', function hideRootOnlyClientTools() {
             const orphanedList = document.getElementById('orphanedList');
-            const orphanedSection = orphanedList ? orphanedList.closest('.mt-8') : null;
+            const orphanedSection = orphanedList ? orphanedList.closest('#clientSecurityToolbar') : null;
             if (orphanedSection) orphanedSection.classList.add('hidden');
         });
     }

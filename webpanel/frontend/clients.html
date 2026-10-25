@@ -82,19 +82,25 @@
             </div>
         </div>
 
+        <!-- Compact PKI status (root administrators only) -->
+        <div id="clientSecurityToolbar" class="clients-security-status mt-8" role="status" aria-live="polite">
+            <span class="client-security-icon" aria-hidden="true">✓</span>
+            <span id="orphanedList">Certificate check pending</span>
+            <button type="button" onclick="checkOrphaned()">Check PKI</button>
+            <button type="button" id="orphanedReviewButton" class="hidden client-security-review"
+                    onclick="reviewOrphanedCertificates()">Review certificates</button>
+        </div>
+
         <!-- Bulk Operations Toolbar removed -->
 
         <!-- Clients Table -->
         <div class="clients-table-card bg-white rounded-lg shadow overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full">
+                <table class="w-full client-desktop-table" aria-label="Client management table">
                     <thead class="bg-gray-50">
                         <tr>
                             <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Name
-                            </th>
-                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Created
                             </th>
                             <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Expires
@@ -115,35 +121,37 @@
                     </thead>
                     <tbody id="clientsTable" class="divide-y divide-gray-200">
                         <tr>
-                            <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+                            <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                                 Loading clients...
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
+            <div id="clientsMobileList" class="clients-mobile-list" aria-label="Client management cards"></div>
+            <div id="clientsPagination" class="clients-pagination"></div>
         </div>
 
-        <!-- Orphaned Certificates Section -->
-        <div class="clients-security-card mt-8">
-            <div class="bg-yellow-50 border-l-4 border-yellow-400 p-6 rounded-lg">
-                <div class="flex items-start justify-between">
-                    <div class="flex items-start">
-                        <svg class="w-6 h-6 text-yellow-400 mr-3 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                        </svg>
-                        <div>
-                            <h3 class="text-lg font-semibold text-yellow-800">Orphaned Certificates</h3>
-                            <p class="text-sm text-yellow-700 mt-1">
-                                Certificates that exist in PKI but not in database - <strong>SECURITY RISK!</strong>
-                            </p>
-                            <p id="orphanedList" class="text-sm text-yellow-600 mt-2 font-mono"></p>
-                        </div>
-                    </div>
-                    <button onclick="checkOrphaned()" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
-                        Check Now
-                    </button>
-                </div>
+    </div>
+
+    <!-- Responsive quick actions, preserving existing client operations -->
+    <div id="clientQuickActionsModal" class="client-quick-overlay hidden" role="dialog"
+         aria-modal="true" aria-labelledby="clientQuickActionsName"
+         onclick="if(event.target === this) closeClientActions()">
+        <div class="client-quick-sheet">
+            <div class="client-quick-sheet-header">
+                <div><span>Client actions</span><strong id="clientQuickActionsName"></strong></div>
+                <button type="button" onclick="closeClientActions()" aria-label="Close actions">✕</button>
+            </div>
+            <div class="client-quick-grid">
+                <button type="button" onclick="runClientExtraAction('details')">View details</button>
+                <button type="button" onclick="runClientExtraAction('download')">Download configs</button>
+                <button type="button" id="clientQuickActionsToggle" data-client-write="true"
+                        onclick="runClientExtraAction('toggle')">Activate / Deactivate</button>
+                <button type="button" data-client-write="true"
+                        onclick="runClientExtraAction('rework')">Rework credentials</button>
+                <button type="button" class="client-quick-danger" data-client-write="true"
+                        onclick="runClientExtraAction('remove')">Remove client</button>
             </div>
         </div>
     </div>
@@ -628,7 +636,7 @@
             if (clients.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                             No clients found. Click "Add Client" to create one.
                         </td>
                     </tr>
@@ -636,15 +644,12 @@
                 return;
             }
 
-            tbody.innerHTML = clients.map(client => `
+            tbody.innerHTML = clients.map((client, index) => `
                 <tr class="hover:bg-gray-50 transition-colors duration-150">
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="flex items-center">
-                            <div class="text-sm font-medium text-gray-900">${client.name}</div>
+                            <div class="text-sm font-medium text-gray-900 client-name">${escapeClientHTML(client.name)}</div>
                         </div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="text-sm text-gray-600">${formatDate(client.created_at)}</div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="text-sm text-gray-600">${formatDate(client.expires_at)}</div>
@@ -689,79 +694,133 @@
                         </div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-center">
-                        <div class="flex items-center justify-center space-x-2">
-                            ${client.active ? `
-                                <button onclick="deactivateClient('${client.name}')" 
-                                        class="inline-flex items-center px-2 py-1 text-xs font-medium text-yellow-600 hover:text-yellow-800 hover:bg-yellow-50 rounded-md transition-colors duration-150"
-                                        title="Deactivate">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
-                                    </svg>
-                                </button>
-                            ` : `
-                                <button onclick="activateClient('${client.name}')" 
-                                        class="inline-flex items-center px-2 py-1 text-xs font-medium text-green-600 hover:text-green-800 hover:bg-green-50 rounded-md transition-colors duration-150"
-                                        title="Activate">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                    </svg>
-                                </button>
-                            `}
-                            <button onclick="showEditClient('${client.name}')"
-                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-md transition-colors duration-150"
-                                    title="Edit">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                                </svg>
-                                <span class="ml-1 hidden xl:inline">Edit</span>
-                            </button>
-
-                            <button onclick="showDetails('${client.name}')" 
-                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors duration-150"
-                                    title="View Details">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                                </svg>
-                            </button>
-
-                            <button onclick="reworkClient('${client.name}')"
-                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-orange-600 hover:text-orange-800 hover:bg-orange-50 rounded-md transition-colors duration-150"
-                                    title="Revoke old credentials and generate new ones">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                                </svg>
-                                <span class="ml-1">Rework</span>
-                            </button>
-
-                            <button onclick="copySubscriptionLink('${client.name}')"
-                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-cyan-600 hover:text-cyan-800 hover:bg-cyan-50 rounded-md transition-colors duration-150"
-                                    title="Copy Subscription Link">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-1.414 1.414a4 4 0 01-5.656-5.656l1.414-1.414"/>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.172 13.828a4 4 0 010-5.656l1.414-1.414a4 4 0 015.656 5.656l-1.414 1.414"/>
-                                </svg>
-                                <span class="ml-1 hidden xl:inline">Sub</span>
-                            </button>
-
-                            <button onclick="exportClient('${client.name}')" 
-                                    class="inline-flex items-center px-2 py-1 text-xs font-medium text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-md transition-colors duration-150"
-                                    title="Download Config">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                </svg>
-                            </button>
-                            <button onclick="removeClient('${client.name}')" 
-                                    class="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors duration-150">
-                                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                                </svg>
-                                Remove
-                            </button>
+                        <div class="client-desktop-actions">
+                            <button type="button" class="client-action-primary" data-client-write="true"
+                                    onclick="runClientAction('edit', ${index})" aria-label="Edit ${escapeClientHTML(client.name)}">Edit</button>
+                            <button type="button" class="client-action-link" onclick="runClientAction('subscription', ${index})"
+                                    aria-label="Copy subscription for ${escapeClientHTML(client.name)}">Copy Sub</button>
+                            <button type="button" class="client-action-more" onclick="runClientAction('more', ${index})"
+                                    aria-label="More actions for ${escapeClientHTML(client.name)}">More ···</button>
                         </div>
                     </td>
                 </tr>
             `).join('');
+        }
+
+
+        // Both layouts share a single page slice and the existing action handlers.
+        let clientsRenderedPage = [];
+        let selectedClientActionsName = '';
+
+        function escapeClientHTML(value) {
+            return String(value ?? '').replace(/[&<>"']/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                '"': '&quot;', "'": '&#39;'
+            })[character]);
+        }
+
+        function renderClientsMobile(clients) {
+            const list = document.getElementById('clientsMobileList');
+            if (!list) return;
+            if (!clients.length) {
+                list.innerHTML = '<p class="client-mobile-empty">No matching clients found.</p>';
+                return;
+            }
+
+            list.innerHTML = clients.map((client, index) => {
+                const used = getClientUsedBytes(client);
+                const limit = getClientLimitBytes(client);
+                const remaining = getClientRemainingBytes(client);
+                const days = getClientRemainingDays(client);
+                const progress = limit > 0 ? Math.min(100, Math.max(0, used / limit * 100)) : 0;
+                const status = getClientStatusText(client);
+                const statusStyle = isClientDeactiveByStatus(client) ? 'ended' :
+                    (client.active === false ? 'disabled' : (isClientOnline(client) ? 'online' : 'ready'));
+                const safeName = escapeClientHTML(client.name);
+                return `
+                    <article class="client-mobile-card" aria-label="Client ${safeName}">
+                        <header class="client-mobile-card-head">
+                            <strong class="client-mobile-name" title="${safeName}">${safeName}</strong>
+                            <span class="client-mobile-status client-mobile-status-${statusStyle}">${escapeClientHTML(status)}</span>
+                        </header>
+                        <div class="client-mobile-metrics">
+                            <div><span>Used</span><strong>${formatBytes(used)}</strong></div>
+                            <div><span>Remaining</span><strong>${remaining === null ? 'Unlimited' : formatBytes(remaining)}</strong></div>
+                        </div>
+                        <div class="client-mobile-progress" role="progressbar"
+                             aria-label="Quota used" aria-valuemin="0" aria-valuemax="100"
+                             aria-valuenow="${Math.round(progress)}">
+                            <span style="width: ${progress.toFixed(2)}%"></span>
+                        </div>
+                        <div class="client-mobile-meta">
+                            <span>${limit > 0 ? formatBytes(limit) + ' limit' : 'Unlimited traffic'}</span>
+                            <span>${days === null ? 'No expiry' : days + ' days left'}</span>
+                            <span>${Number(client.connection_limit || 1)} connection(s)</span>
+                        </div>
+                        <div class="client-mobile-actions">
+                            <button type="button" class="client-action-primary" data-client-write="true"
+                                    onclick="runClientAction('edit', ${index})">Edit</button>
+                            <button type="button" class="client-action-link"
+                                    onclick="runClientAction('subscription', ${index})">Copy Sub</button>
+                            <button type="button" class="client-action-more"
+                                    onclick="runClientAction('more', ${index})">More ···</button>
+                        </div>
+                    </article>
+                `;
+            }).join('');
+        }
+
+        function closeClientActions() {
+            document.getElementById('clientQuickActionsModal').classList.add('hidden');
+        }
+
+        function openClientActions(client) {
+            selectedClientActionsName = client.name;
+            document.getElementById('clientQuickActionsName').textContent = client.name;
+            const toggle = document.getElementById('clientQuickActionsToggle');
+            toggle.textContent = client.active ? 'Deactivate account' : 'Activate account';
+            const disableWrites = Boolean(window.surenaDelegatedReadOnly);
+            document.querySelectorAll('#clientQuickActionsModal [data-client-write="true"]')
+                .forEach(button => {
+                    button.disabled = disableWrites;
+                    button.title = disableWrites ? 'Panel is read-only until renewal' : '';
+                });
+            document.getElementById('clientQuickActionsModal').classList.remove('hidden');
+        }
+
+        function runClientAction(action, index) {
+            const client = clientsRenderedPage[index];
+            if (!client) return;
+            if (action === 'edit') {
+                if (window.surenaDelegatedReadOnly) {
+                    showToast('Panel is read-only until renewal', 'error');
+                    return;
+                }
+                showEditClient(client.name);
+            } else if (action === 'subscription') {
+                copySubscriptionLink(client.name);
+            } else if (action === 'more') {
+                openClientActions(client);
+            }
+        }
+
+        function runClientExtraAction(action) {
+            const name = selectedClientActionsName;
+            if (!name) return;
+            const writable = ['toggle', 'rework', 'remove'].includes(action);
+            if (writable && window.surenaDelegatedReadOnly) {
+                showToast('Panel is read-only until renewal', 'error');
+                return;
+            }
+            const client = allClients.find(item => item.name === name);
+            closeClientActions();
+            if (action === 'details') showDetails(name);
+            else if (action === 'download') window.downloadClientConfigs(name);
+            else if (action === 'toggle') {
+                if (client?.active) deactivateClient(name);
+                else activateClient(name);
+            } else if (action === 'rework') reworkClient(name);
+            else if (action === 'remove') removeClient(name);
         }
 
         const CLIENTS_PER_PAGE = 12;
@@ -853,7 +912,9 @@
 
             const page = paginateClientsList(clientsLastRenderedList);
 
+            clientsRenderedPage = page.pageItems;
             renderClientsOriginal(page.pageItems);
+            renderClientsMobile(page.pageItems);
             renderClientsPagination(page);
         }
 
@@ -2060,32 +2121,67 @@
             document.getElementById('detailsModal').classList.add('hidden');
         }
 
-        // Check orphaned certificates
+        // A successful scan is reported only for a validated API response.
+        // Root-only: delegated users must not invoke certificate maintenance.
+        let orphanedCertificateNames = [];
+
         async function checkOrphaned() {
+            if (localStorage.getItem('role') === 'delegated_admin') return;
+            const label = document.getElementById('orphanedList');
+            const toolbar = document.getElementById('clientSecurityToolbar');
+            const review = document.getElementById('orphanedReviewButton');
+            label.textContent = 'Checking PKI certificates...';
+            toolbar.dataset.state = 'checking';
+            review.classList.add('hidden');
+            orphanedCertificateNames = [];
+
             try {
                 const result = await api.getOrphanedClients();
-                const listEl = document.getElementById('orphanedList');
-                
-                if (result.success && result.data && result.data.count > 0) {
-                    const orphaned = result.data.orphaned || [];
-                    listEl.innerHTML = `Found ${orphaned.length} orphaned certificate(s): ${orphaned.join(', ')}`;
-                    
-                    if (confirm(`Found ${orphaned.length} orphaned certificates!\n\nThese can still connect to your VPN.\n\nDo you want to revoke them now?`)) {
-                        const cleanupResult = await api.cleanupOrphaned();
-                        if (cleanupResult.success) {
-                            showToast('Orphaned certificates revoked successfully!', 'success');
-                            checkOrphaned();
-                        }
-                    }
+                if (!result || result.success !== true || !result.data ||
+                    !Number.isInteger(result.data.count) || result.data.count < 0 ||
+                    !Array.isArray(result.data.orphaned) ||
+                    result.data.orphaned.length !== result.data.count) {
+                    throw new Error((result && result.message) || 'Invalid certificate scan response');
+                }
+                orphanedCertificateNames = result.data.orphaned;
+                if (result.data.count === 0) {
+                    label.textContent = 'PKI checked · 0 orphaned certificates';
+                    toolbar.dataset.state = 'ok';
                 } else {
-                    listEl.innerHTML = '✓ No orphaned certificates found. System is secure!';
-                    listEl.className = 'text-sm text-green-600 mt-2 font-mono';
-                    setTimeout(() => {
-                        listEl.className = 'text-sm text-yellow-600 mt-2 font-mono';
-                    }, 3000);
+                    label.textContent = 'PKI warning · ' + result.data.count + ' orphaned certificate(s)';
+                    toolbar.dataset.state = 'warning';
+                    review.classList.remove('hidden');
                 }
             } catch (error) {
-                showToast('Failed to check orphaned certificates', 'error');
+                console.error('PKI certificate scan failed:', error);
+                label.textContent = 'PKI check unavailable · retry';
+                toolbar.dataset.state = 'error';
+            }
+        }
+
+        async function reviewOrphanedCertificates() {
+            if (localStorage.getItem('role') === 'delegated_admin') return;
+            if (!orphanedCertificateNames.length) return;
+            const names = orphanedCertificateNames.join('\n');
+            const confirmed = confirm(
+                'Orphaned certificates found:\n\n' + names +
+                '\n\nRevoke these certificates? This may disconnect their holders.'
+            );
+            if (!confirmed) return;
+            const review = document.getElementById('orphanedReviewButton');
+            review.disabled = true;
+            try {
+                const result = await api.cleanupOrphaned();
+                if (!result || result.success !== true) {
+                    throw new Error((result && result.message) || 'Failed to revoke certificates');
+                }
+                showToast('Certificate cleanup completed. Verifying...', 'success');
+                await checkOrphaned();
+            } catch (error) {
+                showToast(error.message || 'Certificate cleanup failed', 'error');
+                await checkOrphaned();
+            } finally {
+                review.disabled = false;
             }
         }
 
@@ -2137,7 +2233,7 @@
 
         // Initial load
         loadClients();
-        checkOrphaned();
+        if (localStorage.getItem('role') !== 'delegated_admin') checkOrphaned();
 
         // Auto-refresh clients and their connection data every 30 seconds
         setInterval(() => {

@@ -341,7 +341,14 @@ func addClientCommands(db *database.DB) {
 				os.Exit(1)
 			}
 			if len(orphaned) == 0 {
-				utils.PrintSuccess("No orphaned certificates found - system is secure!")
+				if jsonOutput {
+					utils.PrintJSON(map[string]interface{}{
+						"count":    0,
+						"orphaned": []string{},
+					})
+				} else {
+					utils.PrintSuccess("No orphaned certificates found - system is secure!")
+				}
 				return
 			}
 			if jsonOutput {
