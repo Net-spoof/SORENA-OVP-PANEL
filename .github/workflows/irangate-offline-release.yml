@@ -86,6 +86,11 @@ jobs:
           cd webpanel/backend
           go test -count=1 ./...
 
+      - name: Validate all current panel fixes before building offline packages
+        run: |
+          bash scripts/offline/verify-release-content.sh .
+          bash -n scripts/offline/verify-release-content.sh
+
       - name: Build offline bundle and simulate offline APT dependencies
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,6 +167,28 @@ jobs:
           mkdir -p "$RUNNER_TEMP/offline-smoke"
           tail -n "+$((marker_line+1))" "$asset" | tar -xzf - -C "$RUNNER_TEMP/offline-smoke"
           bash -n "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
+          # Verify this .run actually bundles the exact current commit, not
+          # a stale pre-update UI, PKI handler or CLI source.
+          test "$(cat "$RUNNER_TEMP/offline-smoke/offline-assets/source-commit")" = "$GITHUB_SHA"
+          bash "$RUNNER_TEMP/offline-smoke/scripts/offline/verify-release-content.sh" "$RUNNER_TEMP/offline-smoke"
+          for file in \
+            webpanel/frontend/clients.html \
+            webpanel/frontend/css/clients-panel-v3.css \
+            webpanel/frontend/css/clients-ui.css \
+            webpanel/frontend/css/control-ui.css \
+            webpanel/frontend/js/delegated-portal.js \
+            scripts/apply-panel-extras.sh \
+            scripts/offline/install-master-from-bundle.sh \
+            pkg/cmd/root.go \
+            webpanel/backend/api.go
+          do
+            cmp "$file" "$RUNNER_TEMP/offline-smoke/$file"
+          done
+          (
+            cd "$RUNNER_TEMP/offline-smoke"
+            sha256sum -c offline-assets/SHA256SUMS --quiet
+          )
+          echo "Offline payload matches commit $GITHUB_SHA and full checksum manifest ✅"
           test -s "$RUNNER_TEMP/offline-smoke/scripts/backup-v2/ikev2-credential-guard.py"
           grep -Fq '/usr/local/sbin/irangate-ikev2-backup-guard' "$RUNNER_TEMP/offline-smoke/scripts/install-backup-v2-extras-wrappers.sh"
           grep -Fq 'need irangate-ikev2-backup-guard' "$RUNNER_TEMP/offline-smoke/scripts/offline/install-master-from-bundle.sh"
@@ -205,7 +232,7 @@ jobs:
               --target "$GITHUB_SHA" \
               --draft \
               --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 + 26.04 | amd64 | ${GITHUB_SHA:0:12}" \
-              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure and bundle integrity for fresh Master VPS only. All three .run installers and matching .sha256 files are attached. Includes panel and delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL, and Backup V2. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
+              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes latest compact responsive Sanaei-inspired client UI, Edit/Copy Sub/More actions, CSS deployment/cache fixes, corrected PKI certificate check, traffic reset and quota accounting, delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi

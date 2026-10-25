@@ -19,6 +19,9 @@ trap 'rm -rf "$WORK"' EXIT
 PAYLOAD="$WORK/payload"
 mkdir -p "$OUT" "$PAYLOAD/offline-assets/apt/pool" "$PAYLOAD/offline-assets/wheelhouse"
 
+# Catch incomplete source snapshots before fetching hundreds of APT assets.
+bash "$ROOT/scripts/offline/verify-release-content.sh" "$ROOT"
+
 echo "[builder] Building Go binaries"
 export CGO_ENABLED=0
 ( cd "$ROOT/webpanel/backend" &&
@@ -159,6 +162,8 @@ echo "[builder] Copying full project source and master/node assets"
 rsync -a --exclude=/.git --exclude=/offline-bundles \
     --exclude='__pycache__' --exclude='*.pyc' \
     "$ROOT/" "$PAYLOAD/"
+# CI must not package a partial file tree or a stale working checkout.
+bash "$PAYLOAD/scripts/offline/verify-release-content.sh" "$PAYLOAD"
 printf '%s\n' "$DISTRO" > "$PAYLOAD/offline-assets/ubuntu-version"
 printf '%s\n' "$(git -C "$ROOT" rev-parse HEAD)" > "$PAYLOAD/offline-assets/source-commit"
 
