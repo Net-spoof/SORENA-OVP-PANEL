@@ -96,7 +96,7 @@
 
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div class="bg-white rounded-xl shadow p-6">
+            <div id="routingLegacyEditorCard" class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Outbound Form</h2>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -142,7 +142,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-xl shadow p-6">
+            <div id="routingLegacyBindCard" class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Route VPN Client Traffic</h2>
 
                 <div id="inboundBindSelector" class="mb-4 rounded-xl border border-cyan-500/30 bg-slate-950/30 p-4">
@@ -231,7 +231,7 @@ selected=-</pre>
             </div>
         </div>
 
-        <div class="bg-white rounded-xl shadow overflow-hidden">
+        <div id="routingLegacyListCard" class="bg-white rounded-xl shadow overflow-hidden">
             <div class="p-5 border-b">
                 <h2 class="text-xl font-bold text-gray-800">Configured Outbounds</h2>
                 <p class="text-gray-500 text-sm mt-1">Tick outbounds for single/failover routing.</p>
@@ -257,7 +257,7 @@ selected=-</pre>
         </div>
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div class="bg-white rounded-xl shadow p-6">
+            <div id="routingLegacyOverviewCard" class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Routing Overview</h2>
                 <div id="routeCards" class="space-y-4">
                     <div class="text-gray-500">loading...</div>
@@ -269,7 +269,7 @@ selected=-</pre>
                 </details>
             </div>
 
-            <div class="bg-white rounded-xl shadow p-6">
+            <div id="routingLegacyActionCard" class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Last Action</h2>
                 <div id="resultBox" class="space-y-4">
                     <div class="text-gray-500">No command yet.</div>
@@ -480,6 +480,8 @@ function refreshSelectionPreview() {
         'mode=' + mode + '\n' +
         'strategy=' + strategy + '\n' +
         'selected=' + (shown.join(', ') || '-');
+    // Keep badges and selected counts in sync with the original route selector.
+    window.updateRoutingV2Info?.();
 }
 
 function currentSelectorFromState() {
@@ -1636,6 +1638,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         populateInboundSelector();
         syncCheckedOutbounds();
+        refreshSelectionPreview();
         renderOverview();
 
         return result;
@@ -1680,21 +1683,19 @@ document.addEventListener('DOMContentLoaded', () => {
 (function () {
   'use strict';
   let currentActionTag = '';
-  const headingCard = label => Array.from(document.querySelectorAll('h2'))
-    .find(node => node.textContent.trim() === label)?.closest('.bg-white');
   window.initializeRoutingV2 = function () {
     const targets = [
-      ['routingV2EditorHost','Outbound Form'],['routingV2RoutingHost','Route VPN Client Traffic'],
-      ['routingV2ListHost','Configured Outbounds'],['routingV2RoutingHost','Routing Overview'],
-      ['routingV2AdvancedHost','Last Action']
+      ['routingV2EditorHost','routingLegacyEditorCard','routingV2EditorCard'],
+      ['routingV2RoutingHost','routingLegacyBindCard','routingV2BindCard'],
+      ['routingV2ListHost','routingLegacyListCard','routingV2ListCard'],
+      ['routingV2RoutingHost','routingLegacyOverviewCard',null],
+      ['routingV2AdvancedHost','routingLegacyActionCard',null]
     ];
-    targets.forEach(([hostId,title]) => {
-      const host = document.getElementById(hostId), card = headingCard(title);
-      if (!host || !card) throw new Error('Routing V2 container missing: '+title);
+    targets.forEach(([hostId,cardId,newId]) => {
+      const host = document.getElementById(hostId), card = document.getElementById(cardId);
+      if (!host || !card) throw new Error('Routing V2 container missing: '+cardId);
       host.appendChild(card);
-      if (title === 'Outbound Form') card.id = 'routingV2EditorCard';
-      if (title === 'Route VPN Client Traffic') card.id = 'routingV2BindCard';
-      if (title === 'Configured Outbounds') card.id = 'routingV2ListCard';
+      if (newId) card.id = newId;
     });
     const table = document.getElementById('outboundsTable').closest('table').parentElement;
     table.id = 'outboundsDesktopWrap';
