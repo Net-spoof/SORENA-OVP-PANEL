@@ -1,0 +1,134 @@
+/* SURENA Clients v3 — inspired by Sanaei 3x-ui's compact operator layout.
+   Scoped to client management to protect all other control-plane pages.
+   The base markup remains functional without Tailwind or a CDN connection. */
+:root{--su-bg:#111827;--su-panel:#1b2433;--su-card:#202c3b;--su-border:#344253;--su-ink:#eff5fc;--su-muted:#96a7bb;--su-green:#10b981;--su-cyan:#34d6cb}
+.clients-shell{width:100%!important;max-width:1500px!important;padding:18px 18px 36px!important;margin-inline:auto!important;box-sizing:border-box}
+.clients-page-header{display:flex!important;justify-content:space-between!important;align-items:center!important;gap:16px!important;margin-bottom:14px!important}
+.clients-page-header h1{font-size:1.55rem!important;color:var(--su-ink)!important;line-height:1.3}
+.clients-page-header p{font-size:.85rem!important;line-height:1.55}
+.clients-page-header>button{display:inline-flex!important;align-items:center!important;justify-content:center!important;min-height:44px}
+.clients-summary-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:12px!important;margin:12px 0!important}
+.clients-toolbar{padding:12px!important;margin:14px 0!important}
+.clients-toolbar>div{display:flex!important;align-items:center!important;gap:10px!important}
+.clients-toolbar>div>div.flex-1{flex:1;min-width:0}
+.clients-toolbar #searchInput{width:100%;box-sizing:border-box}
+.clients-toolbar select{min-width:155px}
+.clients-security-status{display:flex!important;align-items:center!important;gap:10px!important;width:max-content;max-width:100%;padding:7px 12px!important;border-radius:9px!important;font-size:12px!important;margin:8px 0 12px!important;flex-wrap:wrap}
+.clients-security-status button{padding:5px 9px!important}
+.clients-security-status button.hidden{display:none!important}
+.clients-table-card{overflow:hidden!important;background:#192335!important;border-radius:12px!important;border:1px solid var(--su-border)!important}
+.clients-table-card>.overflow-x-auto{display:block;overflow-x:auto;max-width:100%}
+.clients-table-card .client-desktop-table{min-width:1040px!important;width:100%!important;border-collapse:collapse!important}
+.clients-table-card .client-desktop-table thead{background:#202b3a!important}
+.clients-table-card .client-desktop-table th{font-size:12px!important;padding:13px 14px!important;text-align:left!important;letter-spacing:.02em!important;color:#b5c2d3!important;text-transform:uppercase!important}
+.clients-table-card .client-desktop-table td{padding:12px 14px!important;border-top:1px solid var(--su-border)!important;font-size:14px!important;color:var(--su-ink)!important;vertical-align:middle!important;min-width:0!important}
+.clients-table-card .client-desktop-table tbody tr:hover{background:#253247!important}
+.clients-table-card .client-desktop-table th:nth-child(1){width:23%}
+.clients-table-card .client-desktop-table th:nth-child(2){width:13%}
+.clients-table-card .client-desktop-table th:nth-child(3){width:25%}
+.clients-table-card .client-desktop-table th:nth-child(4){width:16%}
+.clients-table-card .client-desktop-table th:nth-child(5){width:8%}
+.clients-table-card .client-desktop-table th:nth-child(6){width:15%;text-align:right!important}
+.sanaei-client-identity,.sanaei-traffic-cell,.sanaei-expiry{display:flex;flex-direction:column;gap:5px;min-width:0}
+.sanaei-client-identity strong{font-size:14px;color:var(--su-ink);overflow-wrap:anywhere;line-height:1.35}
+.sanaei-client-identity small,.sanaei-traffic-cell small,.sanaei-expiry small{color:var(--su-muted)!important;font-size:12px!important;line-height:1.4}
+.sanaei-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:5px 9px;border-radius:7px;border:1px solid transparent;font-size:12px!important;font-weight:700;line-height:1.2}
+.sanaei-status i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 7px}
+.sanaei-status-online{color:#34d399!important;background:#34d39917;border-color:#34d39937}
+.sanaei-status-offline{color:#93c5fd!important;background:#60a5fa17;border-color:#60a5fa37}
+.sanaei-status-disabled{color:#cbd5e1!important;background:#94a3b81c;border-color:#94a3b837}
+.sanaei-status-ended{color:#fb7185!important;background:#fb718518;border-color:#fb718538}
+.sanaei-traffic-values{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.sanaei-traffic-values b{color:var(--su-ink);font-size:14px}
+.sanaei-traffic-values span{font-size:12px;color:var(--su-muted)}
+.sanaei-usage-track{height:7px;background:#3c4758;border-radius:20px;overflow:hidden;width:100%}
+.sanaei-usage-track span{display:block;height:100%;background:linear-gradient(90deg,#0ea5a4,#34d399);border-radius:20px}
+.sanaei-expiry strong{font-size:14px;color:var(--su-ink)}
+.sanaei-connections{display:inline-grid;place-items:center;min-width:32px;padding:5px;border:1px solid #43536a;border-radius:7px}
+.client-desktop-actions.sanaei-actions{display:flex!important;justify-content:flex-end!important;flex-wrap:nowrap!important;gap:5px!important}
+.sanaei-actions button{min-height:36px!important;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:5px!important;white-space:nowrap;padding:6px 11px!important;border:1px solid #455366!important;border-radius:8px!important;background:#293548!important;color:#dbe9f5!important;font-size:13px!important;font-weight:650!important;line-height:1.2;cursor:pointer}
+.sanaei-actions button:hover{background:#314258!important;border-color:var(--su-cyan)!important}
+.sanaei-actions .client-action-primary{color:#6ee7df!important;border-color:#3c8585!important}
+.sanaei-actions button:disabled{opacity:.42!important;cursor:not-allowed!important}
+.sanaei-empty{padding:30px 14px!important;text-align:center!important;color:var(--su-muted)!important}
+#clientsMobileList{display:none!important}
+#clientQuickActionsModal.hidden{display:none!important}
+#clientQuickActionsModal:not(.hidden){position:fixed!important;inset:0!important;z-index:9999!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:15px!important;background:rgba(0,0,0,.72)!important;backdrop-filter:blur(7px)}
+#clientQuickActionsModal .client-quick-sheet{width:min(440px,100%)!important;max-height:90dvh;overflow:auto;background:#202b3a!important;border:1px solid #4b596b!important;border-radius:16px!important;padding:18px!important;color:#e9f1fa!important;box-shadow:0 35px 80px #0009}
+#clientQuickActionsModal .client-quick-sheet-header{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;margin-bottom:15px!important}
+#clientQuickActionsModal .client-quick-sheet-header>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+#clientQuickActionsModal .client-quick-sheet-header strong{overflow-wrap:anywhere}
+#clientQuickActionsModal .client-quick-sheet-header button{min-width:42px;min-height:42px;border:1px solid #455366;border-radius:9px;background:#293548;color:#eaf0f8}
+#clientQuickActionsModal .client-quick-grid{display:grid!important;gap:8px!important}
+#clientQuickActionsModal .client-quick-grid button{min-height:46px!important;padding:10px 14px!important;border-radius:9px!important;border:1px solid #48566a!important;background:#293649!important;color:#e9f1fa!important;text-align:left!important;font-size:14px!important;cursor:pointer}
+#clientQuickActionsModal .client-quick-grid button:hover{background:#34455b!important}
+#clientQuickActionsModal .client-quick-grid button:disabled{opacity:.4!important;cursor:not-allowed!important}
+#clientQuickActionsModal .client-quick-grid button.client-quick-danger{color:#fda4af!important;border-color:#844b57!important}
+#clientsPagination{display:flex;justify-content:center;align-items:center;flex-direction:column}
+#clientsPagination button{min-height:38px;min-width:38px}
+#editClientModal.hidden,#addModal.hidden,#detailsModal.hidden{display:none!important}
+/* Compact Sanaei-like forms: no Tailwind dependency for modal visibility/layout. */
+#editClientModal:not(.hidden),#addModal:not(.hidden),#detailsModal:not(.hidden){
+ position:fixed!important;inset:0!important;z-index:9997!important;display:flex!important;align-items:center!important;justify-content:center!important;
+ background:rgba(2,6,23,.76)!important;padding:12px!important;overflow-y:auto;backdrop-filter:blur(5px)
+}
+#editClientModal>div{width:min(780px,100%)!important;max-width:780px!important;max-height:min(92dvh,900px)!important;margin:0!important;overflow-y:auto!important;border-radius:15px!important;background:#1e2b3b!important;border:1px solid #46556a!important;color:var(--su-ink)!important}
+#editClientModal>div>div:first-child{position:sticky;top:0;background:#253246!important;z-index:6;border-bottom:1px solid #475569!important;padding:14px 18px!important}
+#editClientModal h3{font-size:17px!important;color:#f1f5f9!important}
+#editClientModal h3::after{font-size:12px!important;margin-top:4px}
+#editClientForm{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important;padding:16px!important}
+#editClientForm>div:not(:last-child),#editClientForm>label{margin:0!important;min-width:0!important;padding:12px!important;background:#253348!important;border:1px solid #3f4e63!important;border-radius:10px!important}
+#editClientForm>div:nth-of-type(5),#editClientForm>div:nth-of-type(6){grid-column:1/-1!important}
+#editClientForm label.block{font-size:13px!important;color:#cddaf0!important;font-weight:650!important}
+#editClientForm input[type=number],#editClientForm input[type=text],#editClientForm select{background:#182335!important;border:1px solid #475569!important;color:#f3f7fc!important;border-radius:8px!important;min-height:43px!important;width:100%;font-size:15px!important}
+#editClientForm input:focus,#editClientForm select:focus{outline:2px solid #0d9488!important;outline-offset:1px}
+#editClientForm #editClientNodesBox{background:#182335!important;border-color:#475569!important}
+#editClientForm>label{display:flex!important;align-items:center!important;gap:9px}
+#editClientForm>div:last-child{grid-column:1/-1!important;position:sticky!important;bottom:0;z-index:5;display:flex!important;justify-content:flex-end!important;gap:10px!important;background:#1e2b3b!important;padding:12px!important;margin:0!important;border-top:1px solid #475569!important}
+#editClientForm>div:last-child button{min-height:44px!important;border-radius:9px!important;padding:7px 16px!important;font-weight:700}
+@media(max-width:1180px){.clients-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:800px){
+ .clients-shell{padding:15px 10px 30px!important}
+ .clients-page-header{align-items:flex-start!important}
+ .clients-page-header h1{font-size:19px!important}
+ .clients-page-header p{font-size:12px!important}
+ .clients-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+ .clients-summary-grid .client-summary-card{min-height:74px}
+ .clients-toolbar>div{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:8px!important}
+ .clients-toolbar>div>div.flex-1{grid-column:1/-1}
+ .clients-toolbar select{min-width:0!important;max-width:100%;width:100%!important}
+ .clients-toolbar button{min-width:76px!important;width:auto!important}
+ .clients-table-card>.overflow-x-auto{display:none!important}
+ #clientsMobileList{display:grid!important;gap:10px!important;padding:10px!important}
+ #clientsMobileList .client-mobile-card.sanaei-mobile-card{
+   display:block!important;box-sizing:border-box!important;min-width:0!important;width:100%!important;margin:0!important;
+   padding:13px!important;border-radius:12px!important;border:1px solid #3b4d60!important;
+   background:linear-gradient(180deg,#223044,#192538)!important;color:#eff5fc!important;box-shadow:none!important
+ }
+ .sanaei-mobile-head{display:flex!important;align-items:flex-start!important;justify-content:space-between!important;gap:9px!important}
+ .sanaei-mobile-name{font-size:14px!important;line-height:1.45!important;overflow-wrap:anywhere;min-width:0}
+ .sanaei-mobile-head .sanaei-status{flex:0 0 auto;font-size:11px!important}
+ .sanaei-mobile-usage{margin-top:12px}
+ .sanaei-mobile-value{display:flex;gap:5px;align-items:baseline;margin-bottom:9px;font-variant-numeric:tabular-nums}
+ .sanaei-mobile-value b{font-size:17px}
+ .sanaei-mobile-value span{font-size:12px;color:#9fb2c9}
+ .sanaei-mobile-facts{display:flex;gap:8px 13px;align-items:center;flex-wrap:wrap;font-size:12px;color:#acbed0;margin-top:10px}
+ .sanaei-mobile-facts b{color:#e2eaf6}
+ .client-mobile-actions.sanaei-actions{display:grid!important;grid-template-columns:1fr 1fr 1fr!important;gap:6px!important;margin-top:13px!important}
+ .client-mobile-actions.sanaei-actions button{height:42px!important;min-height:42px!important;min-width:0!important;padding:5px!important;font-size:12px!important;line-height:1.2}
+ #clientQuickActionsModal:not(.hidden){align-items:flex-end!important;padding:0!important}
+ #clientQuickActionsModal .client-quick-sheet{width:100%!important;max-height:80dvh!important;border-radius:18px 18px 0 0!important;padding:18px 18px max(22px,env(safe-area-inset-bottom))!important}
+ #editClientModal{padding:7px!important}
+ #editClientModal>div{max-height:95dvh!important}
+ #editClientForm{grid-template-columns:1fr!important;padding:12px!important}
+ #editClientForm>div:nth-of-type(5),#editClientForm>div:nth-of-type(6){grid-column:auto!important}
+ #editClientForm>div:last-child{grid-column:1/-1!important;display:flex!important;flex-direction:row!important}
+ #editClientForm>div:last-child button{min-width:0!important;flex:1}
+}
+@media(max-width:400px){
+ .sanaei-mobile-head{flex-wrap:wrap}
+ .client-mobile-actions.sanaei-actions button{font-size:11px!important}
+ .clients-page-header{flex-direction:column!important;gap:8px!important}
+ .clients-page-header>button{width:100%!important}
+}
+@media(prefers-reduced-motion:reduce){.sanaei-actions button{transition:none!important}}

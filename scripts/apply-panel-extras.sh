@@ -114,23 +114,20 @@ deploy_frontend() {
     do
         [[ -d "$dst" ]] || continue
 
-        mkdir -p "$dst/js"
+        # HTML, JS and CSS must all be deployed together. Previously only
+        # HTML/JS were installed, leaving mobile cards and action dialogs
+        # unstyled on a routine panel update (and browser caches stayed stale).
+        find "$src" -maxdepth 1 -type f -print0 |
+            xargs -0 -r -I{} install -m 0644 "{}" "$dst/"
 
-        find "$src" \
-            -maxdepth 1 \
-            -type f \
-            -print0 |
-        xargs -0 -r -I{} \
-            install -m 0644 "{}" "$dst/"
-
-        if [[ -d "$src/js" ]]; then
-            find "$src/js" \
-                -maxdepth 1 \
-                -type f \
-                -print0 |
-            xargs -0 -r -I{} \
-                install -m 0644 "{}" "$dst/js/"
-        fi
+        local asset_dir
+        for asset_dir in js css; do
+            if [[ -d "$src/$asset_dir" ]]; then
+                mkdir -p "$dst/$asset_dir"
+                find "$src/$asset_dir" -maxdepth 1 -type f -print0 |
+                    xargs -0 -r -I{} install -m 0644 "{}" "$dst/$asset_dir/"
+            fi
+        done
     done
 }
 

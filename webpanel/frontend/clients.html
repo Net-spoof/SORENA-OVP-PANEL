@@ -15,8 +15,25 @@
     <link rel="stylesheet" href="css/sidebar.css">
     <link rel="stylesheet" href="css/themes.css">
     <link rel="stylesheet" href="css/theme-overrides.css">
-    <link rel="stylesheet" href="css/clients-ui.css?v=clients-ui-20260911-v2">
-    <link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">
+    <link rel="stylesheet" href="css/clients-ui.css?v=clients-ui-20261025-v3">
+    <link rel="stylesheet" href="css/control-ui.css?v=control-ui-20261025-v3">
+    <link rel="stylesheet" href="css/clients-panel-v3.css?v=sanaei-20261025-v1">
+    <style id="clients-ui-critical">
+      /* Works even when external stylesheets or Tailwind CDN are cached/blocked. */
+      #clientQuickActionsModal.hidden, #editClientModal.hidden,
+      #addModal.hidden, #detailsModal.hidden { display:none !important; }
+      #clientQuickActionsModal:not(.hidden) { position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,.8);padding:16px; }
+      .client-quick-sheet {width:min(420px,100%);padding:22px;border:1px solid #354252;border-radius:16px;background:#1c2431;color:#e6eef8;box-shadow:0 24px 65px #0009}
+      .client-quick-grid {display:grid;gap:8px}.client-quick-grid button {min-height:44px;text-align:left;padding:9px 12px;border:1px solid #394658;border-radius:9px;background:#273241;color:#eef4fa}
+      .clients-mobile-list {display:none}
+      @media(max-width:800px){
+        .clients-table-card > .overflow-x-auto{display:none!important}
+        .clients-mobile-list{display:grid!important;gap:10px;padding:10px!important}
+        .client-mobile-card{background:#1c2534;border:1px solid #364457;border-radius:14px;padding:14px;color:#e8eff8}
+        .client-mobile-actions{display:flex;gap:8px}
+        .client-mobile-actions button{flex:1;min-height:42px;border:1px solid #435065;border-radius:9px;color:#e8eff8;background:#2a3547}
+      }
+    </style>
     <script src="js/particles.js"></script>
     <script src="js/i18n.js?v=surena-20261009-v1"></script>
     <script src="js/sidebar.js?v=surena-20261009-v1"></script>
@@ -102,18 +119,10 @@
                             <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Name
                             </th>
-                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Expires
-                            </th>
-                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Plan / Remaining
-                            </th>
-                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Access
-                            </th>
-                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Traffic
-                            </th>
+                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Traffic / Limit</th>
+                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiry</th>
+                            <th class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Connections</th>
                             <th class="px-6 py-4 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Actions
                             </th>
@@ -638,83 +647,72 @@
             `;
         }
 
+        // Sanaei-inspired compact client table; existing edit/quota/sub handlers reused.
+        function clientRowView(client) {
+            const used = Math.max(0, Number(getClientUsedBytes(client)) || 0);
+            const limit = Math.max(0, Number(getClientLimitBytes(client)) || 0);
+            const remaining = getClientRemainingBytes(client);
+            const days = getClientRemainingDays(client);
+            const percentage = limit > 0 ? Math.max(0, Math.min(100, used / limit * 100)) : 0;
+            const ended = isClientDeactiveByStatus(client);
+            const disabled = isClientAccountDisabled(client);
+            const online = isClientOnline(client);
+            return {
+                used, limit, remaining, days,
+                percentage: Number(percentage.toFixed(2)),
+                status: ended ? 'Expired / Limited' : disabled ? 'Disabled' : online ? 'Online' : 'Offline',
+                kind: ended ? 'ended' : disabled ? 'disabled' : online ? 'online' : 'offline',
+                connections: Math.max(1, Number(client.connection_limit) || 1)
+            };
+        }
+
+        function clientProgress(view) {
+            return `<div class="sanaei-usage-track" role="progressbar" aria-label="Used traffic"
+                aria-valuenow="${Math.round(view.percentage)}" aria-valuemin="0" aria-valuemax="100">
+                <span style="width:${view.percentage}%"></span>
+            </div>`;
+        }
+
         function renderClientsOriginal(clients) {
             const tbody = document.getElementById('clientsTable');
-            
-            if (clients.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
-                            No clients found. Click "Add Client" to create one.
-                        </td>
-                    </tr>
-                `;
+            if (!clients.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="sanaei-empty">No clients match your search.</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = clients.map((client, index) => `
-                <tr class="hover:bg-gray-50 transition-colors duration-150">
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="flex items-center">
-                            <div class="text-sm font-medium text-gray-900 client-name">${escapeClientHTML(client.name)}</div>
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="text-sm text-gray-600">${formatDate(client.expires_at)}</div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        ${getClientLimitInfo(client)}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="flex flex-col space-y-1">
-                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                getClientStatusClass(client)
-                            }">
-                                <span class="w-1.5 h-1.5 mr-1.5 rounded-full ${
-                                    getClientStatusDotClass(client)
-                                }"></span>
-                                ${getClientStatusText(client)}
-                            </span>
-                            ${client.last_connection ? `
-                                <div class="text-xs text-gray-500 flex items-center">
-                                    <svg class="w-3 h-3 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                    </svg>
-                                    Last: ${formatLastConnection(client.last_connection)}
-                                </div>
-                            ` : `
-                                <div class="text-xs text-gray-400 flex items-center">
-                                    <svg class="w-3 h-3 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                    </svg>
-                                    Never connected
-                                </div>
-                            `}
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="text-sm text-gray-600">
-                            <div class="flex flex-col">
-                                <span class="text-xs text-gray-500">↑ ${formatBytes(getClientTrafficDisplay(client).upload)}</span>
-                                <span class="text-xs text-gray-500">↓ ${formatBytes(getClientTrafficDisplay(client).download)}</span>
-                                <span class="text-xs text-blue-500 font-medium">Total: ${formatBytes(getClientTrafficDisplay(client).total)}</span>
-                            </div>
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-center">
-                        <div class="client-desktop-actions">
+            tbody.innerHTML = clients.map((client, index) => {
+                const view = clientRowView(client);
+                const name = escapeClientHTML(client.name);
+                const last = client.last_connection ? escapeClientHTML(formatLastConnection(client.last_connection)) : 'Never connected';
+                return `
+                    <tr class="sanaei-client-row">
+                        <td><div class="sanaei-client-identity">
+                            <strong title="${name}">${name}</strong>
+                            <small>Last: ${last}</small>
+                        </div></td>
+                        <td><span class="sanaei-status sanaei-status-${view.kind}"><i></i>${view.status}</span></td>
+                        <td><div class="sanaei-traffic-cell">
+                            <div class="sanaei-traffic-values"><b>${formatBytes(view.used)}</b><span>/ ${view.limit ? formatBytes(view.limit) : 'Unlimited'}</span></div>
+                            ${clientProgress(view)}
+                            <small>${view.remaining === null ? 'Unlimited plan' : formatBytes(view.remaining) + ' remaining'}</small>
+                        </div></td>
+                        <td><div class="sanaei-expiry"><strong>${view.days === null ? 'Unlimited' : view.days + ' days'}</strong>
+                            <small>${escapeClientHTML(client.expires_at ? formatDate(client.expires_at) : 'No expiration')}</small>
+                        </div></td>
+                        <td><span class="sanaei-connections">${view.connections}</span></td>
+                        <td><div class="client-desktop-actions sanaei-actions">
                             <button type="button" class="client-action-primary" data-client-write="true"
-                                    onclick="runClientAction('edit', ${index})" aria-label="Edit ${escapeClientHTML(client.name)}">Edit</button>
-                            <button type="button" class="client-action-link" onclick="runClientAction('subscription', ${index})"
-                                    aria-label="Copy subscription for ${escapeClientHTML(client.name)}">Copy Sub</button>
-                            <button type="button" class="client-action-more" onclick="runClientAction('more', ${index})"
-                                    aria-label="More actions for ${escapeClientHTML(client.name)}">More ···</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
+                                onclick="runClientAction('edit', ${index})" title="Edit client">✎ Edit</button>
+                            <button type="button" class="client-action-link"
+                                onclick="runClientAction('subscription', ${index})" title="Copy subscription link">🔗</button>
+                            <button type="button" class="client-action-more"
+                                onclick="runClientAction('more', ${index})" aria-label="More actions for ${name}"
+                                title="More actions">⋮</button>
+                        </div></td>
+                    </tr>
+                `;
+            }).join('');
         }
-
 
         // Both layouts share a single page slice and the existing action handlers.
         let clientsRenderedPage = [];
@@ -731,47 +729,33 @@
             const list = document.getElementById('clientsMobileList');
             if (!list) return;
             if (!clients.length) {
-                list.innerHTML = '<p class="client-mobile-empty">No matching clients found.</p>';
+                list.innerHTML = '<p class="sanaei-empty">No matching clients found.</p>';
                 return;
             }
-
             list.innerHTML = clients.map((client, index) => {
-                const used = getClientUsedBytes(client);
-                const limit = getClientLimitBytes(client);
-                const remaining = getClientRemainingBytes(client);
-                const days = getClientRemainingDays(client);
-                const progress = limit > 0 ? Math.min(100, Math.max(0, used / limit * 100)) : 0;
-                const status = getClientStatusText(client);
-                const statusStyle = isClientDeactiveByStatus(client) ? 'ended' :
-                    (isClientAccountDisabled(client) ? 'disabled' : (isClientOnline(client) ? 'online' : 'ready'));
-                const safeName = escapeClientHTML(client.name);
+                const view = clientRowView(client);
+                const name = escapeClientHTML(client.name);
                 return `
-                    <article class="client-mobile-card" aria-label="Client ${safeName}">
-                        <header class="client-mobile-card-head">
-                            <strong class="client-mobile-name" title="${safeName}">${safeName}</strong>
-                            <span class="client-mobile-status client-mobile-status-${statusStyle}">${escapeClientHTML(status)}</span>
-                        </header>
-                        <div class="client-mobile-metrics">
-                            <div><span>Used</span><strong>${formatBytes(used)}</strong></div>
-                            <div><span>Remaining</span><strong>${remaining === null ? 'Unlimited' : formatBytes(remaining)}</strong></div>
+                    <article class="client-mobile-card sanaei-mobile-card" aria-label="Client ${name}">
+                        <div class="sanaei-mobile-head">
+                            <strong class="sanaei-mobile-name" title="${name}">${name}</strong>
+                            <span class="sanaei-status sanaei-status-${view.kind}"><i></i>${view.status}</span>
                         </div>
-                        <div class="client-mobile-progress" role="progressbar"
-                             aria-label="Quota used" aria-valuemin="0" aria-valuemax="100"
-                             aria-valuenow="${Math.round(progress)}">
-                            <span style="width: ${progress.toFixed(2)}%"></span>
+                        <div class="sanaei-mobile-usage">
+                            <div class="sanaei-mobile-value"><b>${formatBytes(view.used)}</b><span> / ${view.limit ? formatBytes(view.limit) : 'Unlimited'}</span></div>
+                            ${clientProgress(view)}
+                            <div class="sanaei-mobile-facts">
+                                <span><b>${view.remaining === null ? 'Unlimited' : formatBytes(view.remaining)}</b> remaining</span>
+                                <span>⌛ ${view.days === null ? 'No expiry' : view.days + ' days'}</span>
+                                <span>♙ ${view.connections} device(s)</span>
+                            </div>
                         </div>
-                        <div class="client-mobile-meta">
-                            <span>${limit > 0 ? formatBytes(limit) + ' limit' : 'Unlimited traffic'}</span>
-                            <span>${days === null ? 'No expiry' : days + ' days left'}</span>
-                            <span>${Number(client.connection_limit || 1)} connection(s)</span>
-                        </div>
-                        <div class="client-mobile-actions">
+                        <div class="client-mobile-actions sanaei-actions">
                             <button type="button" class="client-action-primary" data-client-write="true"
-                                    onclick="runClientAction('edit', ${index})">Edit</button>
+                                onclick="runClientAction('edit', ${index})">✎ Edit</button>
                             <button type="button" class="client-action-link"
-                                    onclick="runClientAction('subscription', ${index})">Copy Sub</button>
-                            <button type="button" class="client-action-more"
-                                    onclick="runClientAction('more', ${index})">More ···</button>
+                                onclick="runClientAction('subscription', ${index})">🔗 Copy link</button>
+                            <button type="button" class="client-action-more" onclick="runClientAction('more', ${index})">⋮ More</button>
                         </div>
                     </article>
                 `;
