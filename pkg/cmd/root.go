@@ -335,6 +335,11 @@ func addClientCommands(db *database.DB) {
 		Short: "List certificates not in database (security risk)",
 		Long:  "Lists valid certificates that exist in PKI but not in database. These can still connect!",
 		Run: func(cmd *cobra.Command, args []string) {
+			// JSON stdout is a protocol response. Logrus logs must go
+			// to stderr, never before the JSON document on stdout.
+			if jsonOutput {
+				utils.GetLogger().SetOutput(os.Stderr)
+			}
 			orphaned, err := clientManager.ListOrphanedCertificates()
 			if err != nil {
 				utils.PrintError(err)
@@ -371,7 +376,11 @@ func addClientCommands(db *database.DB) {
 		Short: "Revoke all orphaned certificates (CRITICAL for commercial VPN)",
 		Long:  "Finds and revokes all valid certificates that are not in database. Essential for security!",
 		Run: func(cmd *cobra.Command, args []string) {
-			utils.PrintInfo("Scanning for orphaned certificates...")
+			if jsonOutput {
+				utils.GetLogger().SetOutput(os.Stderr)
+			} else {
+				utils.PrintInfo("Scanning for orphaned certificates...")
+			}
 			revoked, err := clientManager.CleanupOrphanedCertificates()
 			if err != nil {
 				utils.PrintError(err)
@@ -381,7 +390,14 @@ func addClientCommands(db *database.DB) {
 				os.Exit(1)
 			}
 			if len(revoked) == 0 {
-				utils.PrintSuccess("No orphaned certificates found - system is secure!")
+				if jsonOutput {
+					utils.PrintJSON(map[string]interface{}{
+						"revoked_count": 0,
+						"revoked":       []string{},
+					})
+				} else {
+					utils.PrintSuccess("No orphaned certificates found - system is secure!")
+				}
 			} else {
 				if jsonOutput {
 					utils.PrintJSON(map[string]interface{}{

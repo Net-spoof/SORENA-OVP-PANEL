@@ -1594,7 +1594,8 @@ func exportClientHandler(w http.ResponseWriter, r *http.Request) {
 }
 func getOrphanedClientsHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("irangate", "client", "list-orphaned", "--json")
-	output, err := cmd.CombinedOutput()
+	// Stdout contains one JSON payload; diagnostic logging stays on stderr.
+	output, err := cmd.Output()
 	if err != nil {
 		sendError(w, "Failed to get orphaned clients", http.StatusInternalServerError)
 		return
@@ -1623,7 +1624,7 @@ func getOrphanedClientsHandler(w http.ResponseWriter, r *http.Request) {
 }
 func cleanupOrphanedHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("irangate", "client", "cleanup-orphaned", "--json")
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.Output()
 	if err != nil {
 		sendError(w, "Failed to cleanup orphaned clients", http.StatusInternalServerError)
 		return
