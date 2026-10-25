@@ -21,7 +21,7 @@
 
 **معماری:** اسکریپت ساخت Release در GitHub Actions با اینترنت اجرا و مخزن محلی APT، Wheelهای Python، باینری پنل، CLI و Sing-box را داخل فایل یک‌تکه قرار می‌دهد. روی VPS مقصد، نصب بسته‌ها از مخزن محلی فایل انجام می‌شود.
 
-**محتوای نسخه‌های جدید:** تمامی تغییرات تأییدشده در شاخه `l2tp-dev` هنگام ساخت داخل هر سه بسته قرار می‌گیرند؛ از جمله ظاهر جدید کاربران با چیدمان مشابه سنایی، فرم ویرایش، منوی More، اصلاح نصب CSS، بررسی گواهی PKI و اصلاحات ریست حجم. خط ساخت پیش از انتشار، تطابق کد داخل بسته با کامیت سازنده، فایل‌های CSS و مجموعه SHA256 را برای **هر نسخه اوبونتو** جداگانه کنترل می‌کند. وجود این فایل‌ها به‌تنهایی به معنای تست اتصال واقعی VPN روی VPS مقصد نیست.
+**محتوای نسخه‌های جدید:** تمامی تغییرات تأییدشده در شاخه `l2tp-dev` هنگام ساخت داخل هر سه بسته قرار می‌گیرند؛ از جمله رابط کاربری حرفه‌ای کاربران، فرم ویرایش و منوی More، **Outbounds V2 با تب‌های Outbounds / Routing Rules / Advanced**، ساخت لوکیشن OpenVPN با پورت UDP دلخواه روی مستر، انتخاب Outbound مستقل برای هر پورت، Single/Failover و عملیات دستی Bind/Activate، اصلاح نصب CSS، بررسی PKI و ریست حجم. خط ساخت پیش از انتشار، تطابق کد داخل بسته با کامیت سازنده، فایل‌های CSS و مجموعه SHA256 را برای **هر نسخه اوبونتو** جداگانه کنترل می‌کند. وجود این فایل‌ها به‌تنهایی به معنای تست اتصال واقعی VPN روی VPS مقصد نیست.
 
 ### دریافت فایل از Release عمومی
 
@@ -146,7 +146,7 @@ Foreign nodes use the [separate Node installer](../node/README.md), which is not
 - Ubuntu 24.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2404-amd64.run.sha256)
 - Ubuntu 26.04 / AMD64: [Installer](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run) · [SHA256](https://github.com/Net-spoof/SORENA-OVP-PANEL/releases/latest/download/SURENA-offline-ubuntu2604-amd64.run.sha256)
 
-Only promote a release after all three installers are built and checked. The build also verifies that each .run contains the latest complete client-management frontend (mobile/desktop UI, editing and More actions), CSS assets, clean PKI JSON handling and traffic reset fixes, with embedded source-commit and SHA256 integrity checks. Older per-commit versions stay in the archive.
+Only promote a release after all three installers are built and checked. The build also verifies that each .run contains the latest complete client-management frontend (mobile/desktop UI, editing and More actions), Outbounds V2 with tabs, responsive cards, editing, OpenVPN custom UDP port creation and independent per-port outbound selection, CSS assets, clean PKI JSON handling and traffic reset fixes, with embedded source-commit and SHA256 integrity checks. Older per-commit versions stay in the archive.
 
 
 

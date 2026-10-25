@@ -173,6 +173,11 @@ jobs:
           bash "$RUNNER_TEMP/offline-smoke/scripts/offline/verify-release-content.sh" "$RUNNER_TEMP/offline-smoke"
           for file in \
             webpanel/frontend/clients.html \
+            webpanel/frontend/routing.html \
+            webpanel/frontend/nodes.html \
+            webpanel/frontend/css/routing-panel-v2.css \
+            webpanel/backend/openvpn_port_locations.go \
+            webpanel/backend/routing_api.go \
             webpanel/frontend/css/clients-panel-v3.css \
             webpanel/frontend/css/clients-ui.css \
             webpanel/frontend/css/control-ui.css \
@@ -232,7 +237,7 @@ jobs:
               --target "$GITHUB_SHA" \
               --draft \
               --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 + 26.04 | amd64 | ${GITHUB_SHA:0:12}" \
-              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes latest compact responsive Sanaei-inspired client UI, Edit/Copy Sub/More actions, CSS deployment/cache fixes, corrected PKI certificate check, traffic reset and quota accounting, delegated admin read-only logic, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
+              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes full responsive client UI (Edit/Copy Sub/More), Outbounds V2 (Outbounds/Routing Rules/Advanced tabs, responsive cards and edit modal), local OpenVPN UDP port-location creator and per-port Outbound selection (Single/Failover, manual Bind/Activate), CSS deployment/cache fixes, PKI checks, traffic/quota fixes, delegated admin, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi
