@@ -74,6 +74,13 @@ func updateClientWithGlobalResetHandler(w http.ResponseWriter, r *http.Request) 
 				clientName,
 			)
 		}
+
+		// updateClientHandler invalidates before the PostgreSQL reset. A GET
+		// during that interval can cache pre-reset usage for 20 seconds.
+		// Invalidate again after the reset finishes (even on failure, since
+		// client.json may already have changed). In-flight GETs cannot
+		// repopulate this cache due to its generation check.
+		invalidateClientsCache()
 	}
 
 	for k, vals := range rec.Header() {
