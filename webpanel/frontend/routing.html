@@ -19,8 +19,6 @@
     <link rel="stylesheet" href="css/mobile.css">
     <link rel="stylesheet" href="css/loading.css">
     <link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">
-    <link rel="stylesheet" href="css/routing-panel-v2.css?v=outbounds-v2-20261025-01">
-    <style>.routing-v2-pane{display:none}.routing-v2-pane.is-active{display:block}.routing-v2-modal.hidden{display:none!important}.routing-v2-actions.hidden{display:none!important}@media(max-width:800px){#outboundsDesktopWrap{display:none!important}#outboundsMobileCards{display:grid!important}}</style>
 
     <script src="js/theme-loader.js"></script>
     <script src="js/particles.js"></script>
@@ -36,7 +34,7 @@
 
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
-                <h1 class="text-3xl font-bold text-gray-800">Outbound Management</h1>
+                <h1 class="text-3xl font-bold text-gray-800">Outbounds</h1>
                 <p class="text-gray-500 mt-1">Route primary OpenVPN/IKEv2 traffic and each OpenVPN port location through independent outbound strategies.</p>
             </div>
 
@@ -44,59 +42,16 @@
                 <button onclick="loadRouting()" class="px-4 py-2 rounded-lg bg-gray-800 text-white hover:bg-gray-700">
                     Refresh
                 </button>
-                <button id="routingV2OldBypass" onclick="bypassRouting()" class="px-4 py-2 rounded-lg bg-yellow-500 text-white hover:bg-yellow-600">
+                <button onclick="bypassRouting()" class="px-4 py-2 rounded-lg bg-yellow-500 text-white hover:bg-yellow-600">
                     Disable Routing / Bypass
                 </button>
             </div>
         </div>
 
         <div id="toast" class="hidden rounded-lg p-3 text-sm"></div>
-        <nav class="routing-v2-tabs" role="tablist" aria-label="Outbound management">
-          <button type="button" id="routingV2TabOutbounds" role="tab" aria-selected="true" class="is-active" onclick="selectRoutingV2Tab('outbounds')">Outbounds</button>
-          <button type="button" id="routingV2TabRouting" role="tab" aria-selected="false" onclick="selectRoutingV2Tab('routing')">Routing Rules</button>
-          <button type="button" id="routingV2TabAdvanced" role="tab" aria-selected="false" onclick="selectRoutingV2Tab('advanced')">Advanced</button>
-        </nav>
-        <section id="routingV2PaneOutbounds" class="routing-v2-pane is-active" role="tabpanel">
-          <div class="routing-v2-stats">
-            <div><small>Configured Outbounds</small><strong id="routingV2Total">—</strong></div>
-            <div><small>Routing service</small><strong id="routingV2Service">—</strong></div>
-            <div><small>Selected</small><strong id="routingV2Selected">0</strong></div>
-          </div>
-          <div class="routing-v2-listbar">
-            <div><h2>Outbound List</h2><p>Select an outbound here, then configure its inbound route in Routing Rules.</p></div>
-            <div class="routing-v2-listbar-actions"><input type="search" id="routingV2Search" oninput="filterRoutingV2Outbounds()" placeholder="Search outbounds" aria-label="Search outbounds">
-            <button type="button" class="routing-v2-primary" onclick="openRoutingV2Editor('create')">+ Add Outbound</button></div>
-          </div>
-          <div id="routingV2ListHost"></div>
-          <div class="routing-v2-bulkbar">
-            <strong id="routingV2SelectionLabel">0 selected</strong>
-            <div><button type="button" onclick="pingChecked()">Ping selected</button><button type="button" onclick="editChecked()">Edit selected</button>
-            <button type="button" onclick="deleteChecked()">Delete selected</button>
-            <button type="button" onclick="clearRoutingV2Selection()">Clear</button>
-            <button type="button" class="routing-v2-primary" onclick="selectRoutingV2Tab('routing')">Configure route</button></div>
-          </div>
-        </section>
-        <section id="routingV2PaneRouting" class="routing-v2-pane" role="tabpanel">
-          <div class="routing-v2-intro"><h2>Routing Rules</h2><p>Choose the Inbound, mode and strategy. Bind saves the route; Activate generates and applies it.</p></div>
-          <div id="routingV2RoutingHost"></div>
-        </section>
-        <section id="routingV2PaneAdvanced" class="routing-v2-pane" role="tabpanel">
-          <div class="routing-v2-intro"><h2>Advanced & Diagnostics</h2><p>CLI output, command results, and dangerous routing operations.</p></div>
-          <div id="routingV2AdvancedHost"></div>
-          <div class="routing-v2-danger-zone"><h3>Disable outbound routing</h3><p>May disable TPROXY for the server. Confirmation is required.</p>
-            <button type="button" onclick="bypassRouting()">Disable Routing / Bypass</button></div>
-        </section>
-        <div id="routingV2EditorModal" class="routing-v2-modal hidden" data-mode="create" role="dialog" aria-modal="true" aria-labelledby="routingV2EditorTitle" onclick="if(event.target===this)closeRoutingV2Editor()">
-          <div class="routing-v2-dialog"><header><div><small>Outbound settings</small><h2 id="routingV2EditorTitle">Add Outbound</h2></div><button onclick="closeRoutingV2Editor()" type="button" aria-label="Close editor">✕</button></header><div id="routingV2EditorHost"></div></div>
-        </div>
-        <div id="routingV2Actions" class="routing-v2-actions hidden" role="dialog" aria-modal="true" onclick="if(event.target===this)closeRoutingV2Actions()">
-          <div class="routing-v2-sheet"><header><strong id="routingV2ActionTitle">Outbound actions</strong><button type="button" onclick="closeRoutingV2Actions()" aria-label="Close">✕</button></header>
-          <button type="button" onclick="doRoutingV2Action('test')">Test connection</button><button type="button" onclick="doRoutingV2Action('edit')">Edit</button><button type="button" class="routing-v2-danger-action" onclick="doRoutingV2Action('delete')">Delete</button></div>
-        </div>
-
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div id="routingLegacyEditorCard" class="bg-white rounded-xl shadow p-6">
+            <div class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Outbound Form</h2>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -142,7 +97,7 @@
                 </div>
             </div>
 
-            <div id="routingLegacyBindCard" class="bg-white rounded-xl shadow p-6">
+            <div class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Route VPN Client Traffic</h2>
 
                 <div id="inboundBindSelector" class="mb-4 rounded-xl border border-cyan-500/30 bg-slate-950/30 p-4">
@@ -231,7 +186,7 @@ selected=-</pre>
             </div>
         </div>
 
-        <div id="routingLegacyListCard" class="bg-white rounded-xl shadow overflow-hidden">
+        <div class="bg-white rounded-xl shadow overflow-hidden">
             <div class="p-5 border-b">
                 <h2 class="text-xl font-bold text-gray-800">Configured Outbounds</h2>
                 <p class="text-gray-500 text-sm mt-1">Tick outbounds for single/failover routing.</p>
@@ -257,7 +212,7 @@ selected=-</pre>
         </div>
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div id="routingLegacyOverviewCard" class="bg-white rounded-xl shadow p-6">
+            <div class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Routing Overview</h2>
                 <div id="routeCards" class="space-y-4">
                     <div class="text-gray-500">loading...</div>
@@ -269,7 +224,7 @@ selected=-</pre>
                 </details>
             </div>
 
-            <div id="routingLegacyActionCard" class="bg-white rounded-xl shadow p-6">
+            <div class="bg-white rounded-xl shadow p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Last Action</h2>
                 <div id="resultBox" class="space-y-4">
                     <div class="text-gray-500">No command yet.</div>
@@ -441,7 +396,7 @@ function realOutbounds() {
 }
 
 function checkedTagsRaw() {
-    return [...new Set(Array.from(document.querySelectorAll('.outbound-check:checked')).map(x => x.value))];
+    return Array.from(document.querySelectorAll('.outbound-check:checked')).map(x => x.value);
 }
 
 function selectedTags() {
@@ -480,8 +435,6 @@ function refreshSelectionPreview() {
         'mode=' + mode + '\n' +
         'strategy=' + strategy + '\n' +
         'selected=' + (shown.join(', ') || '-');
-    // Keep badges and selected counts in sync with the original route selector.
-    window.updateRoutingV2Info?.();
 }
 
 function currentSelectorFromState() {
@@ -489,58 +442,37 @@ function currentSelectorFromState() {
     return b.selector || [];
 }
 
-function routingV2Remote(o) {
-    const raw = String(o.link || '');
-    const explicitHost = String(o.server || o.remote || '');
-    // Never expose password, user info, vmess/ss base64, or any URI secret
-    // in a list row. A clear authority host is safe only after '@'.
-    if (raw.includes('://')) {
-        const authority = raw.split('://')[1]?.split(/[/?#]/)[0] || '';
-        if (authority.includes('@')) return authority.split('@').pop() || 'Saved configuration';
-        if (explicitHost && !explicitHost.includes('@') && !explicitHost.includes('://')) {
-            return explicitHost.slice(0,90);
-        }
-        return 'Saved configuration';
-    }
-    return explicitHost && !explicitHost.includes('@') && !explicitHost.includes('://')
-        ? explicitHost.slice(0,90) : 'Saved configuration';
-}
 function renderOutbounds() {
     const tbody = document.getElementById('outboundsTable');
-    const cards = document.getElementById('outboundsMobileCards');
     const items = realOutbounds();
-    const previous = new Set(checkedTagsRaw());
+
     if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="p-6 text-center">No outbounds configured.</td></tr>';
-        if (cards) cards.innerHTML = '<p class="routing-v2-empty">No outbounds configured yet.</p>';
+        tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No outbounds configured.</td></tr>`;
         refreshSelectionPreview();
         return;
     }
+
     tbody.innerHTML = items.map(o => {
-        const tag = esc(o.tag), safeArg = esc(JSON.stringify(String(o.tag)));
-        const name = esc(o.name || o.tag), type = esc(String(o.type || 'unknown').toUpperCase());
-        const host = esc(routingV2Remote(o)), search = esc([o.tag,o.name,o.type].join(' ').toLowerCase());
-        return `<tr class="routing-v2-row" data-routing-search="${search}">
-          <td><input class="outbound-check" type="checkbox" value="${tag}" ${previous.has(String(o.tag))?'checked':''} onchange="toggleRoutingV2Outbound(${safeArg},this.checked)" aria-label="Select ${name}"></td>
-          <td><div class="routing-v2-name"><b>${name}</b><small>${tag}</small></div></td>
-          <td><span class="routing-v2-type">${type}</span></td><td><span class="routing-v2-host">${host}</span></td>
-          <td><span class="routing-v2-state">Configured</span></td>
-          <td><div class="routing-v2-actions-row"><button onclick="pingOne(${safeArg})">Test</button>
-            <button onclick="openRoutingV2Editor('edit',${safeArg})">Edit</button>
-            <button onclick="openRoutingV2Actions(${safeArg})" aria-label="More for ${name}">⋮</button></div></td>
-        </tr>`;
+        const disabled = false;
+        const link = o.link || o.server || o.remote || '';
+        return `
+            <tr class="border-t hover:bg-gray-50">
+                <td class="p-3">
+                    <input type="checkbox" class="outbound-check h-4 w-4" value="${esc(o.tag)}" ${disabled ? 'disabled' : ''} onchange="refreshSelectionPreview()">
+                </td>
+                <td class="p-3 font-mono text-xs">${esc(o.tag)}</td>
+                <td class="p-3">${esc(o.name || '-')}</td>
+                <td class="p-3">${esc(o.type || '-')}</td>
+                <td class="p-3 font-mono text-xs text-gray-500 max-w-md truncate">${esc(maskLink(link))}</td>
+                <td class="p-3 text-right">
+                    <button onclick="pingOne('${esc(o.tag)}')" class="px-3 py-1 rounded bg-emerald-500 text-white text-xs">Ping</button>
+                    <button onclick="loadToForm('${esc(o.tag)}')" class="px-3 py-1 rounded bg-orange-500 text-white text-xs">Edit</button>
+                    <button onclick="deleteOne('${esc(o.tag)}')" class="px-3 py-1 rounded bg-red-600 text-white text-xs">Delete</button>
+                </td>
+            </tr>
+        `;
     }).join('');
-    if (cards) cards.innerHTML = items.map(o => {
-        const tag = esc(o.tag), safeArg = esc(JSON.stringify(String(o.tag)));
-        const name = esc(o.name || o.tag), type = esc(String(o.type || 'unknown').toUpperCase());
-        const host = esc(routingV2Remote(o)), search = esc([o.tag,o.name,o.type].join(' ').toLowerCase());
-        return `<article class="routing-v2-card" data-routing-search="${search}">
-          <header><label class="routing-v2-name"><input type="checkbox" class="outbound-check" value="${tag}" ${previous.has(String(o.tag))?'checked':''} onchange="toggleRoutingV2Outbound(${safeArg},this.checked)">
-          <span><b>${name}</b><small>${tag}</small></span></label><span class="routing-v2-type">${type}</span></header>
-          <p>${host}</p><div class="routing-v2-actions-row"><button onclick="pingOne(${safeArg})">Test</button>
-          <button onclick="openRoutingV2Editor('edit',${safeArg})">Edit</button><button onclick="openRoutingV2Actions(${safeArg})">⋮ More</button></div>
-        </article>`;
-    }).join('');
+
     refreshSelectionPreview();
 }
 
@@ -646,7 +578,7 @@ function firstChecked() {
 }
 
 function editChecked() {
-    try { openRoutingV2Editor('edit',firstChecked()); } catch (err) { showMessage(err.message, 'error'); }
+    try { loadToForm(firstChecked()); } catch (err) { showMessage(err.message, 'error'); }
 }
 
 async function addOutbound() {
@@ -657,7 +589,6 @@ async function addOutbound() {
         showMessage('Outbound added');
         clearForm();
         await loadRouting(true);
-        closeRoutingV2Editor();
     } catch (err) {
         showResult(err.message);
         showMessage(err.message, 'error');
@@ -672,7 +603,6 @@ async function updateSelected() {
         showResult(res);
         showMessage('Outbound updated');
         await loadRouting(true);
-        closeRoutingV2Editor();
     } catch (err) {
         showResult(err.message);
         showMessage(err.message, 'error');
@@ -839,7 +769,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     toggleBalancerStrategy();
     refreshSelectionPreview();
-    initializeRoutingV2();
     loadRouting(true);
 });
 </script>
@@ -1646,7 +1575,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         populateInboundSelector();
         syncCheckedOutbounds();
-        refreshSelectionPreview();
         renderOverview();
 
         return result;
@@ -1684,111 +1612,6 @@ document.addEventListener('DOMContentLoaded', () => {
             populateInboundSelector();
         }
     );
-})();
-</script>
-
-<script id="routing-v2-ui">
-(function () {
-  'use strict';
-  let currentActionTag = '';
-  window.initializeRoutingV2 = function () {
-    const targets = [
-      ['routingV2EditorHost','routingLegacyEditorCard','routingV2EditorCard'],
-      ['routingV2RoutingHost','routingLegacyBindCard','routingV2BindCard'],
-      ['routingV2ListHost','routingLegacyListCard','routingV2ListCard'],
-      ['routingV2RoutingHost','routingLegacyOverviewCard',null],
-      ['routingV2AdvancedHost','routingLegacyActionCard',null]
-    ];
-    targets.forEach(([hostId,cardId,newId]) => {
-      const host = document.getElementById(hostId), card = document.getElementById(cardId);
-      if (!host || !card) throw new Error('Routing V2 container missing: '+cardId);
-      host.appendChild(card);
-      if (newId) card.id = newId;
-    });
-    const table = document.getElementById('outboundsTable').closest('table').parentElement;
-    table.id = 'outboundsDesktopWrap';
-    const cards = document.createElement('div');
-    cards.id = 'outboundsMobileCards';
-    table.after(cards);
-    ['routingV2EditorModal','routingV2Actions'].forEach(id => {
-      const el = document.getElementById(id);
-      document.body.appendChild(el);
-    });
-    document.getElementById('routingV2OldBypass')?.classList.add('routing-v2-old-bypass');
-    const originalGrids = Array.from(document.querySelectorAll('.main-content .grid')).filter(el =>
-       el.classList.contains('xl:grid-cols-2') && el.children.length === 0);
-    originalGrids.forEach(el => el.classList.add('routing-v2-empty-grid'));
-    selectRoutingV2Tab('outbounds');
-    updateRoutingV2Info();
-  };
-  window.selectRoutingV2Tab = function (name) {
-    if (!['outbounds','routing','advanced'].includes(name)) return;
-    for (const key of ['outbounds','routing','advanced']) {
-      const formatted = key[0].toUpperCase()+key.slice(1);
-      const selected = name === key;
-      const pane = document.getElementById('routingV2Pane'+formatted);
-      const tab = document.getElementById('routingV2Tab'+formatted);
-      pane.classList.toggle('is-active',selected);
-      tab.classList.toggle('is-active',selected);
-      tab.setAttribute('aria-selected',String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-    }
-  };
-  window.toggleRoutingV2Outbound = function(tag,checked) {
-    document.querySelectorAll('.outbound-check').forEach(box => {if(box.value === tag)box.checked=checked;});
-    refreshSelectionPreview();updateRoutingV2Info();
-  };
-  window.clearRoutingV2Selection = function() {
-    document.querySelectorAll('.outbound-check').forEach(box => {box.checked=false;});
-    refreshSelectionPreview();updateRoutingV2Info();
-  };
-  window.filterRoutingV2Outbounds = function () {
-    const search = String(document.getElementById('routingV2Search')?.value||'').trim().toLowerCase();
-    document.querySelectorAll('[data-routing-search]').forEach(el => {
-      el.hidden = Boolean(search && !String(el.dataset.routingSearch||'').includes(search));
-    });
-  };
-  window.updateRoutingV2Info = function () {
-    if (!document.getElementById('routingV2Total')) return;
-    document.getElementById('routingV2Total').textContent = String(realOutbounds().length);
-    document.getElementById('routingV2Service').textContent =
-       String(routingData.service_active||routingData.routing_service||'unknown');
-    const count = checkedTagsRaw().length;
-    document.getElementById('routingV2Selected').textContent=String(count);
-    document.getElementById('routingV2SelectionLabel').textContent=count+' selected';
-    filterRoutingV2Outbounds();
-  };
-  window.openRoutingV2Editor = function(mode,tag) {
-    const edit=mode==='edit';
-    if(edit) {
-      if(!outbounds.find(o=>o.tag===tag)) {showMessage('Outbound not found','error');return;}
-      loadToForm(tag);
-    } else clearForm();
-    const modal=document.getElementById('routingV2EditorModal');
-    modal.dataset.mode=edit?'edit':'create';
-    document.getElementById('routingV2EditorTitle').textContent=edit?'Edit Outbound':'Add Outbound';
-    document.getElementById('tagInput').readOnly=edit;
-    modal.classList.remove('hidden');
-    document.getElementById(edit?'nameInput':'tagInput').focus();
-  };
-  window.closeRoutingV2Editor = function(){document.getElementById('routingV2EditorModal').classList.add('hidden');};
-  window.openRoutingV2Actions = function(tag) {
-    const o=outbounds.find(x=>x.tag===tag);if(!o)return;
-    currentActionTag=tag;
-    document.getElementById('routingV2ActionTitle').textContent=o.name||tag;
-    document.getElementById('routingV2Actions').classList.remove('hidden');
-  };
-  window.closeRoutingV2Actions = function(){document.getElementById('routingV2Actions').classList.add('hidden');};
-  window.doRoutingV2Action = function(mode) {
-    const tag=currentActionTag; closeRoutingV2Actions();
-    if(!tag)return;
-    if(mode==='test')pingOne(tag);
-    else if(mode==='edit')openRoutingV2Editor('edit',tag);
-    else if(mode==='delete')deleteOne(tag);
-  };
-  document.addEventListener('keydown',event=>{
-    if(event.key==='Escape') {closeRoutingV2Editor();closeRoutingV2Actions();}
-  });
 })();
 </script>
 
