@@ -77,7 +77,25 @@
           </div>
         </section>
         <section id="routingV2PaneRouting" class="routing-v2-pane" role="tabpanel">
-          <div class="routing-v2-intro"><h2>Routing Rules</h2><p>Choose the Inbound, mode and strategy. Bind saves the route; Activate generates and applies it.</p></div>
+          <div class="routing-v2-intro"><h2>Routing Rules</h2><p>Choose an OpenVPN port / inbound, select its Outbound below, then Bind or Activate the route.</p></div>
+          <details id="routingV2PortCreator" class="routing-v2-port-creator">
+            <summary><span><strong>+ Create local OpenVPN port</strong><small>Add a custom UDP port to this Master and route it behind any Outbound</small></span><span aria-hidden="true">⌄</span></summary>
+            <form id="routingV2PortForm" class="routing-v2-port-form" onsubmit="return createRoutingV2PortLocation(event)">
+              <label>Location ID <small>Lowercase letters, numbers, hyphens</small><input id="routingV2PortId" type="text" required maxlength="31" pattern="[a-z0-9][a-z0-9-]{0,30}" placeholder="germany" autocomplete="off"></label>
+              <label>Display Name <input id="routingV2PortName" type="text" required maxlength="100" placeholder="Germany UDP" autocomplete="off"></label>
+              <label>Public IP / Domain <small>Leave blank to use the main host</small><input id="routingV2PortHost" type="text" placeholder="vpn.example.com" autocomplete="off"></label>
+              <label>OpenVPN UDP Port <small>UDP 500 and 4500 are reserved for IKEv2</small><input id="routingV2PortNumber" type="number" required min="1" max="65535" step="1" placeholder="8443"></label>
+              <label>Country Code <small>Optional</small><input id="routingV2PortCode" type="text" maxlength="8" placeholder="DE"></label>
+              <label>Flag <small>Optional</small><input id="routingV2PortFlag" type="text" maxlength="12" placeholder="🇩🇪"></label>
+              <div class="routing-v2-port-form-foot">
+                <p>Interface, subnet, management and TPROXY ports are allocated automatically. No outbound is activated on creation.</p>
+                <button id="routingV2PortSubmit" type="submit">Create UDP Port</button>
+              </div>
+              <div id="routingV2PortFeedback" role="status" aria-live="polite"></div>
+            </form>
+          </details>
+          <div class="routing-v2-shortcuts"><a href="nodes.html#port-location-management">Manage port locations and remote nodes</a><button type="button" onclick="loadRouting(true)">Refresh available ports</button></div>
+          <div id="routingV2RoutePicker" class="routing-v2-route-picker"><h3>Outbounds for selected port</h3><p>Choose one for Single, or at least two for Failover. Only checked Outbounds are bound.</p><div id="routingV2RouteChoices"></div></div>
           <div id="routingV2RoutingHost"></div>
         </section>
         <section id="routingV2PaneAdvanced" class="routing-v2-pane" role="tabpanel">
@@ -542,6 +560,7 @@ function renderOutbounds() {
         </article>`;
     }).join('');
     refreshSelectionPreview();
+    window.renderRoutingV2PortChoices?.();
 }
 
 function maskLink(link) {
@@ -1383,13 +1402,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? balancer.selector
                 : [];
 
-        if (!selector.length) return;
-
+        // Each OpenVPN port has its own selector. Clear any previously
+        // checked outbound when the newly selected port has no binding.
         document.querySelectorAll(
             '.outbound-check'
         ).forEach(input => {
-            input.checked =
-                selector.includes(input.value);
+            input.checked = selector.includes(input.value);
         });
     }
 
@@ -1647,6 +1665,7 @@ document.addEventListener('DOMContentLoaded', () => {
         populateInboundSelector();
         syncCheckedOutbounds();
         refreshSelectionPreview();
+        window.renderRoutingV2PortChoices?.();
         renderOverview();
 
         return result;
@@ -1785,6 +1804,93 @@ document.addEventListener('DOMContentLoaded', () => {
     if(mode==='test')pingOne(tag);
     else if(mode==='edit')openRoutingV2Editor('edit',tag);
     else if(mode==='delete')deleteOne(tag);
+  };
+
+  window.renderRoutingV2PortChoices = function () {
+    const host = document.getElementById('routingV2RouteChoices');
+    if (!host) return;
+    const previous = new Set(checkedTagsRaw());
+    const entries = realOutbounds();
+    if (!entries.length) {
+      host.innerHTML = '<div class="routing-v2-empty">No Outbound configured. Create one in the Outbounds tab first.</div>';
+      return;
+    }
+    host.innerHTML = entries.map(o => {
+      const tag = esc(String(o.tag || ''));
+      const name = esc(String(o.name || o.tag || ''));
+      const type = esc(String(o.type || 'xray').toUpperCase());
+      const argument = esc(JSON.stringify(String(o.tag || '')));
+      return `<label class="routing-v2-choice">
+        <input type="checkbox" class="outbound-check" value="${tag}" ${previous.has(String(o.tag)) ? 'checked' : ''} onchange="toggleRoutingV2Outbound(${argument},this.checked)">
+        <span><b>${name}</b><small>${tag}</small></span>
+        <em>${type}</em>
+      </label>`;
+    }).join('');
+  };
+
+  // Uses the existing POST /api/openvpn-port-locations contract.
+  // Port creation does not call Bind, Generate or Apply.
+  window.createRoutingV2PortLocation = function (event) {
+    event.preventDefault();
+    const e = id => document.getElementById(id);
+    const form = e('routingV2PortForm');
+    const submit = e('routingV2PortSubmit');
+    const feedback = e('routingV2PortFeedback');
+    const id = e('routingV2PortId').value.trim().toLowerCase();
+    const name = e('routingV2PortName').value.trim();
+    const host = e('routingV2PortHost').value.trim();
+    const port = Number(e('routingV2PortNumber').value);
+    if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(id)) {
+      feedback.textContent = 'Invalid location ID. Use lowercase letters, numbers or hyphens.';
+      return false;
+    }
+    if (!name || !Number.isInteger(port) || port < 1 || port > 65535 || port === 500 || port === 4500) {
+      feedback.textContent = 'Enter a display name and a valid unused UDP port, excluding 500 and 4500.';
+      return false;
+    }
+    if (host && (host.includes('://') || /[\s/@]/.test(host))) {
+      feedback.textContent = 'Use only a hostname or IP, without a scheme, slash or credentials.';
+      return false;
+    }
+    if (submit.disabled) return false;
+    submit.disabled = true;
+    feedback.textContent = 'Creating UDP location...';
+    (async () => {
+      try {
+        const response = await apiRequest('/openvpn-port-locations', {
+          method: 'POST',
+          body: JSON.stringify({
+            id, name, host, port, enabled: true, protocol: 'udp',
+            location: e('routingV2PortCode').value.trim().toUpperCase(),
+            flag: e('routingV2PortFlag').value.trim()
+          })
+        });
+        if (response?.success === false) throw new Error(response.message || 'Failed to create location');
+        const record = payloadData(response);
+        const applied = record?.applied === true;
+        if (applied) {
+          feedback.textContent = 'Port saved and listener applied. Choose an Outbound below, then Bind or Activate.';
+          showMessage('Local OpenVPN port UDP ' + port + ' created. Choose its Outbound.');
+        } else {
+          feedback.textContent = 'Port record saved; runtime application needs attention: ' +
+            (record?.runtime_error || 'check the Nodes page and runtime status.');
+          showMessage(feedback.textContent, 'error');
+        }
+        await loadRouting(true);
+        const inbound = e('inboundPortSelect');
+        if (inbound && [...inbound.options].some(o => o.value === String(port))) {
+          inbound.value = String(port);
+          inbound.dispatchEvent(new Event('change', {bubbles:true}));
+        }
+        if (applied) form.reset();
+      } catch (error) {
+        feedback.textContent = 'Could not create port: ' + (error?.message || 'unknown error');
+        showMessage(feedback.textContent, 'error');
+      } finally {
+        submit.disabled = false;
+      }
+    })();
+    return false;
   };
   document.addEventListener('keydown',event=>{
     if(event.key==='Escape') {closeRoutingV2Editor();closeRoutingV2Actions();}

@@ -103,3 +103,40 @@
  #routingV2EditorHost>div{padding:13px!important}
  #routingV2EditorHost .grid{grid-template-columns:1fr!important}
 }
+
+/* Local OpenVPN port builder and direct per-port Outbound selector */
+.routing-v2-port-creator{border:1px solid #3a7280;background:#1b2d40;border-radius:12px;margin:12px 0 10px;overflow:hidden}
+.routing-v2-port-creator>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;list-style:none;cursor:pointer;padding:14px 17px}
+.routing-v2-port-creator>summary::-webkit-details-marker{display:none}
+.routing-v2-port-creator>summary>span:first-child{display:flex;flex-direction:column;gap:5px}
+.routing-v2-port-creator>summary strong{font-size:14px;color:#86f0df}
+.routing-v2-port-creator>summary small{font-size:12px;color:#a4bcd2;line-height:1.4}
+.routing-v2-port-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;padding:16px;border-top:1px solid #3b4c63}
+.routing-v2-port-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#d7e9f7}
+.routing-v2-port-form label small{font-size:11px;color:#9eb4c7;font-weight:400}
+.routing-v2-port-form input{border:1px solid #53657a;border-radius:9px;background:#152538;color:#f3f8ff;min-width:0;min-height:44px;padding:10px;font-size:14px}
+.routing-v2-port-form-foot{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:15px}
+.routing-v2-port-form-foot p{font-size:12px;color:#9fb1c6;max-width:460px}
+.routing-v2-port-form-foot button{min-height:44px;border-radius:9px;background:#0f766e;border:1px solid #17b8b3;color:#fff;padding:10px 17px;font-weight:750}
+.routing-v2-port-form-foot button:disabled{opacity:.5;cursor:not-allowed}
+#routingV2PortFeedback{grid-column:1/-1;color:#93c5fd;font-size:12px;min-height:18px;line-height:1.5}
+.routing-v2-shortcuts{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 15px;font-size:12px}
+.routing-v2-shortcuts a{color:#80dcea;text-decoration:underline}
+.routing-v2-shortcuts button{min-height:38px;padding:7px 13px;background:#273d51;border:1px solid #48647a;border-radius:8px;color:#dceaf7}
+.routing-v2-route-picker{padding:16px;border:1px solid #3a4d64;border-radius:12px;background:#1c2c40;margin-bottom:14px}
+.routing-v2-route-picker h3{color:#e9f7ff;font-size:16px;font-weight:800}
+.routing-v2-route-picker p{font-size:12px;color:#a6bcd2;margin:5px 0 11px}
+#routingV2RouteChoices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.routing-v2-choice{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #40546b;border-radius:9px;background:#23344b;cursor:pointer;min-width:0}
+.routing-v2-choice input{min-width:19px;width:19px;height:19px;accent-color:#14b8a6}
+.routing-v2-choice span{display:flex;flex:1;flex-direction:column;gap:4px;min-width:0}
+.routing-v2-choice b{color:#eff8ff;overflow-wrap:anywhere;font-size:13px}
+.routing-v2-choice small{color:#a0bcd1;font-size:11px;overflow-wrap:anywhere}
+.routing-v2-choice em{font-size:10px;font-weight:800;font-style:normal;color:#67e8d3;border:1px solid #367a85;border-radius:6px;padding:5px 7px}
+@media(max-width:800px){
+ .routing-v2-port-form{grid-template-columns:1fr;padding:13px}
+ .routing-v2-port-form-foot{flex-direction:column;align-items:stretch}
+ .routing-v2-port-form-foot button{width:100%}
+ #routingV2RouteChoices{grid-template-columns:1fr}
+ .routing-v2-shortcuts{flex-wrap:wrap}
+}
