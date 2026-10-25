@@ -415,9 +415,13 @@
             window.location.href = url.toString();
         }
 
+        // Ignore older requests that finish after a newer post-edit refresh.
+        let clientsLoadGeneration = 0;
         async function loadClients() {
+            const generation = ++clientsLoadGeneration;
             try {
                 const result = await api.getClients();
+                if (generation !== clientsLoadGeneration) return;
                 if (result.success) {
                     allClients = result.data || [];
                     renderClients(allClients);
@@ -458,6 +462,14 @@
         // Render clients table
         function getClientUsedBytes(client) {
             const trafficUsed = Number(client.traffic_used_bytes || 0);
+
+            // The PostgreSQL-backed global total is authoritative even when
+            // exactly zero after a reset. Old live session counters must not
+            // bring back the pre-reset traffic in the UI.
+            if (client.traffic_used_bytes_authoritative === true &&
+                Number.isFinite(trafficUsed)) {
+                return Math.max(0, trafficUsed);
+            }
 
             // upload/download are the persisted client.json values.
             // bytes_sent/bytes_received may be overwritten by current_stats in API.
@@ -517,6 +529,12 @@
 
         function getClientTrafficDisplay(client) {
             const used = getClientUsedBytes(client);
+
+            // A reset authoritative zero also means both displayed directions
+            // are zero, even if old OpenVPN session samples are still present.
+            if (client.traffic_used_bytes_authoritative === true && used === 0) {
+                return {upload: 0, download: 0, total: 0};
+            }
 
             // Prefer stable persisted values from client.json.
             let upload = Number(client.upload || 0);
@@ -2016,11 +2034,11 @@
                     </div>
                     <div>
                         <p class="text-sm text-gray-600">Data Uploaded</p>
-                        <p class="font-semibold">${formatBytes(client.bytes_sent || 0)}</p>
+                        <p class="font-semibold">${formatBytes(getClientTrafficDisplay(client).upload)}</p>
                     </div>
                     <div>
                         <p class="text-sm text-gray-600">Data Downloaded</p>
-                        <p class="font-semibold">${formatBytes(client.bytes_received || 0)}</p>
+                        <p class="font-semibold">${formatBytes(getClientTrafficDisplay(client).download)}</p>
                     </div>
                 </div>
                 <div class="mt-6 flex gap-2">
