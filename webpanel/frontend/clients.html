@@ -1384,9 +1384,11 @@
             document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
             // "active" in GET /clients is live connectivity, not account access.
             const persistedStatus = String(client.persisted_status || '').toLowerCase();
-            const isBlocked = /inactive|disabled|expired|exceeded|blocked|suspended|revoked/.test(persistedStatus);
+            // Quota/expiry exhaustion is renewable; explicit admin disables are not.
+            const renewableStatus = /expired|exceeded/.test(persistedStatus);
+            const intentionallyDisabled = /inactive|disabled|blocked|suspended|revoked/.test(persistedStatus);
             const activeCheckbox = document.getElementById('editActive');
-            activeCheckbox.checked = !isBlocked;
+            activeCheckbox.checked = !intentionallyDisabled;
             document.getElementById('editResetTraffic').checked = false;
 
             editClientNodesDirty = false;
@@ -1397,7 +1399,8 @@
                 trafficLimit: document.getElementById('editTrafficLimit').value,
                 trafficUnit: document.getElementById('editTrafficUnit').value,
                 connectionLimit: document.getElementById('editConnectionLimit').value,
-                active: activeCheckbox.checked
+                active: activeCheckbox.checked,
+                renewable: renewableStatus
             };
 
             await loadEditClientNodeOptions(client);
@@ -1486,8 +1489,13 @@
                 updates.reset_traffic = true;
             }
 
+            const renewingExhaustedClient = editClientBaseline.renewable &&
+                activeCheckbox.checked &&
+                (Object.prototype.hasOwnProperty.call(updates, 'traffic_limit_bytes') ||
+                 Object.prototype.hasOwnProperty.call(updates, 'expiration_days'));
             if (activeCheckbox.checked !== editClientBaseline.active ||
-                (resetTraffic && activeCheckbox.checked)) {
+                (resetTraffic && activeCheckbox.checked) ||
+                renewingExhaustedClient) {
                 updates.active = activeCheckbox.checked;
             }
 
