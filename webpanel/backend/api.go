@@ -1187,6 +1187,24 @@ func adsFinalReactivateAfterEdit(clientData map[string]interface{}, requestedAct
 	}
 }
 
+// sameClientSelection compares already-normalized, de-duplicated client
+// location IDs without treating order changes as access changes.
+func sameClientSelection(existing, requested []string) bool {
+	if len(existing) != len(requested) {
+		return false
+	}
+	known := make(map[string]struct{}, len(existing))
+	for _, id := range existing {
+		known[id] = struct{}{}
+	}
+	for _, id := range requested {
+		if _, ok := known[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := strings.TrimSpace(vars["name"])
@@ -1233,6 +1251,9 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		nodeIDsFromClientData(
 			clientData,
 		)
+	previousPortLocationIDs := openVPNPortLocationIDsFromClientData(clientData)
+	nodesChanged := false
+	portLocationsChanged := false
 
 	var selectedPortLocationIDs []string
 
@@ -1251,8 +1272,10 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		clientData["openvpn_port_locations"] =
-			selectedPortLocationIDs
+		portLocationsChanged = !sameClientSelection(previousPortLocationIDs, selectedPortLocationIDs)
+		if portLocationsChanged {
+			clientData["openvpn_port_locations"] = selectedPortLocationIDs
+		}
 	}
 
 	if req.ExpirationDays != nil {
@@ -1347,7 +1370,10 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		clientData["nodes"] = selectedNodes
+		nodesChanged = !sameClientSelection(previousNodeIDs, selectedNodes)
+		if nodesChanged {
+			clientData["nodes"] = selectedNodes
+		}
 	}
 
 	if req.ResetTraffic {
@@ -1400,7 +1426,9 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Nodes != nil {
+	// A quota/time edit must never depend on the availability of remote nodes.
+	// Only change ACLs when the requested node selection actually differs.
+	if nodesChanged {
 		if err := syncClientNodeACL(
 			name,
 			*req.Nodes,
@@ -1437,7 +1465,9 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.OpenVPNPortLocations != nil {
+	// Preserve live OpenVPN sessions when only quota, expiry or connection
+	// limits were edited (even if a legacy client re-sends the same locations).
+	if portLocationsChanged {
 		if err :=
 			killOpenVPNClientEverywhere(
 				name,
