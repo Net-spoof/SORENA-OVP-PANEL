@@ -491,11 +491,19 @@ function currentSelectorFromState() {
 
 function routingV2Remote(o) {
     const raw = String(o.link || '');
+    const explicitHost = String(o.server || o.remote || '');
+    // Never expose password, user info, vmess/ss base64, or any URI secret
+    // in a list row. A clear authority host is safe only after '@'.
     if (raw.includes('://')) {
-        return raw.split('://')[1]?.split(/[/?#]/)[0]?.split('@').pop() || 'Saved configuration';
+        const authority = raw.split('://')[1]?.split(/[/?#]/)[0] || '';
+        if (authority.includes('@')) return authority.split('@').pop() || 'Saved configuration';
+        if (explicitHost && !explicitHost.includes('@') && !explicitHost.includes('://')) {
+            return explicitHost.slice(0,90);
+        }
+        return 'Saved configuration';
     }
-    const remote = String(o.server || o.remote || '');
-    return remote && !remote.includes('@') && !remote.includes('://') ? remote.slice(0,90) : 'Saved configuration';
+    return explicitHost && !explicitHost.includes('@') && !explicitHost.includes('://')
+        ? explicitHost.slice(0,90) : 'Saved configuration';
 }
 function renderOutbounds() {
     const tbody = document.getElementById('outboundsTable');
