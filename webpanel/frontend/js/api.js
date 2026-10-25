@@ -6,6 +6,7 @@ class API {
     constructor() {
         this.token = localStorage.getItem('token');
         this.cache = new Map();
+        this.cacheEpoch = 0;
         this.cacheTimeout = 30000; // 30 seconds default
     }
 
@@ -109,17 +110,23 @@ class API {
             return cached.data;
         }
 
+        const epoch = this.cacheEpoch;
         const data = await this.request(endpoint);
-        this.cache.set(cacheKey, {
-            data,
-            timestamp: Date.now()
-        });
+        // A prior GET may finish after a mutation invalidates this cache.
+        // It must not restore pre-reset values into the next refresh.
+        if (this.cacheEpoch === epoch) {
+            this.cache.set(cacheKey, {
+                data,
+                timestamp: Date.now()
+            });
+        }
 
         return data;
     }
 
     // Invalidate cache
     invalidateCache(pattern = null) {
+        this.cacheEpoch++;
         if (!pattern) {
             this.cache.clear();
         } else {
@@ -133,6 +140,7 @@ class API {
 
     // Clear all cache
     clearCache() {
+        this.cacheEpoch++;
         this.cache.clear();
     }
 
