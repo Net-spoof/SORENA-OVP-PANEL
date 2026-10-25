@@ -132,3 +132,22 @@
  .clients-page-header>button{width:100%!important}
 }
 @media(prefers-reduced-motion:reduce){.sanaei-actions button{transition:none!important}}
+
+/* Self-contained layout for controls previously relying on Tailwind utilities. */
+#editClientForm #editTrafficLimit { min-width:0!important; width:100%!important; flex:1 1 auto!important; }
+#editClientForm #editTrafficUnit { min-width:92px!important; width:92px!important; flex:0 0 92px!important; }
+#editClientForm #editTrafficLimit.parent-select { min-width:0; }
+#editClientForm #editTrafficLimit + select { margin-left:8px!important; }
+#editClientForm #editTrafficLimit { box-sizing:border-box; }
+#editClientForm #editTrafficLimit:focus { box-shadow:0 0 0 2px #0d948840; }
+#editClientForm div:has(> #editTrafficLimit) { display:flex!important; width:100%; gap:8px!important; }
+#editClientForm>div:last-child button[type=submit] { background:#0f766e!important;color:#fff!important;border:1px solid #14b8a6!important; }
+#editClientForm>div:last-child button[type=button] { background:#2b3a4d!important;color:#e3ebf6!important;border:1px solid #475569!important; }
+#clientsPagination > div:first-child { display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:6px!important;padding:8px!important;border:1px solid #3f4c60!important;border-radius:10px!important;background:#1f2b3b!important;max-width:100%;flex-wrap:wrap; }
+#clientsPagination > div:first-child > div { display:flex!important;gap:5px!important; }
+#clientsPagination button { padding:7px 10px!important;border:1px solid #475569!important;border-radius:7px!important;background:#2a3748!important;color:#e7eef9!important;cursor:pointer; }
+#clientsPagination button:disabled { opacity:.4!important;cursor:not-allowed!important; }
+#clientsPagination > div:last-child { font-size:12px!important;color:#a6b6c9!important;line-height:1.5!important;margin-top:7px!important; }
+#clientsPagination button:focus-visible,.sanaei-actions button:focus-visible,
+#clientQuickActionsModal button:focus-visible { outline:2px solid #2dd4bf!important;outline-offset:2px; }
+@media(max-width:800px) { #clientsPagination {padding:8px!important} #clientsPagination button{min-height:40px!important;min-width:40px!important} }
