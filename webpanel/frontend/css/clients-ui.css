@@ -620,3 +620,8 @@ body {
   .client-mobile-card { padding: .85rem; }
   .client-security-status { border-radius: 12px !important; }
 }
+
+/* Keep primary desktop data legible without browser zoom. */
+.clients-table-card td .text-xs { font-size: .83rem !important; line-height: 1.5 !important; }
+#clientsPagination > div:last-child { font-size: .83rem !important; }
+.client-mobile-meta span { line-height: 1.5; }
