@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="css/mobile.css">
     <link rel="stylesheet" href="css/loading.css">
     <link rel="stylesheet" href="css/control-ui.css?v=control-ui-20260912-v1">
-    <link rel="stylesheet" href="css/routing-panel-v2.css?v=outbounds-v2-20261025-01">
+    <link rel="stylesheet" href="css/routing-panel-v2.css?v=outbounds-v2-20261025-02">
     <style>.routing-v2-pane{display:none}.routing-v2-pane.is-active{display:block}.routing-v2-modal.hidden{display:none!important}.routing-v2-actions.hidden{display:none!important}@media(max-width:800px){#outboundsDesktopWrap{display:none!important}#outboundsMobileCards{display:grid!important}}</style>
 
     <script src="js/theme-loader.js"></script>
@@ -1724,6 +1724,10 @@ document.addEventListener('DOMContentLoaded', () => {
       host.appendChild(card);
       if (newId) card.id = newId;
     });
+    // Keep setup steps in logical order: inbound -> outbound picker -> mode -> apply.
+    const inboundSelection = document.getElementById('inboundBindSelector');
+    const outboundChoices = document.getElementById('routingV2RoutePicker');
+    if (inboundSelection && outboundChoices) inboundSelection.after(outboundChoices);
     const table = document.getElementById('outboundsTable').closest('table').parentElement;
     table.id = 'outboundsDesktopWrap';
     const cards = document.createElement('div');
