@@ -389,20 +389,43 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var clientsCache struct {
-	data      []interface{}
-	timestamp time.Time
-	mutex     sync.RWMutex
+	data       []interface{}
+	timestamp  time.Time
+	generation uint64
+	mutex      sync.RWMutex
+}
+
+// Invalidate after a mutation reaches its final persistent state. The generation
+// prevents older, still-running GET requests from repopulating a stale cache.
+func invalidateClientsCache() {
+	clientsCache.mutex.Lock()
+	clientsCache.data = nil
+	clientsCache.timestamp = time.Time{}
+	clientsCache.generation++
+	clientsCache.mutex.Unlock()
+}
+
+func cacheClientsIfCurrent(generation uint64, clients []interface{}) bool {
+	clientsCache.mutex.Lock()
+	defer clientsCache.mutex.Unlock()
+
+	if clientsCache.generation != generation {
+		return false
+	}
+
+	clientsCache.data = clients
+	clientsCache.timestamp = time.Now()
+	return true
 }
 
 func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 	clientsCache.mutex.RLock()
 	cacheValid := time.Since(clientsCache.timestamp) < 20*time.Second && clientsCache.data != nil
+	cachedClients := clientsCache.data
+	cacheGeneration := clientsCache.generation
 	clientsCache.mutex.RUnlock()
 	if cacheValid {
-		clientsCache.mutex.RLock()
-		data := clientsCache.data
-		clientsCache.mutex.RUnlock()
-		sendSuccess(w, "Clients retrieved successfully (cached)", data)
+		sendSuccess(w, "Clients retrieved successfully (cached)", cachedClients)
 		return
 	}
 	cmd := exec.Command("irangate", "client", "list", "--json")
@@ -450,7 +473,11 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 			if clientMap, ok := client.(map[string]interface{}); ok {
 				if name, ok := clientMap["name"].(string); ok {
 					if authoritativeUsed, exists := globalUsageTotals[strings.TrimSpace(name)]; exists {
+						// Explicitly distinguish a valid PostgreSQL zero from absent
+						// usage data. Live OpenVPN session counters are not a fallback
+						// for a manually reset authoritative total of zero.
 						clientMap["traffic_used_bytes"] = authoritativeUsed
+						clientMap["traffic_used_bytes_authoritative"] = true
 					}
 					if token, err := ensureClientSubscriptionToken(name); err == nil {
 						clientMap["subscription_token"] = token
@@ -570,10 +597,7 @@ func getClientsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	clientsCache.mutex.Lock()
-	clientsCache.data = clients
-	clientsCache.timestamp = time.Now()
-	clientsCache.mutex.Unlock()
+	cacheClientsIfCurrent(cacheGeneration, clients)
 	sendSuccess(w, "Clients retrieved successfully", clients)
 }
 
@@ -868,10 +892,7 @@ func createClientHandler(w http.ResponseWriter, r *http.Request) {
 		nodeResults = append(nodeResults, res)
 	}
 
-	clientsCache.mutex.Lock()
-	clientsCache.data = nil
-	clientsCache.timestamp = time.Time{}
-	clientsCache.mutex.Unlock()
+	invalidateClientsCache()
 
 	sendSuccess(w, "Client created successfully", map[string]interface{}{
 		"name":                   req.Name,
@@ -906,10 +927,7 @@ func deleteClientHandler(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	clientsCache.mutex.Lock()
-	clientsCache.data = nil
-	clientsCache.timestamp = time.Time{}
-	clientsCache.mutex.Unlock()
+	invalidateClientsCache()
 	sendSuccess(w, "Client removed and certificate revoked", map[string]string{"name": name})
 }
 
@@ -1482,10 +1500,7 @@ func updateClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// IRANGATE_PORT_LOCATION_CLIENT_RUNTIME_STAGE5C
-	clientsCache.mutex.Lock()
-	clientsCache.data = nil
-	clientsCache.timestamp = time.Time{}
-	clientsCache.mutex.Unlock()
+	invalidateClientsCache()
 
 	go func() {
 		if err := exec.Command(
@@ -1516,10 +1531,7 @@ func activateClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientsCache.mutex.Lock()
-	clientsCache.data = nil
-	clientsCache.timestamp = time.Time{}
-	clientsCache.mutex.Unlock()
+	invalidateClientsCache()
 
 	sendSuccess(w, "Client activated successfully", map[string]string{"name": name, "status": "active"})
 }
@@ -1536,10 +1548,7 @@ func deactivateClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientsCache.mutex.Lock()
-	clientsCache.data = nil
-	clientsCache.timestamp = time.Time{}
-	clientsCache.mutex.Unlock()
+	invalidateClientsCache()
 
 	sendSuccess(w, "Client deactivated successfully", map[string]string{"name": name, "status": "inactive"})
 }
