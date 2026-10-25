@@ -1351,6 +1351,22 @@
             return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
         }
 
+        // Track intentional location edits: the form must never replace existing
+        // node ACLs or disconnect sessions for quota/time-only changes.
+        let editClientBaseline = null;
+        let editClientSubmitting = false;
+        let editClientNodesDirty = false;
+        let editClientPortsDirty = false;
+
+        document.addEventListener('change', (event) => {
+            if (event.target.matches('#editClientNodesBox .edit-client-node-checkbox')) {
+                editClientNodesDirty = true;
+            }
+            if (event.target.matches('#editClientNodesBox .edit-client-port-location-checkbox')) {
+                editClientPortsDirty = true;
+            }
+        });
+
         async function showEditClient(name) {
             const client = allClients.find(c => c.name === name);
             if (!client) {
@@ -1366,8 +1382,23 @@
             document.getElementById('editTrafficLimit').value = limit.value;
             document.getElementById('editTrafficUnit').value = limit.unit;
             document.getElementById('editConnectionLimit').value = client.connection_limit || 1;
-            document.getElementById('editActive').checked = true;
+            // "active" in GET /clients is live connectivity, not account access.
+            const persistedStatus = String(client.persisted_status || '').toLowerCase();
+            const isBlocked = /inactive|disabled|expired|exceeded|blocked|suspended|revoked/.test(persistedStatus);
+            const activeCheckbox = document.getElementById('editActive');
+            activeCheckbox.checked = !isBlocked;
             document.getElementById('editResetTraffic').checked = false;
+
+            editClientNodesDirty = false;
+            editClientPortsDirty = false;
+            editClientBaseline = {
+                name: client.name,
+                expirationDays: document.getElementById('editExpirationDays').value,
+                trafficLimit: document.getElementById('editTrafficLimit').value,
+                trafficUnit: document.getElementById('editTrafficUnit').value,
+                connectionLimit: document.getElementById('editConnectionLimit').value,
+                active: activeCheckbox.checked
+            };
 
             await loadEditClientNodeOptions(client);
 
@@ -1386,66 +1417,120 @@
 
         async function submitEditClient(e) {
             e.preventDefault();
+            if (editClientSubmitting) return;
 
             const name = document.getElementById('editClientName').value;
-            const expirationDays = parseInt(document.getElementById('editExpirationDays').value, 10) || 30;
-            const connectionLimit = parseInt(document.getElementById('editConnectionLimit').value, 10) || 1;
-            const selectedNodes =
-                getSelectedEditClientNodes();
-
-            if (!selectedNodes.length) {
-                selectedNodes.push('local');
+            if (!editClientBaseline || editClientBaseline.name !== name) {
+                showToast('Please reopen the client editor', 'error');
+                return;
             }
 
+            const expirationInput = document.getElementById('editExpirationDays');
+            const connectionInput = document.getElementById('editConnectionLimit');
+            const trafficInput = document.getElementById('editTrafficLimit');
+            const trafficUnitInput = document.getElementById('editTrafficUnit');
+            const activeCheckbox = document.getElementById('editActive');
+            const expirationDays = Number(expirationInput.value);
+            const connectionLimit = Number(connectionInput.value);
+            const trafficValue = Number(trafficInput.value.replace(',', '.'));
 
-            if (connectionLimit < 1 || connectionLimit > 100) {
+            if (!Number.isInteger(expirationDays) || expirationDays < 1 || expirationDays > 3650) {
+                showToast('Expiration days must be between 1 and 3650', 'error');
+                return;
+            }
+            if (!Number.isInteger(connectionLimit) || connectionLimit < 1 || connectionLimit > 100) {
                 showToast('Connection limit must be between 1 and 100', 'error');
                 return;
+            }
+            if (!trafficInput.value.trim() || !Number.isFinite(trafficValue) || trafficValue < 0) {
+                showToast('Traffic limit must be zero or greater', 'error');
+                return;
+            }
+
+            const updates = {};
+            if (expirationInput.value !== editClientBaseline.expirationDays) {
+                updates.expiration_days = expirationDays;
+            }
+            if (connectionInput.value !== editClientBaseline.connectionLimit) {
+                updates.connection_limit = connectionLimit;
+            }
+            if (trafficInput.value !== editClientBaseline.trafficLimit ||
+                trafficUnitInput.value !== editClientBaseline.trafficUnit) {
+                updates.traffic_limit_bytes = editTrafficLimitBytes();
+                if (!Number.isSafeInteger(updates.traffic_limit_bytes)) {
+                    showToast('Traffic limit is too large', 'error');
+                    return;
+                }
+            }
+
+            if (editClientNodesDirty) {
+                const selectedNodes = getSelectedEditClientNodes();
+                if (!selectedNodes.length) {
+                    showToast('Select at least one node', 'error');
+                    return;
+                }
+                updates.nodes = selectedNodes;
+            }
+            if (editClientPortsDirty) {
+                updates.openvpn_port_locations = getSelectedEditClientPortLocations();
             }
 
             const resetTraffic = document.getElementById('editResetTraffic').checked;
             if (resetTraffic) {
                 const ok = confirm(
-                    `Reset traffic for "${name}"?\n\n` +
-                    `این کار مصرف قبلی، Upload، Download و Total را صفر می‌کند.\n` +
-                    `اگر فقط می‌خواهی حجم/روز/لیمیت را تغییر بدهی، Cancel بزن و تیک Reset Traffic را بردار.`
+                    'Reset traffic for "' + name + '"?\n\n' +
+                    'این کار مصرف قبلی، Upload، Download و Total را صفر می‌کند.\n' +
+                    'اگر فقط می‌خواهی حجم/روز/لیمیت را تغییر بدهی، Cancel بزن و تیک Reset Traffic را بردار.'
                 );
-                if (!ok) {
-                    return;
-                }
+                if (!ok) return;
+                updates.reset_traffic = true;
             }
 
+            if (activeCheckbox.checked !== editClientBaseline.active ||
+                (resetTraffic && activeCheckbox.checked)) {
+                updates.active = activeCheckbox.checked;
+            }
+
+            if (!Object.keys(updates).length) {
+                showToast('No changes to save', 'info');
+                return;
+            }
+
+            const submitButton = e.currentTarget.querySelector('button[type="submit"]');
+            const oldButtonText = submitButton.textContent;
+            editClientSubmitting = true;
+            submitButton.disabled = true;
+            submitButton.textContent = 'Saving...';
+
             try {
-                const response = await fetch(`/api/clients/${encodeURIComponent(name)}`, {
+                const response = await fetch('/api/clients/' + encodeURIComponent(name), {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer ' + localStorage.getItem('token')
                     },
-                    body: JSON.stringify({
-                        expiration_days: expirationDays,
-                        traffic_limit_bytes: editTrafficLimitBytes(),
-                        connection_limit: connectionLimit,
-                        active: document.getElementById('editActive').checked,
-                        reset_traffic: resetTraffic,
-                        nodes: (selectedNodes && selectedNodes.length ? selectedNodes : ['local']),
-                        openvpn_port_locations: getSelectedEditClientPortLocations()
-                    })
+                    body: JSON.stringify(updates)
                 });
 
-                const result = await response.json();
-                if (result.success) {
-                    showToast(`Client "${name}" updated successfully!`, 'success');
-                    hideEditModal();
-                    loadClients();
-                } else {
-                    showToast(result.message || 'Failed to update client', 'error');
+                const result = await response.json().catch(() => null);
+                if (!response.ok || !result || result.success !== true) {
+                    throw new Error((result && result.message) || ('HTTP ' + response.status));
                 }
+
+                // Bypass the old 30-second GET /clients browser cache.
+                api.invalidateCache('/clients');
+                showToast('Client "' + name + '" updated successfully!', 'success');
+                hideEditModal();
+                await loadClients();
             } catch (error) {
-                showToast('Failed to update client', 'error');
+                console.error('Client update failed:', error);
+                showToast(error.message || 'Failed to update client', 'error');
+            } finally {
+                editClientSubmitting = false;
+                submitButton.disabled = false;
+                submitButton.textContent = oldButtonText;
             }
         }
-
 
         // Add client
         document.getElementById('addClientForm').addEventListener('submit', async (e) => {
