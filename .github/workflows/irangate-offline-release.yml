@@ -18,6 +18,7 @@ on:
       - install.sh
       - scripts/repair-surena-telegram-backup-branding.sh
       - scripts/upgrade-surena-master-safe.sh
+      - scripts/repair/**
       - scripts/install-backup-v2-extras-wrappers.sh
       - scripts/backup-v2/**
       - scripts/test-ikev2-backup-import-preflight.sh
@@ -33,6 +34,9 @@ on:
     paths:
       - .github/workflows/irangate-offline-release.yml
       - scripts/offline/**
+      - scripts/repair/**
+      - deploy/master/scripts/**
+      - deploy/master/systemd/**
       - scripts/irangate-routing
       - docs/OFFLINE-RELEASE.md
       - README.md
@@ -107,6 +111,7 @@ jobs:
           bash -n scripts/offline/install-master-from-bundle.sh
           bash -n scripts/offline/build-release-bundle.sh
           python3 -m py_compile scripts/irangate-routing
+          python3 -m py_compile deploy/master/scripts/irangate_local_snapshot.py deploy/master/scripts/irangate-pg-sync-sessions.py
           python3 -m py_compile deploy/master/scripts/irangate-local-status-snapshot.py deploy/master/scripts/irangate-node-usage-sync.py deploy/master/scripts/irangate-pg-usage-tick.py deploy/master/scripts/irangate-pg-enforcer.py deploy/master/scripts/irangate-pg-sync-clients.py
           python3 deploy/master/scripts/irangate-pg-enforcer.py --self-test
           python3 deploy/master/scripts/irangate-pg-sync-clients.py --self-test
@@ -184,6 +189,13 @@ jobs:
             webpanel/frontend/js/delegated-portal.js \
             scripts/apply-panel-extras.sh \
             scripts/offline/install-master-from-bundle.sh \
+            scripts/offline/verify-release-content.sh \
+            scripts/repair/surena-migrated-local-baseline.py \
+            deploy/master/scripts/irangate_local_snapshot.py \
+            deploy/master/scripts/irangate-local-status-snapshot.py \
+            deploy/master/scripts/irangate-pg-usage-tick.py \
+            deploy/master/scripts/irangate-pg-sync-sessions.py \
+            deploy/master/systemd/irangate-pg-usage-tick.service \
             pkg/cmd/root.go \
             webpanel/backend/api.go
           do
@@ -202,6 +214,9 @@ jobs:
           python3 -m py_compile "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-enforcer.py" "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-sync-clients.py"
           python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-enforcer.py" --self-test
           python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-sync-clients.py" --self-test
+          python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-local-status-snapshot.py" --self-test
+          python3 "$RUNNER_TEMP/offline-smoke/deploy/master/scripts/irangate-pg-usage-tick.py" --self-test
+          python3 "$RUNNER_TEMP/offline-smoke/scripts/repair/surena-migrated-local-baseline.py" --self-test
           test -s "$RUNNER_TEMP/offline-smoke/offline-assets/apt/Packages.gz"
           . /etc/os-release
           test "$(cat "$RUNNER_TEMP/offline-smoke/offline-assets/ubuntu-version")" = "$VERSION_ID"
@@ -237,7 +252,7 @@ jobs:
               --target "$GITHUB_SHA" \
               --draft \
               --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 + 26.04 | amd64 | ${GITHUB_SHA:0:12}" \
-              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes full responsive client UI (Edit/Copy Sub/More), Outbounds V2 (Outbounds/Routing Rules/Advanced tabs, responsive cards and edit modal), local OpenVPN UDP port-location creator and per-port Outbound selection (Single/Failover, manual Bind/Activate), CSS deployment/cache fixes, PKI checks, traffic/quota fixes, delegated admin, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
+              --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes strict OpenVPN session accounting v6 (management status 3 fallback; no historical counter replay), full responsive client UI (Edit/Copy Sub/More), Outbounds V2 (Outbounds/Routing Rules/Advanced tabs, responsive cards and edit modal), local OpenVPN UDP port-location creator and per-port Outbound selection (Single/Failover, manual Bind/Activate), CSS deployment/cache fixes, PKI checks, traffic/quota fixes, delegated admin, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
               echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
               exit 0
             fi
