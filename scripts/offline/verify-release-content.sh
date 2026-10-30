@@ -84,6 +84,33 @@ require_text webpanel/backend/api.go 'cmd.Output()'
 require_text webpanel/frontend/clients.html 'traffic_used_bytes_authoritative'
 require_text webpanel/backend/api.go 'traffic_used_bytes_authoritative'
 
+# Offline installers must carry verified v6 session accounting, not the
+# historical panel-display counters or OpenVPN status-v1 fallback.
+require_file deploy/master/scripts/irangate_local_snapshot.py
+require_file deploy/master/scripts/irangate-local-status-snapshot.py
+require_file deploy/master/scripts/irangate-pg-usage-tick.py
+require_file deploy/master/scripts/irangate-pg-sync-sessions.py
+require_file deploy/master/systemd/irangate-pg-usage-tick.service
+require_file scripts/repair/surena-migrated-local-baseline.py
+require_text deploy/master/scripts/irangate_local_snapshot.py 'COUNTER_KIND = "openvpn_session"'
+require_text deploy/master/scripts/irangate_local_snapshot.py 'openvpn_session_stats.json'
+require_text deploy/master/scripts/irangate-local-status-snapshot.py "echo 'status 3'"
+require_text deploy/master/scripts/irangate-local-status-snapshot.py 'choose_snapshot(read_status_files())'
+require_text deploy/master/scripts/irangate-pg-usage-tick.py 'from irangate_local_snapshot import read_snapshot, session_key, valid_session'
+require_text deploy/master/scripts/irangate-pg-usage-tick.py 'ACCOUNTING_V6_MARKER'
+require_text deploy/master/scripts/irangate-pg-sync-sessions.py 'from irangate_local_snapshot import'
+require_text deploy/master/systemd/irangate-pg-usage-tick.service 'irangate-local-status-snapshot.py && /usr/local/bin/irangate-pg-usage-tick.py --apply'
+require_text scripts/repair/surena-migrated-local-baseline.py 'openvpn_session_stats.json'
+require_text scripts/repair/surena-migrated-local-baseline.py 'mod.session_key'
+require_text install.sh 'for script in "$deploy_dir"/scripts/*.py; do'
+
+python3 -m py_compile \
+  "$ROOT/deploy/master/scripts/irangate_local_snapshot.py" \
+  "$ROOT/deploy/master/scripts/irangate-local-status-snapshot.py" \
+  "$ROOT/deploy/master/scripts/irangate-pg-usage-tick.py" \
+  "$ROOT/deploy/master/scripts/irangate-pg-sync-sessions.py" \
+  "$ROOT/scripts/repair/surena-migrated-local-baseline.py"
+
 bash -n "$ROOT/scripts/apply-panel-extras.sh"
 bash -n "$ROOT/scripts/offline/install-master-from-bundle.sh"
 if command -v node >/dev/null 2>&1; then
@@ -91,4 +118,4 @@ if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/webpanel/frontend/js/api.js"
 fi
 
-echo "[offline-verify] SURENA full source: Clients UI, Outbounds V2, local UDP ports, PKI and traffic fixes present ✅"
+echo "[offline-verify] Full source verified: UI, Outbounds V2, UDP ports, PKI and strict OpenVPN accounting v6 ✅"

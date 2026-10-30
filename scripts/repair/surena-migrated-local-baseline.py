@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -16,7 +17,7 @@ import time
 from pathlib import Path
 
 TICK = Path("/usr/local/bin/irangate-pg-usage-tick.py")
-SNAPSHOT = Path("/opt/irangate/traffic/current_stats.json")
+SNAPSHOT = Path("/opt/irangate/traffic/openvpn_session_stats.json")
 DB_ENV = Path("/etc/irangate-db.env")
 NAMES = ("to_int", "pick", "name_of", "rx_of", "tx_of", "total_of",
          "connected_of", "bool_of", "session_of", "peer_ip",
@@ -32,7 +33,22 @@ def tick_functions(path: Path) -> dict:
     if found != set(NAMES):
         raise RuntimeError("Accounting functions have changed; refuse to guess: "
                            + ", ".join(sorted(set(NAMES)-found)))
-    env = {"hashlib": hashlib}
+    # Local counter identity is now provided by the strict v6 session contract,
+    # not by a helper embedded in the tick AST. Load that exact sibling module
+    # from the installed runtime or checked-out source, without site imports.
+    helper = path.with_name("irangate_local_snapshot.py")
+    spec = importlib.util.spec_from_file_location(
+        "_surena_migration_v6_contract", helper)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Missing strict v6 session contract; refuse to baseline")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    env = {
+        "hashlib": hashlib,
+        "session_key": mod.session_key,
+        "valid_session": mod.valid_session,
+        "read_snapshot": mod.read_snapshot,
+    }
     exec(compile(ast.Module(body=selected, type_ignores=[]),
                  str(path), "exec"), env)
     return env
@@ -51,8 +67,8 @@ def candidates(raw: list, fn: dict) -> list:
     result = []
     seen = set()
     for row in raw:
-        if not isinstance(row, dict):
-            raise RuntimeError("Malformed local OpenVPN snapshot")
+        if not isinstance(row, dict) or not fn["valid_session"](row):
+            raise RuntimeError("Unverified OpenVPN v6 session; refuse baseline")
         name = str(fn["name_of"](row) or "").strip()
         if not name or name.upper() == "UNDEF":
             continue
@@ -81,6 +97,8 @@ def self_test() -> None:
         source = TICK
     fn = tick_functions(source)
     example = {"client_name": "test-subscriber", "connected": True,
+               "schema_version": 6, "counter_kind": "openvpn_session",
+               "status_file": "management:7505",
                "client_id": "7", "connected_since": "2026-10-21T02:00:00Z",
                "real_address": "192.0.2.10:12000", "virtual_ip": "10.8.0.5",
                "current_received": 2000, "current_sent": 3000,
@@ -92,8 +110,20 @@ def self_test() -> None:
     assert records[0][2] == fn["session_of"](example)
     assert records[0][5] == 5000
     assert records[0][6] is True
-    disconnected = dict(example, client_name="disconnected-user", connected=False)
-    assert candidates([disconnected], fn)[0][6] is False
+    # The migration tool must not quietly baseline untyped, historical,
+    # disconnected or incomplete counters.
+    for invalid in (
+        dict(example, connected=False),
+        dict(example, status_file=""),
+        dict(example, counter_kind="panel_cumulative_display"),
+        dict(example, client_id="", virtual_ip=""),
+    ):
+        try:
+            candidates([invalid], fn)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Unverified session was accepted for baseline")
     print("surena_migrated_baseline_self_test = PASS")
 
 
@@ -111,7 +141,14 @@ def main() -> None:
     age = time.time() - stat_before.st_mtime
     if args.apply and (age < -30 or age > 120):
         raise RuntimeError(f"Local snapshot is stale ({age:.0f}s); refresh before cutover")
-    rows = candidates(json.loads(source_bytes), fns)
+    trusted, session_rows, quarantined = fns["read_snapshot"](
+        SNAPSHOT, max_age_seconds=120
+    )
+    if not trusted or quarantined:
+        raise RuntimeError(
+            f"Strict v6 OpenVPN snapshot missing/stale/invalid: quarantined={quarantined}"
+        )
+    rows = candidates(session_rows, fns)
     conn = psycopg2.connect(dsn_from_env(DB_ENV), connect_timeout=12)
     conn.autocommit = False
     planned = []
