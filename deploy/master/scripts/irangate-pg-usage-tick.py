@@ -5,9 +5,10 @@ import hashlib
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+from irangate_local_snapshot import read_snapshot, session_key, valid_session, SCHEMA_VERSION, COUNTER_KIND
 
 ENV = Path("/etc/irangate-db.env")
-LOCAL = Path("/opt/irangate/traffic/current_stats.json")
+LOCAL = Path("/opt/irangate/traffic/openvpn_session_stats.json")
 NODE = Path("/opt/irangate/traffic/node_current_stats.json")
 IKEV2 = Path("/opt/irangate/traffic/ikev2_current_stats.json")
 GLOBAL_MIRROR = Path("/opt/irangate/traffic/global_usage_totals.json")
@@ -15,6 +16,7 @@ ACCOUNTING_V2_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v2.marker
 ACCOUNTING_V3_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v3.marker")
 ACCOUNTING_V4_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v4.marker")
 ACCOUNTING_V5_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v5.marker")
+ACCOUNTING_V6_MARKER = Path("/opt/irangate/traffic/pg_usage_accounting_v6.marker")
 
 
 def load_env():
@@ -71,6 +73,30 @@ def write_accounting_v5_marker():
         "policy": "baseline existing local clients after source-key migration",
     }, ensure_ascii=False, indent=2) + "\n")
     tmp.replace(ACCOUNTING_V5_MARKER)
+
+
+def write_accounting_v6_marker():
+    ACCOUNTING_V6_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNTING_V6_MARKER.with_suffix(".marker.tmp")
+    tmp.write_text(json.dumps({
+        "version": 6,
+        "activated_at": datetime.now(timezone.utc).isoformat(),
+        "policy": "strict v6 OpenVPN sessions; baseline unknown epochs; preserve historical totals",
+    }, ensure_ascii=False, indent=2) + "\n")
+    tmp.replace(ACCOUNTING_V6_MARKER)
+
+
+def local_delta(old, rx, tx, migration=False):
+    """Never bill first sightings, replays or counter resets as historical traffic."""
+    if migration:
+        return 0, 0, 0, "LOCAL_V6_MIGRATION_BASELINE_ONLY"
+    if old is None:
+        return 0, 0, 0, "LOCAL_FIRST_SAMPLE_BASELINE_ONLY"
+    old_rx, old_tx = int(old[1] or 0), int(old[2] or 0)
+    if rx < old_rx or tx < old_tx:
+        return 0, 0, 0, "LOCAL_COUNTER_RESET_BASELINE_ONLY"
+    drx, dtx = rx - old_rx, tx - old_tx
+    return drx, dtx, drx + dtx, "LOCAL_ADD_DELTA" if drx + dtx else "LOCAL_NO_DELTA"
 
 
 def to_int(v):
@@ -204,7 +230,7 @@ def local_replay_baseline(cur, client_name, real_address, total):
 
 def counter_mode(source):
     source = str(source or "").strip().lower()
-    # current_stats.json contains one row per local OpenVPN session.
+    # The separate, schema-validated OpenVPN file contains session counters.
     # IKEv2 is per-SA. Remote node snapshots are cumulative per node/CN.
     return "session" if source in ("local", "ikev2") else "cumulative"
 
@@ -216,6 +242,10 @@ def counter_epoch_key(source, x, session):
         # Node counters are cumulative per node/client, so reconnects must keep
         # using the same durable source row.
         return source
+
+    if source.lower() == "local":
+        # Only the validated session-v6 envelope can yield a local stream id.
+        return session_key(x)
 
     connected_since = str(x.get("connected_since") or "").strip()
     real_address = str(
@@ -309,17 +339,19 @@ def self_test_accounting_identity():
     # Distinct OpenVPN Client IDs represent concurrent sessions, even with
     # identical peer IP and connection time. A NAT port alone does not.
     local_a = {
+        "schema_version": SCHEMA_VERSION,
+        "counter_kind": COUNTER_KIND,
+        "client_name": "test",
+        "connected": True,
+        "current_received": 100,
+        "current_sent": 25,
+        "current_total": 125,
         "connected_since": "2026-09-15 10:00:00",
         "real_address": "1.2.3.4:10001",
         "client_id": "101",
         "status_file": "/etc/openvpn/openvpn-status.log",
     }
-    local_b = {
-        "connected_since": "2026-09-15 10:00:00",
-        "real_address": "1.2.3.4:10002",
-        "client_id": "102",
-        "status_file": "/etc/openvpn/openvpn-status.log",
-    }
+    local_b = dict(local_a, real_address="1.2.3.4:10002", client_id="102")
     assert counter_mode("local") == "session"
     assert counter_mode("ikev2") == "session"
     assert counter_mode("turkey") == "cumulative"
@@ -347,17 +379,48 @@ def self_test_accounting_identity():
     ike_key_b = counter_epoch_key("ikev2", ike_b, "same-fallback")
     assert ike_key_a != ike_key_b, (ike_key_a, ike_key_b)
     assert ike_key_a == counter_epoch_key("ikev2", dict(ike_a), "replay")
-    no_time_1 = {"real_address": "1.2.3.4:12345", "virtual_ip": "10.8.0.7"}
-    no_time_2 = {"real_address": "1.2.3.4:54321", "virtual_ip": "10.8.0.7"}
-    assert counter_epoch_key("local", no_time_1, "a") == counter_epoch_key("local", no_time_2, "b")
-    with_time_1 = {"real_address": "1.2.3.4:12345", "virtual_ip": "10.8.0.7",
-                   "connected_since": "2026-10-07T11:00:00Z", "client_id": "10",
-                   "status_file": "/etc/openvpn/status-a.log"}
+    no_time_1 = dict(local_a, connected_since="")
+    no_time_2 = dict(local_a, connected_since="", real_address="1.2.3.4:54321")
+    assert not valid_session(no_time_1) and not valid_session(no_time_2)
+    try:
+        counter_epoch_key("local", no_time_1, "a")
+        assert False, "missing timestamp must be quarantined"
+    except ValueError:
+        pass
+    with_time_1 = dict(local_a, real_address="1.2.3.4:12345", virtual_ip="10.8.0.7",
+                       connected_since="2026-10-07T11:00:00Z", client_id="10",
+                       status_file="/etc/openvpn/status-a.log")
     with_time_2 = dict(with_time_1, real_address="1.2.3.4:55555")
     assert counter_epoch_key("local", with_time_1, "a") == counter_epoch_key("local", with_time_2, "b")
     with_time_3 = dict(with_time_1, client_id="11")
     assert counter_epoch_key("local", with_time_1, "a") != counter_epoch_key("local", with_time_3, "b")
+    import tempfile
     assert peer_ip("[2001:db8::1]:54321") == "2001:db8::1"
+    assert local_delta(None, 69_790_000_000, 0)[:3] == (0, 0, 0)
+    assert local_delta(("s", 69_790_000_000, 0, 69_790_000_000),
+                       69_790_000_000, 0)[:3] == (0, 0, 0)
+    assert local_delta(("s", 69_790_000_000, 0, 69_790_000_000),
+                       69_790_000_100, 20)[:3] == (100, 20, 120)
+    assert local_delta(("s", 69_790_000_000, 0, 69_790_000_000),
+                       20, 0)[:3] == (0, 0, 0)
+    assert local_delta(("s", 1, 2, 3), 9_000_000_000, 2, True)[:3] == (0, 0, 0)
+    with tempfile.TemporaryDirectory() as d:
+        v6_path = Path(d) / "openvpn_session_stats.json"
+        display_data = [{"client_name": "test", "current_total": 69_790_000_000}]
+        v6_path.write_text(json.dumps(display_data))
+        assert read_snapshot(v6_path)[0] is False
+        envelope = {
+            "schema_version": SCHEMA_VERSION, "counter_kind": COUNTER_KIND,
+            "captured_at": "2026-10-30T10:00:00Z", "sessions": [local_a],
+        }
+        v6_path.write_text(json.dumps(envelope))
+        ok, rows, bad = read_snapshot(v6_path)
+        assert ok and len(rows) == 1 and bad == 0
+        v6_path.write_text(json.dumps(envelope))
+        assert read_snapshot(v6_path)[1] == rows  # tick replay/restart is idempotent
+        envelope["sessions"][0].pop("connected_since")
+        v6_path.write_text(json.dumps(envelope))
+        assert read_snapshot(v6_path) == (True, [], 1)
     assert likely_replayed_local_counter(11_100_000_000, 11_090_000_000)
     assert not likely_replayed_local_counter(30_000, 11_090_000_000)
     assert not likely_replayed_local_counter(50_000_000_000, 11_090_000_000)
@@ -394,7 +457,12 @@ import psycopg2  # production-only dependency; self-test needs no live DB
 
 items = []
 
-for x in load_json(LOCAL):
+local_snapshot_valid, local_rows, local_quarantined = read_snapshot(LOCAL)
+if not local_snapshot_valid:
+    print("ACCOUNTING_WARNING local_session_v6_snapshot_missing_stale_or_invalid: local billing disabled")
+if local_quarantined:
+    print("ACCOUNTING_WARNING local_sessions_quarantined=", local_quarantined)
+for x in local_rows:
     x["_source_id"] = "local"
     items.append(x)
 
@@ -417,6 +485,7 @@ local_session_v3_migration = not ACCOUNTING_V3_MARKER.exists()
 local_v3_legacy_source_present = False
 ike_session_v4_migration = not ACCOUNTING_V4_MARKER.exists()
 local_v5_migration = not ACCOUNTING_V5_MARKER.exists()
+local_v6_migration = not ACCOUNTING_V6_MARKER.exists()
 ike_v4_legacy_sources_present = False
 processed = 0
 first_seen = 0
@@ -426,6 +495,7 @@ session_reset = 0
 counter_reset = 0
 delta_count = 0
 added_total = 0
+local_added_total = 0
 active_count = 0
 
 with conn.cursor() as cur:
@@ -498,6 +568,9 @@ with conn.cursor() as cur:
         connected = connected_of(x)
         session = session_of(x)
         accounting_source = counter_epoch_key(source, x, session)
+        if source == "local":
+            # NAT port changes must not create duplicate active sessions.
+            session = accounting_source
         real_address = pick(x, "real_address", "remote_address")
         virtual_ip = pick(x, "virtual_ip", "virtual_address")
         last_seen = parse_time(pick(x, "last_seen", "updated_at"))
@@ -546,12 +619,14 @@ with conn.cursor() as cur:
         action = "baseline"
 
         def add_usage_delta(action_name, add_rx, add_tx, add_total):
-            global delta_count, added_total
+            global delta_count, added_total, local_added_total
             if add_total <= 0:
                 return action_name + "_NO_BYTES"
 
             delta_count += 1
             added_total += add_total
+            if source == "local":
+                local_added_total += add_total
 
             cur.execute("""
                 UPDATE traffic_totals
@@ -569,7 +644,20 @@ with conn.cursor() as cur:
 
             return action_name
 
-        if old is None:
+        if source == "local":
+            if old is None:
+                first_seen += 1
+            drx, dtx, dtotal, action = local_delta(
+                old, rx, tx, migration=local_v6_migration
+            )
+            if local_v6_migration:
+                migration_baselines += 1
+            if action == "LOCAL_COUNTER_RESET_BASELINE_ONLY":
+                counter_reset += 1
+            if dtotal:
+                action = add_usage_delta(action, drx, dtx, dtotal)
+
+        elif old is None:
             first_seen += 1
             local_v5_replay = False
             if source == "local" and local_v5_migration:
@@ -759,6 +847,12 @@ if args.apply:
     # must NOT increase anyone's historical usage, even if a node/SA suddenly
     # reports a fresh counter between dry-run and the actual commit.
     # The whole transaction is rolled back before any DB write is committed.
+    if local_v6_migration and local_added_total != 0:
+        conn.rollback()
+        conn.close()
+        raise SystemExit(
+            "V6_MIGRATION_REFUSED_LOCAL_DELTA bytes=" + str(local_added_total)
+        )
     if local_v5_migration and added_total != 0:
         conn.rollback()
         conn.close()
@@ -778,6 +872,8 @@ if args.apply:
 
     if local_v5_migration and any(x.get("_source_id") == "local" for x in items):
         write_accounting_v5_marker()
+    if local_v6_migration and local_snapshot_valid:
+        write_accounting_v6_marker()
 
     try:
         mirror = {"last": {}, "totals": {}, "blocked": {}}
@@ -841,6 +937,9 @@ print("accounting_v3_local_migration_mode =", local_session_v3_migration)
 print("accounting_v3_legacy_local_source =", local_v3_legacy_source_present)
 print("accounting_v4_ikev2_migration_mode =", ike_session_v4_migration)
 print("accounting_v5_local_migration_mode =", local_v5_migration)
+print("accounting_v6_local_migration_mode =", local_v6_migration)
+print("accounting_v6_valid_local_snapshot =", local_snapshot_valid)
+print("accounting_v6_local_added_bytes =", local_added_total)
 print("accounting_v4_legacy_ikev2_sources =", ike_v4_legacy_sources_present)
 print("processed =", processed)
 print("active =", active_count)

@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 import psycopg2
+from irangate_local_snapshot import read_snapshot, session_key
 
 ENV = Path("/etc/irangate-db.env")
-LOCAL = Path("/opt/irangate/traffic/current_stats.json")
+LOCAL = Path("/opt/irangate/traffic/openvpn_session_stats.json")
 NODE = Path("/opt/irangate/traffic/node_current_stats.json")
 
 def load_env():
@@ -49,10 +50,14 @@ def session_of(x):
 
 items = []
 
-for x in load_json(LOCAL):
-    if x.get("connected") is True:
-        x["_source_id"] = "local"
-        items.append(x)
+trusted_local, local_sessions, local_rejected = read_snapshot(LOCAL)
+if not trusted_local:
+    print("SESSION_SYNC_WARNING local_snapshot_invalid_or_stale")
+if local_rejected:
+    print("SESSION_SYNC_WARNING quarantined=", local_rejected)
+for x in local_sessions:
+    x["_source_id"] = "local"
+    items.append(x)
 
 for x in load_json(NODE):
     if x.get("connected") is True or x.get("is_connected") is True or x.get("active") is True:
@@ -72,7 +77,7 @@ with conn.cursor() as cur:
             continue
 
         source = x["_source_id"]
-        session = session_of(x)
+        session = session_key(x) if source == "local" else session_of(x)
         real_address = x.get("real_address")
         virtual_ip = x.get("virtual_ip") or x.get("virtual_address")
         connected_since = parse_time(x.get("connected_since") or x.get("last_connection"))

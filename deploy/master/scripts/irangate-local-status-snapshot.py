@@ -12,8 +12,9 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from irangate_local_snapshot import SESSION_FILE, make_payload, read_snapshot
 
-OUT = Path("/opt/irangate/traffic/current_stats.json")
+OUT = SESSION_FILE
 STATUS_PATHS = [
     "/etc/openvpn/openvpn-status.log",
     "/etc/openvpn/openvpn-status-server.log",
@@ -148,7 +149,10 @@ def read_management():
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
-    return parse_status_text((result.stdout or "") + "\n" + (result.stderr or ""))
+    rows = parse_status_text((result.stdout or "") + "\n" + (result.stderr or ""))
+    for row in rows:
+        row["status_file"] = "management:7505"
+    return rows
 
 
 def self_test():
@@ -174,6 +178,22 @@ END
     assert b[0]["client_id"] == "1"
     assert a[0]["current_total"] == 11000000250
     assert parse_status_text("bad status\nEND", stamp) == []
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "sessions.json"
+        sample = dict(b[0], status_file="/etc/openvpn/openvpn-status.log")
+        payload, rejected = make_payload([sample], stamp)
+        assert rejected == 0
+        path.write_text(json.dumps(payload))
+        trusted, rows, rejected = read_snapshot(path)
+        assert trusted and len(rows) == 1 and rejected == 0
+        # A panel's lifetime totals must NEVER be accepted as session bytes.
+        path.write_text(json.dumps([{"client_name": "alice",
+                                     "current_total": 69790000000}]))
+        assert read_snapshot(path)[0] is False
+        payload["sessions"][0].pop("connected_since")
+        path.write_text(json.dumps(payload))
+        assert read_snapshot(path) == (True, [], 1)
     print("local_status_snapshot_self_test = PASS")
 
 
@@ -181,12 +201,14 @@ def main():
     clients = read_status_files()
     if not clients:
         clients = read_management()
+    payload, quarantined = make_payload(clients, now_iso())
     OUT.parent.mkdir(parents=True, exist_ok=True)
     tmp = OUT.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(clients, ensure_ascii=False, indent=2))
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
     os.replace(tmp, OUT)
-    print("local_clients =", len(clients))
-    for c in clients:
+    print("local_clients =", len(payload["sessions"]),
+          "quarantined_unverifiable =", quarantined)
+    for c in payload["sessions"]:
         # Avoid printing the user's public real_address in daemon logs.
         print(c["client_name"], c["current_total"],
               "has_connected_since=", bool(c["connected_since"]))

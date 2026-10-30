@@ -42,6 +42,8 @@ type DailyTrafficSummary struct {
 }
 type ClientTrafficStats struct {
 	ClientName      string    `json:"client_name"`
+	SchemaVersion   int       `json:"schema_version"`
+	CounterKind     string    `json:"counter_kind"`
 	CurrentReceived int64     `json:"current_received"`
 	CurrentSent     int64     `json:"current_sent"`
 	CurrentTotal    int64     `json:"current_total"`
@@ -248,8 +250,17 @@ func (td *TrafficDatabase) GetCurrentClientStats() ([]ClientTrafficStats, error)
 		return nil, err
 	}
 	var stats []ClientTrafficStats
-	err = json.Unmarshal(data, &stats)
-	return stats, err
+	if err := json.Unmarshal(data, &stats); err != nil {
+        return nil, err
+    }
+    // Session counters, including old untyped arrays, are not panel totals.
+    filtered := make([]ClientTrafficStats, 0, len(stats))
+    for _, stat := range stats {
+        if stat.SchemaVersion == 6 && stat.CounterKind == "panel_cumulative_display" {
+            filtered = append(filtered, stat)
+        }
+    }
+    return filtered, nil
 }
 func (td *TrafficDatabase) UpdateCurrentStats(
 	stats []ClientTrafficStats,
@@ -266,7 +277,9 @@ func (td *TrafficDatabase) UpdateCurrentStats(
 
 		if err := json.Unmarshal(data, &existing); err == nil {
 			for _, stat := range existing {
-				existingStats[stat.ClientName] = stat
+                if stat.SchemaVersion == 6 && stat.CounterKind == "panel_cumulative_display" {
+                    existingStats[stat.ClientName] = stat
+                }
 			}
 		}
 	}
@@ -283,6 +296,8 @@ func (td *TrafficDatabase) UpdateCurrentStats(
 	)
 
 	for _, stat := range stats {
+        stat.SchemaVersion = 6
+        stat.CounterKind = "panel_cumulative_display"
 		currentClients[stat.ClientName] = true
 
 		if total, exists := totalsMap[stat.ClientName]; exists {
@@ -334,6 +349,8 @@ func (td *TrafficDatabase) UpdateCurrentStats(
 		}
 
 		existing.Connected = false
+        existing.SchemaVersion = 6
+        existing.CounterKind = "panel_cumulative_display"
 		mergedStats = append(mergedStats, existing)
 	}
 
