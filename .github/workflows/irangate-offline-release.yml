@@ -51,7 +51,7 @@ permissions:
 
 concurrency:
   group: netspoof-offline-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -60,7 +60,7 @@ jobs:
     timeout-minutes: 100
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         os:
           - ubuntu-22.04
@@ -253,8 +253,19 @@ jobs:
               --draft \
               --title "SURENA Offline Master | Ubuntu 22.04 + 24.04 + 26.04 | amd64 | ${GITHUB_SHA:0:12}" \
               --notes "SURENA Offline Master (Ubuntu 22.04/24.04/26.04, AMD64). Verified offline dependency closure, bundle source-commit and checksum integrity for fresh Master VPS only. Includes strict OpenVPN session accounting v6 (management status 3 fallback; no historical counter replay), full responsive client UI (Edit/Copy Sub/More), Outbounds V2 (Outbounds/Routing Rules/Advanced tabs, responsive cards and edit modal), local OpenVPN UDP port-location creator and per-port Outbound selection (Single/Failover, manual Bind/Activate), CSS deployment/cache fixes, PKI checks, traffic/quota fixes, delegated admin, OpenVPN, IKEv2, PostgreSQL and Backup V2. All three .run installers and matching .sha256 files are attached. Public assets need no GitHub login. NOT for upgrades to an existing Master and NOT for ARM64. فارسی: نصب آفلاین فقط برای سرور تازه است، نه پنل دارای کاربر. Instructions: https://github.com/Net-spoof/SORENA-OVP-PANEL/blob/l2tp-dev/docs/OFFLINE-RELEASE.md"; then
-              echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
-              exit 0
+              # The other OS jobs publish assets concurrently. Another job
+              # can create the same draft release between view and create.
+              # Treat an existing release as success, not as a lost upload.
+              for attempt in 1 2 3 4 5; do
+                if gh release view "$tag" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
+              if ! gh release view "$tag" >/dev/null 2>&1; then
+                echo "::warning::Release creation denied by token policy. Build verified; inspect Actions artifacts or configure SURENA_RELEASE_TOKEN."
+                exit 0
+              fi
             fi
           fi
           gh release upload "$tag" "$OUT_DIR"/*.run "$OUT_DIR"/*.sha256 --clobber
