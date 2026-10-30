@@ -22,6 +22,7 @@ CLI="/usr/local/bin/irangate"
 BACK=""
 CHANGED=0
 DONE=0
+TICK_TIMER_WAS_ACTIVE=0
 
 log() { printf '[SURENA UPGRADE] %s\n' "$*"; }
 die() { log "STOP: $*" >&2; exit 1; }
@@ -62,6 +63,9 @@ on_exit() {
             [[ -e "$file" ]] && cp -a "$file" "/usr/local/sbin/$(basename "$file")"
         done
         systemctl start irangate-webpanel || true
+        if [[ "$TICK_TIMER_WAS_ACTIVE" -eq 1 ]]; then
+            systemctl start irangate-pg-usage-tick.timer || true
+        fi
         health && log "Rollback healthy" || log "MANUAL RECOVERY REQUIRED: $BACK"
     fi
     rm -rf -- "$WORK"
@@ -143,6 +147,13 @@ ORIG_CLIENTS="$(find /opt/irangate/database/clients -maxdepth 1 -name '*.json' -
 ORIG_NODES="$(sha256sum /opt/irangate/webpanel/nodes.json | cut -d' ' -f1)"
 log "Backups verified. Applying code files only; no user/usage writes."
 CHANGED=1
+# A 20-second accounting timer must not execute during a mixed-version install.
+# Restore only an already-active timer; never silently enable a disabled timer.
+if systemctl is-active --quiet irangate-pg-usage-tick.timer; then
+    TICK_TIMER_WAS_ACTIVE=1
+    systemctl stop irangate-pg-usage-tick.timer
+    systemctl stop irangate-pg-usage-tick.service || true
+fi
 systemctl stop irangate-webpanel
 install -m 0755 "$WORK/build/webpanel" "$BIN"
 install -m 0755 "$WORK/build/cli" "$CLI"
@@ -197,6 +208,9 @@ done
 mkdir -p "/opt/surena-releases/$REV"
 cp -a "$SRC/deploy" "$SRC/scripts" "$SRC/webpanel/backend" "/opt/surena-releases/$REV/"
 printf '%s\n' "$REV" > /opt/surena-releases/CURRENT
+if [[ "$TICK_TIMER_WAS_ACTIVE" -eq 1 ]]; then
+    systemctl start irangate-pg-usage-tick.timer
+fi
 DONE=1
 log "SUCCESS: SURENA Master code updated to $REV"
 log "Rollback data retained: $BACK"
