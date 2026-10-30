@@ -79,6 +79,7 @@ tar -tzf "$WORK/source.tar.gz" >/dev/null || die "Invalid source archive"
 tar -xzf "$WORK/source.tar.gz" --strip-components=1 -C "$WORK/source"
 SRC="$WORK/source"
 [[ -s "$SRC/webpanel/backend/go.mod" ]] || die "Incomplete backend"
+python3 -m py_compile "$SRC/deploy/master/scripts/irangate_local_snapshot.py" "$SRC/deploy/master/scripts/irangate-pg-sync-sessions.py"
 for tool in irangate-pg-usage-tick.py irangate-local-status-snapshot.py irangate-node-usage-sync.py; do
     python3 -m py_compile "$SRC/deploy/master/scripts/$tool"
     python3 "$SRC/deploy/master/scripts/$tool" --self-test
@@ -111,7 +112,7 @@ log "Backup and database export: $BACK"
 for f in irangate-webpanel irangate ovp-panel irangate-routing \
          irangate-backup-v2-export irangate-backup-v2-import \
          irangate-backup-v2-export.py irangate-backup-v2-import.py \
-         irangate-local-status-snapshot.py irangate-node-usage-sync.py \
+         irangate-local-status-snapshot.py irangate_local_snapshot.py irangate-pg-sync-sessions.py irangate-node-usage-sync.py \
          irangate-pg-usage-tick.py irangate-pg-enforcer.py irangate-pg-sync-clients.py; do
     [[ ! -f "/usr/local/bin/$f" ]] || cp -a "/usr/local/bin/$f" "$BACK/bin/"
 done
@@ -145,7 +146,8 @@ CHANGED=1
 systemctl stop irangate-webpanel
 install -m 0755 "$WORK/build/webpanel" "$BIN"
 install -m 0755 "$WORK/build/cli" "$CLI"
-for f in irangate-local-status-snapshot.py irangate-node-usage-sync.py \
+install -m 0755 "$SRC/deploy/master/scripts/irangate_local_snapshot.py" /usr/local/bin/irangate_local_snapshot.py
+for f in irangate-local-status-snapshot.py irangate-pg-sync-sessions.py irangate-node-usage-sync.py \
          irangate-pg-usage-tick.py irangate-pg-enforcer.py irangate-pg-sync-clients.py; do
     install -m 0755 "$SRC/deploy/master/scripts/$f" "/usr/local/bin/$f"
 done
