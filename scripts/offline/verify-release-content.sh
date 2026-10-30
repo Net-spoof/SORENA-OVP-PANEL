@@ -104,12 +104,10 @@ require_text scripts/repair/surena-migrated-local-baseline.py 'openvpn_session_s
 require_text scripts/repair/surena-migrated-local-baseline.py 'mod.session_key'
 require_text install.sh 'for script in "$deploy_dir"/scripts/*.py; do'
 
-python3 -m py_compile \
-  "$ROOT/deploy/master/scripts/irangate_local_snapshot.py" \
-  "$ROOT/deploy/master/scripts/irangate-local-status-snapshot.py" \
-  "$ROOT/deploy/master/scripts/irangate-pg-usage-tick.py" \
-  "$ROOT/deploy/master/scripts/irangate-pg-sync-sessions.py" \
-  "$ROOT/scripts/repair/surena-migrated-local-baseline.py"
+# IMPORTANT: This verifier also runs against the extracted immutable .run
+# payload before sha256sum -c. Do not run py_compile or import Python modules
+# here: doing so can overwrite cached .pyc files and invalidate the payload
+# checksums. Python compilation/self-tests run separately in GitHub Actions.
 
 bash -n "$ROOT/scripts/apply-panel-extras.sh"
 bash -n "$ROOT/scripts/offline/install-master-from-bundle.sh"
