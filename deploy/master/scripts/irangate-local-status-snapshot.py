@@ -142,17 +142,45 @@ def read_status_files():
 
 
 def read_management():
-    cmd = "{ sleep 0.2; echo status; sleep 0.2; echo quit; } | nc -w 3 127.0.0.1 7505"
+    # OpenVPN Management defaults to status v1, which omits per-session
+    # identity in some deployments. Force v3 (TSV) for billable counters.
+    cmd = "{ sleep 0.2; echo 'status 3'; sleep 0.2; echo quit; } | nc -w 3 127.0.0.1 7505"
     try:
         result = subprocess.run(
             ["bash", "-lc", cmd], capture_output=True, text=True, timeout=5
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
-    rows = parse_status_text((result.stdout or "") + "\n" + (result.stderr or ""))
+    # Parse only the protocol response, never error text.
+    rows = parse_status_text(result.stdout or "")
     for row in rows:
         row["status_file"] = "management:7505"
     return rows
+
+
+def choose_snapshot(file_rows, management_reader=read_management, captured_at=None):
+    """Prefer verified local sessions; consult status 3 if v1 was quarantined.
+
+    The v1 parser may return rows even though NONE is safe to account.
+    Never promote those rows by relaxing the v6 identity requirements.
+    Prefer Management only if it supplies strictly more valid sessions;
+    otherwise retain the already verified file rows.
+    """
+    captured_at = captured_at or now_iso()
+    file_payload, file_rejected = make_payload(file_rows, captured_at)
+    file_valid = len(file_payload["sessions"])
+
+    if file_valid and file_rejected == 0:
+        return file_payload, file_rejected, "status_files"
+
+    management_rows = management_reader()
+    management_payload, management_rejected = make_payload(
+        management_rows, captured_at
+    )
+    management_valid = len(management_payload["sessions"])
+    if management_valid > file_valid:
+        return management_payload, management_rejected, "management_status3"
+    return file_payload, file_rejected, "status_files"
 
 
 def self_test():
@@ -178,6 +206,79 @@ END
     assert b[0]["client_id"] == "1"
     assert a[0]["current_total"] == 11000000250
     assert parse_status_text("bad status\nEND", stamp) == []
+
+    # Reproduce the live regression: status v1 parses TEN connected clients,
+    # but none has Client ID or Virtual Address; status 3 has both.
+    v1_many = "OpenVPN CLIENT LIST\n" + (
+        "Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since\n"
+    ) + "".join(
+        f"user_{i},198.51.100.{i}:4567,1000,200,Wed Oct  7 11:00:00 2026\n"
+        for i in range(1, 11)
+    ) + "ROUTING TABLE\n"
+    v3_many = (
+        "TITLE\tOpenVPN 2.7\n"
+        "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\tVirtual IPv6 Address\tBytes Received\tBytes Sent\tConnected Since\tConnected Since (time_t)\tUsername\tClient ID\tPeer ID\n"
+    ) + "".join(
+        f"CLIENT_LIST\tuser_{i}\t198.51.100.{i}:4567\t10.8.0.{i}\t\t1000\t200\tignored\t1791367200\tuser_{i}\t{i}\t{i}\n"
+        for i in range(1, 11)
+    ) + "END\n"
+    file_v1_rows = parse_status_text(v1_many, stamp)
+    management_v3_rows = parse_status_text(v3_many, stamp)
+    assert len(file_v1_rows) == len(management_v3_rows) == 10
+    for row in file_v1_rows:
+        row["status_file"] = "/etc/openvpn/openvpn-status.log"
+    for row in management_v3_rows:
+        row["status_file"] = "management:7505"
+
+    rejected_v1_payload, rejected_count = make_payload(file_v1_rows, stamp)
+    assert len(rejected_v1_payload["sessions"]) == 0 and rejected_count == 10
+
+    from unittest.mock import patch
+    fake_response = subprocess.CompletedProcess(
+        args=["nc"], returncode=0, stdout=v3_many, stderr=""
+    )
+    with patch("subprocess.run", return_value=fake_response) as run_mock:
+        mgmt_rows = read_management()
+        assert "status 3" in run_mock.call_args.args[0][2]
+        assert len(mgmt_rows) == 10
+        assert all(row["status_file"] == "management:7505" for row in mgmt_rows)
+    payload, quarantined, origin = choose_snapshot(
+        file_v1_rows, lambda: mgmt_rows, stamp
+    )
+    assert (len(payload["sessions"]), quarantined, origin) == (
+        10, 0, "management_status3"
+    )
+    assert all(
+        row["counter_kind"] == "openvpn_session"
+        and row["schema_version"] == 6
+        and row["virtual_ip"] and row["client_id"]
+        for row in payload["sessions"]
+    )
+
+    # Management unavailable: fail closed rather than billing v1 history.
+    empty_payload, invalid, origin = choose_snapshot(
+        file_v1_rows, lambda: [], stamp
+    )
+    assert len(empty_payload["sessions"]) == 0 and invalid == 10
+    assert origin == "status_files"
+
+    # Already valid v2/v3: never require Management availability.
+    v2_row = dict(b[0], status_file="/etc/openvpn/openvpn-status.log")
+    direct, invalid, origin = choose_snapshot(
+        [v2_row], lambda: (_ for _ in ()).throw(
+            AssertionError("unnecessary management query")
+        ), stamp
+    )
+    assert len(direct["sessions"]) == 1 and invalid == 0
+    assert origin == "status_files"
+
+    # A mixed snapshot must not silently drop valid live users if status 3
+    # can provide their complete verified records.
+    mixed, invalid, origin = choose_snapshot(
+        [v2_row, *file_v1_rows], lambda: mgmt_rows, stamp
+    )
+    assert len(mixed["sessions"]) == 10 and invalid == 0
+    assert origin == "management_status3"
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "sessions.json"
@@ -198,16 +299,17 @@ END
 
 
 def main():
-    clients = read_status_files()
-    if not clients:
-        clients = read_management()
-    payload, quarantined = make_payload(clients, now_iso())
+    payload, quarantined, origin = choose_snapshot(read_status_files())
     OUT.parent.mkdir(parents=True, exist_ok=True)
     tmp = OUT.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
     os.replace(tmp, OUT)
     print("local_clients =", len(payload["sessions"]),
-          "quarantined_unverifiable =", quarantined)
+          "quarantined_unverifiable =", quarantined,
+          "source =", origin)
+    if origin == "status_files" and quarantined:
+        print("LOCAL_ACCOUNTING_WARNING invalid status-file session identities; "
+              "management status 3 unavailable or did not improve validity")
     for c in payload["sessions"]:
         # Avoid printing the user's public real_address in daemon logs.
         print(c["client_name"], c["current_total"],
