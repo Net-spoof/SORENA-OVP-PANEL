@@ -4,11 +4,15 @@ on:
     paths:
       - 'deploy/master/scripts/irangate*'
       - 'webpanel/backend/traffic_database.go'
+      - 'scripts/upgrade-surena-master-safe.sh'
+      - 'deploy/master/systemd/irangate-pg-usage-tick.service'
       - '.github/workflows/traffic-session-accounting.yml'
   pull_request:
     paths:
       - 'deploy/master/scripts/irangate*'
       - 'webpanel/backend/traffic_database.go'
+      - 'scripts/upgrade-surena-master-safe.sh'
+      - 'deploy/master/systemd/irangate-pg-usage-tick.service'
       - '.github/workflows/traffic-session-accounting.yml'
 jobs:
   validate-accounting:
@@ -20,6 +24,8 @@ jobs:
           python-version: '3.12'
       - name: Compile accounting consumers and producer
         run: python3 -m py_compile deploy/master/scripts/irangate_local_snapshot.py deploy/master/scripts/irangate-local-status-snapshot.py deploy/master/scripts/irangate-pg-usage-tick.py deploy/master/scripts/irangate-pg-sync-sessions.py
+      - name: Validate safe upgrader syntax
+        run: bash -n scripts/upgrade-surena-master-safe.sh
       - name: Session format and migration regression
         run: |
           python3 deploy/master/scripts/irangate-local-status-snapshot.py --self-test
